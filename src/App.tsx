@@ -27,6 +27,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
+import { clearToken, forgotPassword, getCurrentUser, login, registerTenant, saveTenantEmailIdentity } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
 import type { ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, Invoice, Matter, NavItem, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, ViewKey, WorkTask } from "./types";
 
@@ -49,6 +50,7 @@ export function App() {
   const [authMode, setAuthMode] = useState<"landing" | "login" | "register" | "forgot">("landing");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authMessage, setAuthMessage] = useState("Start with the demo workspace or register a firm account.");
+  const [authBusy, setAuthBusy] = useState(false);
   const [activeView, setActiveView] = useState<ViewKey>("overview");
   const [portalMode, setPortalMode] = useState<"lawyer" | "client">("lawyer");
   const [matters, setMatters] = useState<Matter[]>(matterSeed);
@@ -116,35 +118,75 @@ export function App() {
     setActivity((items) => [message, ...items].slice(0, 8));
   }
 
-  function handleLogin(email: string) {
-    setAuthUser({
-      fullName: "Demo Attorney",
-      email,
-      companyName: tenantEmailSettings.tenantName,
-      role: "Tenant Admin"
-    });
-    setAuthMessage("Logged in to the tenant workspace.");
+  async function handleLogin(email: string, password: string) {
+    setAuthBusy(true);
+    try {
+      const user = await login({ email, password });
+      setAuthUser(user);
+      setAuthMessage("Logged in to the tenant workspace.");
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : "Login failed.");
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
-  function handleRegister(fullName: string, email: string, companyName: string) {
+  async function handleRegister(fullName: string, email: string, companyName: string, password: string) {
+    setAuthBusy(true);
     const domain = email.includes("@") ? email.split("@")[1] : "yourfirm.co.za";
-    setTenantEmailSettings((current) => ({
-      ...current,
-      tenantName: companyName,
-      tenantDomain: domain,
-      fromName: companyName,
-      fromEmail: email,
-      replyTo: email,
-      portalSignature: `${companyName} Legal Team`,
-      verifiedDomain: false
-    }));
-    setAuthUser({ fullName, email, companyName, role: "Tenant Admin" });
-    setAuthMessage(`${companyName} tenant workspace created.`);
+    try {
+      const user = await registerTenant({ fullName, email, companyName, password });
+      setTenantEmailSettings((current) => ({
+        ...current,
+        tenantName: companyName,
+        tenantDomain: domain,
+        fromName: companyName,
+        fromEmail: email,
+        replyTo: email,
+        portalSignature: `${companyName} Legal Team`,
+        verifiedDomain: false
+      }));
+      setAuthUser(user);
+      setAuthMessage(`${companyName} tenant workspace created.`);
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : "Registration failed.");
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
-  function handleForgotPassword(email: string) {
-    setAuthMessage(`Password reset instructions queued for ${email}.`);
+  async function handleForgotPassword(email: string) {
+    setAuthBusy(true);
+    try {
+      const response = await forgotPassword(email);
+      setAuthMessage(response.message);
+      setAuthMode("login");
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : "Password reset request failed.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleResumeSession() {
+    setAuthBusy(true);
+    try {
+      const response = await getCurrentUser();
+      setAuthUser(response.user);
+      setAuthMessage("Session restored.");
+    } catch (error) {
+      clearToken();
+      setAuthMessage("Please login or register to continue.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function handleSignOut() {
+    clearToken();
+    setAuthUser(null);
     setAuthMode("login");
+    setAuthMessage("Signed out.");
   }
 
   if (!authUser) {
@@ -156,6 +198,8 @@ export function App() {
         onLogin={handleLogin}
         onRegister={handleRegister}
         onForgotPassword={handleForgotPassword}
+        onResumeSession={handleResumeSession}
+        busy={authBusy}
       />
     );
   }
@@ -177,7 +221,7 @@ export function App() {
             <button className="primary" onClick={() => setActiveView("drafting")}>
               <Plus size={18} /> New draft
             </button>
-            <button className="ghost" onClick={() => setAuthUser(null)}>
+            <button className="ghost" onClick={handleSignOut}>
               <LogIn size={18} /> Sign out
             </button>
           </div>
@@ -218,14 +262,18 @@ function MarketingAuth({
   message,
   onLogin,
   onRegister,
-  onForgotPassword
+  onForgotPassword,
+  onResumeSession,
+  busy
 }: {
   mode: "landing" | "login" | "register" | "forgot";
   setMode: (mode: "landing" | "login" | "register" | "forgot") => void;
   message: string;
-  onLogin: (email: string) => void;
-  onRegister: (fullName: string, email: string, companyName: string) => void;
-  onForgotPassword: (email: string) => void;
+  onLogin: (email: string, password: string) => Promise<void>;
+  onRegister: (fullName: string, email: string, companyName: string, password: string) => Promise<void>;
+  onForgotPassword: (email: string) => Promise<void>;
+  onResumeSession: () => Promise<void>;
+  busy: boolean;
 }) {
   return (
     <main className="public-page">
@@ -258,7 +306,7 @@ function MarketingAuth({
             <span>Super-admin AI controls</span>
           </div>
         </div>
-        <AuthPanel mode={mode} setMode={setMode} message={message} onLogin={onLogin} onRegister={onRegister} onForgotPassword={onForgotPassword} />
+        <AuthPanel mode={mode} setMode={setMode} message={message} onLogin={onLogin} onRegister={onRegister} onForgotPassword={onForgotPassword} onResumeSession={onResumeSession} busy={busy} />
       </section>
 
       <section className="sales-grid">
@@ -277,33 +325,37 @@ function AuthPanel({
   message,
   onLogin,
   onRegister,
-  onForgotPassword
+  onForgotPassword,
+  onResumeSession,
+  busy
 }: {
   mode: "landing" | "login" | "register" | "forgot";
   setMode: (mode: "landing" | "login" | "register" | "forgot") => void;
   message: string;
-  onLogin: (email: string) => void;
-  onRegister: (fullName: string, email: string, companyName: string) => void;
-  onForgotPassword: (email: string) => void;
+  onLogin: (email: string, password: string) => Promise<void>;
+  onRegister: (fullName: string, email: string, companyName: string, password: string) => Promise<void>;
+  onForgotPassword: (email: string) => Promise<void>;
+  onResumeSession: () => Promise<void>;
+  busy: boolean;
 }) {
   const visibleMode = mode === "landing" ? "register" : mode;
 
-  function submitLogin(event: FormEvent<HTMLFormElement>) {
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    onLogin(String(form.get("email")));
+    await onLogin(String(form.get("email")), String(form.get("password")));
   }
 
-  function submitRegister(event: FormEvent<HTMLFormElement>) {
+  async function submitRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    onRegister(String(form.get("fullName")), String(form.get("email")), String(form.get("companyName")));
+    await onRegister(String(form.get("fullName")), String(form.get("email")), String(form.get("companyName")), String(form.get("password")));
   }
 
-  function submitForgot(event: FormEvent<HTMLFormElement>) {
+  async function submitForgot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    onForgotPassword(String(form.get("email")));
+    await onForgotPassword(String(form.get("email")));
   }
 
   return (
@@ -320,8 +372,9 @@ function AuthPanel({
           <label>Company name<input name="companyName" defaultValue="Mokoena & Partners Inc." required /></label>
           <label>Work email<input name="email" type="email" defaultValue="thandi@mokoenalaw.co.za" required /></label>
           <label>Password<input name="password" type="password" defaultValue="Password123!" required /></label>
-          <button className="primary" type="submit"><UserPlus size={18} /> Create tenant workspace</button>
+          <button className="primary" type="submit" disabled={busy}><UserPlus size={18} /> {busy ? "Creating..." : "Create tenant workspace"}</button>
           <button className="link-button" type="button" onClick={() => setMode("login")}>Already have an account?</button>
+          <button className="link-button" type="button" onClick={onResumeSession}>Resume saved session</button>
         </form>
       )}
 
@@ -329,15 +382,16 @@ function AuthPanel({
         <form className="form" onSubmit={submitLogin}>
           <label>Email<input name="email" type="email" defaultValue="thandi@mokoenalaw.co.za" required /></label>
           <label>Password<input name="password" type="password" defaultValue="Password123!" required /></label>
-          <button className="primary" type="submit"><LogIn size={18} /> Login</button>
+          <button className="primary" type="submit" disabled={busy}><LogIn size={18} /> {busy ? "Logging in..." : "Login"}</button>
           <button className="link-button" type="button" onClick={() => setMode("forgot")}>Forgot password?</button>
+          <button className="link-button" type="button" onClick={onResumeSession}>Resume saved session</button>
         </form>
       )}
 
       {visibleMode === "forgot" && (
         <form className="form" onSubmit={submitForgot}>
           <label>Account email<input name="email" type="email" defaultValue="thandi@mokoenalaw.co.za" required /></label>
-          <button className="primary" type="submit"><Mail size={18} /> Send reset link</button>
+          <button className="primary" type="submit" disabled={busy}><Mail size={18} /> {busy ? "Processing..." : "Send reset link"}</button>
           <button className="link-button" type="button" onClick={() => setMode("login")}>Back to login</button>
         </form>
       )}
@@ -1006,12 +1060,17 @@ function AdminSettings({
     log(`Super admin saved platform SMTP transport for ${settings.providerName}`);
   }
 
-  function saveTenantEmailSettings(event: FormEvent<HTMLFormElement>) {
+  async function saveTenantEmailSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
-    setSavedAt(stamp);
-    setEmailStatus(`${tenantEmailSettings.tenantName} sender identity saved. Mail still routes through the platform SMTP server.`);
-    log(`Tenant sender identity saved for ${tenantEmailSettings.tenantName}`);
+    try {
+      await saveTenantEmailIdentity(tenantEmailSettings);
+      const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
+      setSavedAt(stamp);
+      setEmailStatus(`${tenantEmailSettings.tenantName} sender identity saved. Mail still routes through the platform SMTP server.`);
+      log(`Tenant sender identity saved for ${tenantEmailSettings.tenantName}`);
+    } catch (error) {
+      setEmailStatus(error instanceof Error ? error.message : "Tenant sender identity could not be saved.");
+    }
   }
 
   function testEmail() {

@@ -48,6 +48,62 @@ dist/
 
    Vite copies it into `dist/.htaccess` during build.
 
+## Backend API
+
+The app now includes a Node API in:
+
+```text
+server/
+```
+
+Create a server-side `.env` file on Ubuntu. Do not commit it:
+
+```bash
+cd /home2/app/LawPath
+cp .env.example .env
+nano .env
+```
+
+Set at least:
+
+```bash
+PORT=3001
+NODE_ENV=production
+DATABASE_URL=postgresql://lawpath:YOUR_PASSWORD@127.0.0.1:5432/lawpath
+SESSION_SECRET=replace_with_a_long_random_value
+JWT_EXPIRES_IN=7d
+CORS_ORIGIN=https://your-domain.co.za
+```
+
+Start the API manually for a smoke test:
+
+```bash
+npm run start:api
+```
+
+Then check:
+
+```bash
+curl http://127.0.0.1:3001/api/health
+```
+
+For production, run the API under a process manager such as `systemd` or `pm2`, and configure Apache to proxy `/api` to `http://127.0.0.1:3001`.
+
+Example Apache proxy rules inside the VirtualHost:
+
+```apache
+ProxyPreserveHost On
+ProxyPass /api http://127.0.0.1:3001/api
+ProxyPassReverse /api http://127.0.0.1:3001/api
+```
+
+Ensure these Apache modules are enabled:
+
+```bash
+sudo a2enmod proxy proxy_http rewrite headers
+sudo systemctl reload apache2
+```
+
 ## Important SaaS Rule
 
 Do not put secrets in the Vite frontend. Anything prefixed with `VITE_` is visible in the browser.
@@ -101,6 +157,7 @@ For each release:
 git pull
 npm ci
 npm run build
+sudo systemctl restart lawpath-api
 ```
 
 Then confirm Apache serves:

@@ -119,10 +119,13 @@ export type AssistantTrainingSettings = {
 };
 
 export type AuthUser = {
+  id: string;
+  tenantId: string | null;
   fullName: string;
   email: string;
   companyName: string;
-  role: "Tenant Admin" | "Attorney";
+  role: "platform_super_admin" | "tenant_admin" | "attorney" | "candidate_attorney" | "legal_secretary" | "billing_admin" | "client_portal_user";
+  tenantSlug?: string;
 };
 
 export type NavItem = {
