@@ -39,6 +39,7 @@ const nav: NavItem[] = [
   { key: "billing", label: "Billing", icon: CircleDollarSign },
   { key: "booking", label: "Bookings", icon: CalendarDays },
   { key: "portal", label: "Portal", icon: UsersRound },
+  { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
   { key: "settings", label: "Settings", icon: Settings }
 ];
 
@@ -263,6 +264,7 @@ export function App() {
         {activeView === "billing" && <Billing invoices={invoices} setInvoices={setInvoices} log={log} />}
         {activeView === "booking" && <Booking appointments={appointments} setAppointments={setAppointments} log={log} />}
         {activeView === "portal" && <Portal matters={matters} setMatters={setMatters} portalMode={portalMode} setPortalMode={setPortalMode} log={log} />}
+        {activeView === "training-guide" && <AITrainingGuide setActiveView={setActiveView} />}
         {activeView === "settings" && (
           <AdminSettings
             settings={smtpSettings}
@@ -532,17 +534,19 @@ function Overview({
 function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]; setContracts: React.Dispatch<React.SetStateAction<ContractDraft[]>>; log: (message: string) => void }) {
   const [preview, setPreview] = useState(contracts[0]?.body ?? "");
   const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState("Residential offer to purchase");
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const template = String(form.get("template"));
-    const partyA = String(form.get("partyA"));
-    const partyB = String(form.get("partyB"));
+    const isOfferToPurchase = template === "Residential offer to purchase";
+    const partyA = isOfferToPurchase ? String(form.get("sellerName")) : String(form.get("partyA"));
+    const partyB = isOfferToPurchase ? String(form.get("buyerName")) : String(form.get("partyB"));
     const instructions = String(form.get("instructions"));
-    const body = buildContractBody(template, partyA, partyB, instructions);
+    const body = isOfferToPurchase ? buildOfferToPurchaseBody(form) : buildContractBody(template, partyA, partyB, instructions);
     setPreview(body);
-    setContracts((items) => [{ id: uid("C"), name: template, category: "Generated", partyA, partyB, status: "Generated", updated: today(), body }, ...items]);
+    setContracts((items) => [{ id: uid("C"), name: template, category: isOfferToPurchase ? "Conveyancing" : "Generated", partyA, partyB, status: "Generated", updated: today(), body }, ...items]);
     log(`Generated ${template} for ${partyA}`);
   }
 
@@ -552,7 +556,7 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
         <Panel title="Contract writer" badge="AI-ready workflow">
           <form className="form" onSubmit={submit}>
             <label>Template
-              <select name="template">
+              <select name="template" value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)}>
                 <option>Residential offer to purchase</option>
                 <option>Shareholder agreement</option>
                 <option>Lease agreement</option>
@@ -561,8 +565,75 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
                 <option>Antenuptial contract intake</option>
               </select>
             </label>
-            <label>Party A<input name="partyA" defaultValue="Client name" /></label>
-            <label>Party B<input name="partyB" defaultValue="Counterparty name" /></label>
+            {selectedTemplate === "Residential offer to purchase" ? (
+              <section className="intake-stack">
+                <div className="intake-section">
+                  <h4>Parties</h4>
+                  <div className="form-row equal">
+                    <label>Seller full name<input name="sellerName" defaultValue="Thandi Mokoena" /></label>
+                    <label>Seller ID / registration<input name="sellerId" defaultValue="740101 0123 08 7" /></label>
+                  </div>
+                  <label>Seller address<input name="sellerAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
+                  <div className="form-row equal">
+                    <label>Buyer full name<input name="buyerName" defaultValue="Lerato Dlamini" /></label>
+                    <label>Buyer ID / registration<input name="buyerId" defaultValue="850202 0456 08 2" /></label>
+                  </div>
+                  <label>Buyer address<input name="buyerAddress" defaultValue="45 Jacaranda Avenue, Bryanston, Johannesburg" /></label>
+                </div>
+
+                <div className="intake-section">
+                  <h4>Property and price</h4>
+                  <label>Property address<input name="propertyAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
+                  <div className="form-row equal">
+                    <label>Legal description<input name="propertyDescription" defaultValue="Erf 184 Sandton Township, Registration Division IR, Gauteng" /></label>
+                    <label>Offer / selling price<input name="purchasePrice" defaultValue="R 2 850 000" /></label>
+                  </div>
+                  <div className="form-row equal">
+                    <label>Deposit<input name="deposit" defaultValue="R 285 000" /></label>
+                    <label>Bond amount required<input name="bondAmount" defaultValue="R 2 565 000" /></label>
+                  </div>
+                </div>
+
+                <div className="intake-section">
+                  <h4>Estate agent and conveyancers</h4>
+                  <div className="form-row equal">
+                    <label>Estate agency<input name="estateAgency" defaultValue="Cape & City Realty" /></label>
+                    <label>Agent name<input name="estateAgentName" defaultValue="Nadia Jacobs" /></label>
+                  </div>
+                  <div className="form-row equal">
+                    <label>Agent email<input name="estateAgentEmail" defaultValue="nadia@capeandcity.example" /></label>
+                    <label>Commission<input name="agentCommission" defaultValue="5% plus VAT, payable by the Seller on registration" /></label>
+                  </div>
+                  <div className="form-row equal">
+                    <label>Transferring attorney / conveyancer<input name="conveyancerName" defaultValue="Mokoena & Partners Inc." /></label>
+                    <label>Conveyancer email<input name="conveyancerEmail" defaultValue="transfers@mokoenalaw.co.za" /></label>
+                  </div>
+                </div>
+
+                <div className="intake-section">
+                  <h4>Linked sale and timelines</h4>
+                  <label className="switch-row"><input name="linkedSale" type="checkbox" defaultChecked /> Buyer must sell another property before this offer proceeds</label>
+                  <label>Linked property address<input name="linkedPropertyAddress" defaultValue="8 Palm Street, Randburg, Johannesburg" /></label>
+                  <div className="form-row equal">
+                    <label>Offer acceptance deadline<input name="acceptanceDeadline" type="date" defaultValue="2026-06-12" /></label>
+                    <label>Bond approval deadline<input name="bondDeadline" type="date" defaultValue="2026-06-28" /></label>
+                  </div>
+                  <div className="form-row equal">
+                    <label>Linked sale deadline<input name="linkedSaleDeadline" type="date" defaultValue="2026-07-05" /></label>
+                    <label>Target transfer date<input name="transferTargetDate" type="date" defaultValue="2026-08-30" /></label>
+                  </div>
+                  <div className="form-row equal">
+                    <label>Occupation date<input name="occupationDate" type="date" defaultValue="2026-09-01" /></label>
+                    <label>Occupational rent<input name="occupationalRent" defaultValue="R 18 500 per month" /></label>
+                  </div>
+                </div>
+              </section>
+            ) : (
+              <>
+                <label>Party A<input name="partyA" defaultValue="Client name" /></label>
+                <label>Party B<input name="partyB" defaultValue="Counterparty name" /></label>
+              </>
+            )}
             <label>Key instructions<textarea name="instructions" defaultValue="Include South African jurisdiction, plain-English client summary, POPIA consent, FICA onboarding checklist and signature blocks." /></label>
             <button className="primary" type="submit"><FilePenLine size={18} /> Generate draft</button>
           </form>
@@ -585,6 +656,172 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
       {fullPreviewOpen && <DocumentPreviewModal body={preview} onClose={() => setFullPreviewOpen(false)} />}
     </>
   );
+}
+
+function formText(form: FormData, key: string, fallback = "[insert]") {
+  const value = String(form.get(key) || "").trim();
+  return value || fallback;
+}
+
+function buildOfferToPurchaseBody(form: FormData) {
+  const sellerName = formText(form, "sellerName");
+  const sellerId = formText(form, "sellerId");
+  const sellerAddress = formText(form, "sellerAddress");
+  const buyerName = formText(form, "buyerName");
+  const buyerId = formText(form, "buyerId");
+  const buyerAddress = formText(form, "buyerAddress");
+  const propertyAddress = formText(form, "propertyAddress");
+  const propertyDescription = formText(form, "propertyDescription");
+  const purchasePrice = formText(form, "purchasePrice");
+  const deposit = formText(form, "deposit");
+  const bondAmount = formText(form, "bondAmount");
+  const estateAgency = formText(form, "estateAgency");
+  const estateAgentName = formText(form, "estateAgentName");
+  const estateAgentEmail = formText(form, "estateAgentEmail");
+  const agentCommission = formText(form, "agentCommission");
+  const conveyancerName = formText(form, "conveyancerName");
+  const conveyancerEmail = formText(form, "conveyancerEmail");
+  const linkedSale = form.get("linkedSale") === "on";
+  const linkedPropertyAddress = formText(form, "linkedPropertyAddress", "not applicable");
+  const acceptanceDeadline = formText(form, "acceptanceDeadline");
+  const bondDeadline = formText(form, "bondDeadline");
+  const linkedSaleDeadline = formText(form, "linkedSaleDeadline", "not applicable");
+  const transferTargetDate = formText(form, "transferTargetDate");
+  const occupationDate = formText(form, "occupationDate");
+  const occupationalRent = formText(form, "occupationalRent");
+  const instructions = formText(form, "instructions", "No additional instructions captured.");
+
+  return [
+    "RESIDENTIAL OFFER TO PURCHASE",
+    "",
+    "IMPORTANT ATTORNEY REVIEW NOTE",
+    "This document is a comprehensive working draft generated from the available instructions. It must be reviewed, completed and approved by a qualified South African legal practitioner before signature or client release.",
+    "",
+    "TRANSACTION SUMMARY",
+    `Seller: ${sellerName} (${sellerId})`,
+    `Purchaser: ${buyerName} (${buyerId})`,
+    `Property: ${propertyAddress}`,
+    `Legal description: ${propertyDescription}`,
+    `Purchase price: ${purchasePrice}`,
+    `Estate agent: ${estateAgentName}, ${estateAgency}`,
+    `Conveyancer: ${conveyancerName}`,
+    `Linked sale condition: ${linkedSale ? `Yes - purchaser's property at ${linkedPropertyAddress}` : "No"}`,
+    `Target transfer date: ${transferTargetDate}`,
+    "",
+    "Drafting instructions captured:",
+    instructions,
+    "",
+    "------------------------------------------------------------",
+    "",
+    "OFFER TO PURCHASE IMMOVABLE PROPERTY",
+    "",
+    "1. PARTIES",
+    `1.1 The Seller is ${sellerName}, identity/registration number ${sellerId}, of ${sellerAddress}.`,
+    `1.2 The Purchaser is ${buyerName}, identity/registration number ${buyerId}, of ${buyerAddress}.`,
+    "1.3 A party signing through a representative warrants that the representative has proper authority and shall provide written proof of authority on request.",
+    "1.4 The Seller and Purchaser are collectively referred to as the parties.",
+    "",
+    "2. OFFER AND ACCEPTANCE",
+    `2.1 The Purchaser offers to purchase the property from the Seller for ${purchasePrice}, subject to the terms and conditions of this agreement.`,
+    `2.2 This offer shall remain open for acceptance by the Seller until ${acceptanceDeadline}, unless withdrawn earlier in writing before acceptance where legally permissible.`,
+    "2.3 Acceptance shall occur when the Seller signs this agreement and communicates acceptance to the Purchaser or the estate agent.",
+    "2.4 Once accepted, this agreement is binding, subject to the fulfilment or waiver of any suspensive conditions recorded below.",
+    "",
+    "3. PROPERTY",
+    `3.1 The property is situated at ${propertyAddress}.`,
+    `3.2 The legal description is ${propertyDescription}, together with all permanent fixtures and improvements unless excluded in writing.`,
+    "3.3 If there is a conflict between the street address and deeds office description, the deeds office and title deed description shall prevail.",
+    "3.4 The sale includes all keys, remote controls, approved building plans in the Seller's possession, and fixtures normally forming part of the property unless listed as exclusions.",
+    "",
+    "4. PURCHASE PRICE AND PAYMENT",
+    `4.1 The purchase price is ${purchasePrice}.`,
+    `4.2 The Purchaser shall pay a deposit of ${deposit} into the conveyancer's trust account within 5 business days after acceptance or such other date agreed in writing.`,
+    `4.3 The balance of the purchase price shall be secured by an acceptable bank guarantee or other security approved by the Seller for approximately ${bondAmount}, within the period required by this agreement.`,
+    "4.4 All funds paid to the conveyancer shall be held in trust pending registration of transfer or lawful cancellation.",
+    "4.5 Interest on trust monies shall accrue as directed in the conveyancer's investment mandate, subject to applicable law and professional rules.",
+    "",
+    "5. SUSPENSIVE CONDITIONS",
+    `5.1 This agreement is subject to the Purchaser obtaining written bond approval for not less than ${bondAmount} by ${bondDeadline}.`,
+    linkedSale
+      ? `5.2 This agreement is further subject to the Purchaser concluding a binding sale agreement for the Purchaser's property at ${linkedPropertyAddress} by ${linkedSaleDeadline}, on terms reasonably acceptable to the Purchaser.`
+      : "5.2 No linked-sale suspensive condition has been selected for this transaction.",
+    "5.3 The party benefiting from a suspensive condition may waive that condition in writing before the due date, provided the waiver is lawful and does not prejudice the other party.",
+    "5.4 If a suspensive condition is not fulfilled or waived by the due date, this agreement shall lapse and the parties shall be restored as far as reasonably possible to their prior positions.",
+    "",
+    "6. TRANSFER AND CONVEYANCER",
+    `6.1 Transfer shall be attended to by ${conveyancerName}, email ${conveyancerEmail}, unless the parties agree otherwise in writing.`,
+    "6.2 The Purchaser shall pay transfer costs, transfer duty, deeds office fees and conveyancer charges on demand, unless a different allocation is recorded in this agreement.",
+    "6.3 The Seller shall sign all documents and provide all FICA, rates, levy, compliance and title documentation reasonably required for transfer.",
+    `6.4 The parties record ${transferTargetDate} as the target transfer date. This date is a planning target and may move according to bond, municipal, deeds office, compliance and linked-sale requirements.`,
+    "",
+    "7. RATES, LEVIES AND MUNICIPAL CLEARANCE",
+    "7.1 The Seller remains responsible for rates, taxes, levies, utilities and municipal charges up to registration of transfer unless occupational rent or another written arrangement applies.",
+    "7.2 The Seller shall co-operate in obtaining municipal clearance figures, levy clearance figures, homeowners association certificates and other approvals required for transfer.",
+    "7.3 Any pro rata adjustments shall be calculated by the conveyancer on registration unless the parties agree otherwise.",
+    "",
+    "8. OCCUPATION, POSSESSION AND RISK",
+    `8.1 Occupation shall be given on ${occupationDate}, subject to the transfer timeline and any occupational rent arrangement.`,
+    `8.2 If occupation occurs before registration, the occupying party shall pay occupational rent of ${occupationalRent}, monthly in advance.`,
+    "8.3 Risk in and benefit of the property shall pass on registration unless the parties expressly agree otherwise.",
+    "8.4 The occupying party shall keep the property in reasonable condition and shall not make structural alterations before registration without written consent.",
+    "",
+    "9. VOETSTOOTS, CONDITION AND DISCLOSURES",
+    "9.1 The property is sold voetstoots, subject to all title deed conditions, servitudes, zoning restrictions and municipal requirements.",
+    "9.2 The Seller warrants that all known latent defects and material facts that may affect the Purchaser's decision have been disclosed in writing.",
+    "9.3 The Purchaser acknowledges having inspected the property or having had a reasonable opportunity to do so.",
+    "9.4 The parties should attach a signed property condition disclosure form as an annexure.",
+    "",
+    "10. COMPLIANCE CERTIFICATES",
+    "10.1 The Seller shall provide electrical, electric fence, gas, beetle, plumbing or other compliance certificates required by law, municipal rule, sectional title rule or local conveyancing practice.",
+    "10.2 Unless otherwise agreed, the Seller shall bear the cost of obtaining required certificates and making repairs required to obtain those certificates.",
+    "10.3 The Purchaser shall not unreasonably delay any inspection required for compliance certification.",
+    "",
+    "11. ESTATE AGENT AND COMMISSION",
+    `11.1 The estate agency is ${estateAgency}, represented by ${estateAgentName}, email ${estateAgentEmail}.`,
+    `11.2 Commission is recorded as ${agentCommission}.`,
+    "11.3 Unless otherwise recorded, commission is payable on registration of transfer and may be paid from the proceeds of the sale through the conveyancer.",
+    "11.4 The Seller warrants that no other agent has an undisclosed commission claim arising from this transaction, except as disclosed in writing.",
+    "",
+    "12. FICA, POPIA AND CLIENT INFORMATION",
+    "12.1 Each party shall provide documents required under FICA and related anti-money-laundering laws.",
+    "12.2 Each party consents to the processing of personal information for purposes of this transaction, transfer, compliance checks, communication, record keeping and reporting obligations.",
+    "12.3 Personal information shall be processed only for lawful purposes and shared only with persons reasonably involved in the transaction, including the conveyancer, estate agent, bond originator, bank, municipality, body corporate, homeowners association and deeds office.",
+    "",
+    "13. BREACH",
+    "13.1 If a party breaches this agreement and fails to remedy the breach within 7 days after written notice, the aggrieved party may claim specific performance or cancel and claim damages.",
+    "13.2 If the Purchaser fails to pay amounts due or provide required guarantees, the Seller may exercise the remedies in this clause after proper notice.",
+    "13.3 Legal costs incurred in enforcing this agreement may be recovered on the scale permitted by law or as ordered by a competent court.",
+    "",
+    "14. DOMICILIUM AND NOTICES",
+    `14.1 The Seller chooses ${sellerAddress} as domicilium for notices and legal process.`,
+    `14.2 The Purchaser chooses ${buyerAddress} as domicilium for notices and legal process.`,
+    "14.3 Notices may also be sent by email where email details are provided, provided that formal service requirements remain governed by applicable law.",
+    "",
+    "15. WHOLE AGREEMENT",
+    "15.1 This agreement contains the entire agreement between the parties regarding the sale of the property.",
+    "15.2 No amendment, cancellation or waiver shall be valid unless recorded in writing and signed by both parties.",
+    "15.3 If any clause is unenforceable, the remaining clauses shall continue to operate as far as legally possible.",
+    "",
+    "16. JURISDICTION AND DISPUTE RESOLUTION",
+    "16.1 This agreement is governed by South African law.",
+    "16.2 The parties consent to the jurisdiction of the competent South African courts, subject to any statutory limits and the nature of the dispute.",
+    "16.3 The parties may attempt good-faith negotiation or mediation before litigation where appropriate.",
+    "",
+    "17. SIGNATURE",
+    `Signed by the Seller, ${sellerName}, at __________________ on __________________.`,
+    "Seller signature: __________________",
+    "",
+    `Signed by the Purchaser, ${buyerName}, at __________________ on __________________.`,
+    "Purchaser signature: __________________",
+    "",
+    "ANNEXURES",
+    "A. Property condition disclosure form",
+    "B. Fixtures, fittings and exclusions schedule",
+    "C. FICA checklist",
+    "D. Compliance certificate schedule",
+    "E. Linked-sale proof and timeline schedule",
+    "F. Estate agent mandate or commission confirmation"
+  ].join("\n");
 }
 
 function buildContractBody(template: string, partyA: string, partyB: string, instructions: string) {
@@ -1033,6 +1270,98 @@ function Portal({ matters, setMatters, portalMode, setPortalMode, log }: { matte
         </section>
       )}
     </>
+  );
+}
+
+function AITrainingGuide({ setActiveView }: { setActiveView: (view: ViewKey) => void }) {
+  return (
+    <>
+      <section className="training-hero">
+        <div>
+          <p className="eyebrow">Super admin playbook</p>
+          <h2>Train LawPath AI with legal sources the right way.</h2>
+          <p>Use this page as the operational checklist for building a retrieval augmented generation library from South African legal documents, websites, case law, legislation, practice notes and firm precedents.</p>
+        </div>
+        <div className="training-actions">
+          <button className="primary" onClick={() => setActiveView("settings")}><LibraryBig size={18} /> Open RAG settings</button>
+          <button className="ghost" onClick={() => setActiveView("research")}><Search size={18} /> Review research</button>
+        </div>
+      </section>
+
+      <section className="training-grid">
+        <article className="training-card">
+          <span>1</span>
+          <h3>Collect approved sources</h3>
+          <p>Upload or connect only materials your platform or tenant is allowed to use: court judgments, legislation, practice manuals, firm precedents, clause banks, checklists, templates, client-facing guides and public legal websites.</p>
+        </article>
+        <article className="training-card">
+          <span>2</span>
+          <h3>Classify the scope</h3>
+          <p>Mark every source as platform-wide, tenant template, or tenant-private. Platform sources can assist all firms. Tenant-private sources must only be retrieved inside that tenant workspace.</p>
+        </article>
+        <article className="training-card">
+          <span>3</span>
+          <h3>Clean and structure</h3>
+          <p>Remove duplicates, bad OCR text, signatures, irrelevant email chains and outdated drafts. Add titles, jurisdiction, court, date, matter type, document type and practice area before indexing.</p>
+        </article>
+        <article className="training-card">
+          <span>4</span>
+          <h3>Index for retrieval</h3>
+          <p>Chunk long documents into searchable passages, generate embeddings, store source metadata and require citations so attorneys can see which authority or precedent informed an answer.</p>
+        </article>
+      </section>
+
+      <section className="training-layout">
+        <Panel title="Recommended source types" badge="Knowledge base">
+          <div className="source-checklist">
+            <TrainingChecklistItem title="Case law" text="Judgments, law reports, court summaries and authority bundles tagged by court, date, topic and legal principle." />
+            <TrainingChecklistItem title="Legislation and regulations" text="Acts, regulations, municipal rules, deeds office guidance, FICA and POPIA material with effective dates." />
+            <TrainingChecklistItem title="Firm precedents" text="Approved contracts, letters, pleadings, checklists and internal drafting notes. Remove client secrets unless tenant-private." />
+            <TrainingChecklistItem title="Websites" text="Public legal resources, regulator pages and practice updates captured with URL, access date, publisher and reliability notes." />
+            <TrainingChecklistItem title="Matter learnings" text="Post-matter checklists, common conveyancing delays, billing notes and secretary workflows approved for reuse." />
+          </div>
+        </Panel>
+
+        <Panel title="Quality rules before training" badge="Attorney review">
+          <div className="quality-list">
+            <div><CheckCircle2 size={18} /><p>Confirm copyright, licensing and permission to use each source for AI retrieval.</p></div>
+            <div><CheckCircle2 size={18} /><p>Separate tenant-private material from platform-wide material before indexing.</p></div>
+            <div><CheckCircle2 size={18} /><p>Redact personal information unless it is needed and lawful for that tenant workflow.</p></div>
+            <div><CheckCircle2 size={18} /><p>Tag outdated sources so the AI can warn attorneys instead of treating them as current law.</p></div>
+            <div><CheckCircle2 size={18} /><p>Test answers against known legal questions and require citations in research outputs.</p></div>
+          </div>
+        </Panel>
+      </section>
+
+      <section className="training-layout">
+        <Panel title="Suggested ingestion workflow" badge="Operational">
+          <ol className="training-steps">
+            <li>Create a source record in Settings and choose Platform or Tenant template scope.</li>
+            <li>Upload files or add a website URL with publisher, date accessed and practice area metadata.</li>
+            <li>Run extraction and OCR where needed, then review rejected pages and low-confidence text.</li>
+            <li>Approve chunking rules, retrieval mode, citation requirement and tenant access rules.</li>
+            <li>Run a test prompt pack before making the source available to drafting, research or secretary assistants.</li>
+          </ol>
+        </Panel>
+
+        <Panel title="Prompt tests to run" badge="Validation">
+          <div className="prompt-tests">
+            <blockquote>Draft a residential offer to purchase with a linked-sale suspensive condition and cite the precedent clauses used.</blockquote>
+            <blockquote>Summarise the latest authority bundle on conveyancing delay and identify attorney-review risks.</blockquote>
+            <blockquote>Create a client portal update for a delayed rates clearance certificate without giving legal advice.</blockquote>
+          </div>
+        </Panel>
+      </section>
+    </>
+  );
+}
+
+function TrainingChecklistItem({ title, text }: { title: string; text: string }) {
+  return (
+    <article>
+      <strong>{title}</strong>
+      <p>{text}</p>
+    </article>
   );
 }
 

@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 
-export type ViewKey = "overview" | "drafting" | "research" | "secretary" | "billing" | "booking" | "portal" | "settings";
+export type ViewKey = "overview" | "drafting" | "research" | "secretary" | "billing" | "booking" | "portal" | "training-guide" | "settings";
 
 export type Matter = {
   id: string;

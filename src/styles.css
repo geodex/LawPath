@@ -689,6 +689,29 @@ textarea {
   resize: vertical;
 }
 
+.intake-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.intake-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf8;
+}
+
+.intake-section h4 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.form-row.equal {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .draft-output {
   min-height: 430px;
   margin: 0;
@@ -752,6 +775,130 @@ textarea {
   font-family: Georgia, "Times New Roman", serif;
   font-size: 1rem;
   line-height: 1.72;
+}
+
+.training-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+  gap: 18px;
+  align-items: end;
+  padding: clamp(24px, 4vw, 42px);
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(120deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.76)),
+    url("/assets/legal-workspace.png") center / cover;
+}
+
+.training-hero h2 {
+  margin-bottom: 10px;
+}
+
+.training-hero p {
+  max-width: 820px;
+  color: var(--muted);
+}
+
+.training-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.training-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.training-card,
+.source-checklist article {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.training-card {
+  padding: 16px;
+}
+
+.training-card span {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  background: #eef4ef;
+  color: var(--green);
+  font-weight: 900;
+}
+
+.training-card p,
+.source-checklist p,
+.quality-list p,
+.training-steps,
+.prompt-tests blockquote {
+  color: var(--muted);
+}
+
+.training-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.85fr);
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.source-checklist,
+.quality-list,
+.prompt-tests {
+  display: grid;
+  gap: 12px;
+}
+
+.source-checklist article {
+  padding: 13px;
+}
+
+.source-checklist p,
+.quality-list p {
+  margin: 5px 0 0;
+}
+
+.quality-list div {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbf8;
+}
+
+.quality-list svg {
+  color: var(--green);
+  margin-top: 2px;
+}
+
+.training-steps {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.6;
+}
+
+.training-steps li + li {
+  margin-top: 9px;
+}
+
+.prompt-tests blockquote {
+  margin: 0;
+  padding: 14px;
+  border-left: 4px solid var(--green);
+  border-radius: 8px;
+  background: #f7faf7;
 }
 
 .table {
@@ -1186,7 +1333,10 @@ textarea {
   .settings-hero,
   .settings-grid,
   .scope-grid,
-  .integrations-grid {
+  .integrations-grid,
+  .training-hero,
+  .training-grid,
+  .training-layout {
     grid-template-columns: 1fr;
   }
 }
@@ -1252,6 +1402,16 @@ textarea {
   .portal-switch {
     width: 100%;
     grid-template-columns: 1fr;
+  }
+
+  .form-row,
+  .form-row.equal {
+    grid-template-columns: 1fr;
+  }
+
+  .training-actions,
+  .training-actions button {
+    width: 100%;
   }
 
   .client-head {
