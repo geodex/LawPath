@@ -26,8 +26,8 @@ load_env() {
     fail "Missing .env file in $APP_DIR"
   fi
 
-  DATABASE_URL="$(node -e "require('dotenv').config(); process.stdout.write(process.env.DATABASE_URL || '')")"
-  PORT="$(node -e "require('dotenv').config(); process.stdout.write(process.env.PORT || '3069')")"
+  DATABASE_URL="$(node -e "require('dotenv').config({ quiet: true }); process.stdout.write(process.env.DATABASE_URL || '')")"
+  PORT="$(node -e "require('dotenv').config({ quiet: true }); process.stdout.write(process.env.PORT || '3069')")"
   export DATABASE_URL PORT
 
   [[ -n "${DATABASE_URL:-}" ]] || fail "DATABASE_URL is not set in .env"
