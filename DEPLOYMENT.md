@@ -97,10 +97,72 @@ npm run start:api
 Then check:
 
 ```bash
-curl http://127.0.0.1:3001/api/health
+curl http://127.0.0.1:3069/api/health
 ```
 
-For production, run the API under a process manager such as `systemd` or `pm2`, and configure Apache to proxy `/api` to `http://127.0.0.1:3001`.
+For production, run the API under PM2, and configure Apache to proxy `/api` to `http://127.0.0.1:3069`.
+
+### PM2 Process Manager
+
+The repo includes:
+
+```text
+ecosystem.config.cjs
+```
+
+It runs the API as `lawpath-api` from:
+
+```text
+/home2/lawpath/app/LawPath
+```
+
+on port:
+
+```text
+3069
+```
+
+Install PM2 globally on the server:
+
+```bash
+npm install -g pm2
+```
+
+Start the API:
+
+```bash
+cd /home2/lawpath/app/LawPath
+mkdir -p logs
+pm2 start ecosystem.config.cjs
+pm2 status
+```
+
+Save the process list:
+
+```bash
+pm2 save
+```
+
+Enable startup after reboot:
+
+```bash
+pm2 startup
+```
+
+PM2 will print a command beginning with `sudo env ...`. Copy and run that printed command, then run:
+
+```bash
+pm2 save
+```
+
+Useful commands:
+
+```bash
+pm2 logs lawpath-api
+pm2 restart lawpath-api
+pm2 stop lawpath-api
+pm2 delete lawpath-api
+```
 
 Example Apache proxy rules inside the VirtualHost:
 
