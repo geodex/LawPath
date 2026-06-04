@@ -540,13 +540,10 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const template = String(form.get("template"));
-    const isOfferToPurchase = template === "Residential offer to purchase";
-    const partyA = isOfferToPurchase ? String(form.get("sellerName")) : String(form.get("partyA"));
-    const partyB = isOfferToPurchase ? String(form.get("buyerName")) : String(form.get("partyB"));
-    const instructions = String(form.get("instructions"));
-    const body = isOfferToPurchase ? buildOfferToPurchaseBody(form) : buildContractBody(template, partyA, partyB, instructions);
+    const draft = buildDocumentDraft(template, form);
+    const { partyA, partyB, category, body } = draft;
     setPreview(body);
-    setContracts((items) => [{ id: uid("C"), name: template, category: isOfferToPurchase ? "Conveyancing" : "Generated", partyA, partyB, status: "Generated", updated: today(), body }, ...items]);
+    setContracts((items) => [{ id: uid("C"), name: template, category, partyA, partyB, status: "Generated", updated: today(), body }, ...items]);
     log(`Generated ${template} for ${partyA}`);
   }
 
@@ -565,75 +562,7 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
                 <option>Antenuptial contract intake</option>
               </select>
             </label>
-            {selectedTemplate === "Residential offer to purchase" ? (
-              <section className="intake-stack">
-                <div className="intake-section">
-                  <h4>Parties</h4>
-                  <div className="form-row equal">
-                    <label>Seller full name<input name="sellerName" defaultValue="Thandi Mokoena" /></label>
-                    <label>Seller ID / registration<input name="sellerId" defaultValue="740101 0123 08 7" /></label>
-                  </div>
-                  <label>Seller address<input name="sellerAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
-                  <div className="form-row equal">
-                    <label>Buyer full name<input name="buyerName" defaultValue="Lerato Dlamini" /></label>
-                    <label>Buyer ID / registration<input name="buyerId" defaultValue="850202 0456 08 2" /></label>
-                  </div>
-                  <label>Buyer address<input name="buyerAddress" defaultValue="45 Jacaranda Avenue, Bryanston, Johannesburg" /></label>
-                </div>
-
-                <div className="intake-section">
-                  <h4>Property and price</h4>
-                  <label>Property address<input name="propertyAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
-                  <div className="form-row equal">
-                    <label>Legal description<input name="propertyDescription" defaultValue="Erf 184 Sandton Township, Registration Division IR, Gauteng" /></label>
-                    <label>Offer / selling price<input name="purchasePrice" defaultValue="R 2 850 000" /></label>
-                  </div>
-                  <div className="form-row equal">
-                    <label>Deposit<input name="deposit" defaultValue="R 285 000" /></label>
-                    <label>Bond amount required<input name="bondAmount" defaultValue="R 2 565 000" /></label>
-                  </div>
-                </div>
-
-                <div className="intake-section">
-                  <h4>Estate agent and conveyancers</h4>
-                  <div className="form-row equal">
-                    <label>Estate agency<input name="estateAgency" defaultValue="Cape & City Realty" /></label>
-                    <label>Agent name<input name="estateAgentName" defaultValue="Nadia Jacobs" /></label>
-                  </div>
-                  <div className="form-row equal">
-                    <label>Agent email<input name="estateAgentEmail" defaultValue="nadia@capeandcity.example" /></label>
-                    <label>Commission<input name="agentCommission" defaultValue="5% plus VAT, payable by the Seller on registration" /></label>
-                  </div>
-                  <div className="form-row equal">
-                    <label>Transferring attorney / conveyancer<input name="conveyancerName" defaultValue="Mokoena & Partners Inc." /></label>
-                    <label>Conveyancer email<input name="conveyancerEmail" defaultValue="transfers@mokoenalaw.co.za" /></label>
-                  </div>
-                </div>
-
-                <div className="intake-section">
-                  <h4>Linked sale and timelines</h4>
-                  <label className="switch-row"><input name="linkedSale" type="checkbox" defaultChecked /> Buyer must sell another property before this offer proceeds</label>
-                  <label>Linked property address<input name="linkedPropertyAddress" defaultValue="8 Palm Street, Randburg, Johannesburg" /></label>
-                  <div className="form-row equal">
-                    <label>Offer acceptance deadline<input name="acceptanceDeadline" type="date" defaultValue="2026-06-12" /></label>
-                    <label>Bond approval deadline<input name="bondDeadline" type="date" defaultValue="2026-06-28" /></label>
-                  </div>
-                  <div className="form-row equal">
-                    <label>Linked sale deadline<input name="linkedSaleDeadline" type="date" defaultValue="2026-07-05" /></label>
-                    <label>Target transfer date<input name="transferTargetDate" type="date" defaultValue="2026-08-30" /></label>
-                  </div>
-                  <div className="form-row equal">
-                    <label>Occupation date<input name="occupationDate" type="date" defaultValue="2026-09-01" /></label>
-                    <label>Occupational rent<input name="occupationalRent" defaultValue="R 18 500 per month" /></label>
-                  </div>
-                </div>
-              </section>
-            ) : (
-              <>
-                <label>Party A<input name="partyA" defaultValue="Client name" /></label>
-                <label>Party B<input name="partyB" defaultValue="Counterparty name" /></label>
-              </>
-            )}
+            <DocumentIntakeFields template={selectedTemplate} />
             <label>Key instructions<textarea name="instructions" defaultValue="Include South African jurisdiction, plain-English client summary, POPIA consent, FICA onboarding checklist and signature blocks." /></label>
             <button className="primary" type="submit"><FilePenLine size={18} /> Generate draft</button>
           </form>
@@ -658,9 +587,339 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
   );
 }
 
+function DocumentIntakeFields({ template }: { template: string }) {
+  if (template === "Residential offer to purchase") {
+    return (
+      <section className="intake-stack">
+        <div className="intake-section">
+          <h4>Parties</h4>
+          <div className="form-row equal">
+            <label>Seller full name<input name="sellerName" defaultValue="Thandi Mokoena" /></label>
+            <label>Seller ID / registration<input name="sellerId" defaultValue="740101 0123 08 7" /></label>
+          </div>
+          <label>Seller address<input name="sellerAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
+          <div className="form-row equal">
+            <label>Buyer full name<input name="buyerName" defaultValue="Lerato Dlamini" /></label>
+            <label>Buyer ID / registration<input name="buyerId" defaultValue="850202 0456 08 2" /></label>
+          </div>
+          <label>Buyer address<input name="buyerAddress" defaultValue="45 Jacaranda Avenue, Bryanston, Johannesburg" /></label>
+        </div>
+
+        <div className="intake-section">
+          <h4>Property and price</h4>
+          <label>Property address<input name="propertyAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
+          <div className="form-row equal">
+            <label>Legal description<input name="propertyDescription" defaultValue="Erf 184 Sandton Township, Registration Division IR, Gauteng" /></label>
+            <label>Offer / selling price<input name="purchasePrice" defaultValue="R 2 850 000" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Deposit<input name="deposit" defaultValue="R 285 000" /></label>
+            <label>Bond amount required<input name="bondAmount" defaultValue="R 2 565 000" /></label>
+          </div>
+        </div>
+
+        <div className="intake-section">
+          <h4>Estate agent and conveyancers</h4>
+          <div className="form-row equal">
+            <label>Estate agency<input name="estateAgency" defaultValue="Cape & City Realty" /></label>
+            <label>Agent name<input name="estateAgentName" defaultValue="Nadia Jacobs" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Agent email<input name="estateAgentEmail" defaultValue="nadia@capeandcity.example" /></label>
+            <label>Commission<input name="agentCommission" defaultValue="5% plus VAT, payable by the Seller on registration" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Transferring attorney / conveyancer<input name="conveyancerName" defaultValue="Mokoena & Partners Inc." /></label>
+            <label>Conveyancer email<input name="conveyancerEmail" defaultValue="transfers@mokoenalaw.co.za" /></label>
+          </div>
+        </div>
+
+        <div className="intake-section">
+          <h4>Linked sale and timelines</h4>
+          <label className="switch-row"><input name="linkedSale" type="checkbox" defaultChecked /> Buyer must sell another property before this offer proceeds</label>
+          <label>Linked property address<input name="linkedPropertyAddress" defaultValue="8 Palm Street, Randburg, Johannesburg" /></label>
+          <div className="form-row equal">
+            <label>Offer acceptance deadline<input name="acceptanceDeadline" type="date" defaultValue="2026-06-12" /></label>
+            <label>Bond approval deadline<input name="bondDeadline" type="date" defaultValue="2026-06-28" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Linked sale deadline<input name="linkedSaleDeadline" type="date" defaultValue="2026-07-05" /></label>
+            <label>Target transfer date<input name="transferTargetDate" type="date" defaultValue="2026-08-30" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Occupation date<input name="occupationDate" type="date" defaultValue="2026-09-01" /></label>
+            <label>Occupational rent<input name="occupationalRent" defaultValue="R 18 500 per month" /></label>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (template === "Shareholder agreement") {
+    return (
+      <section className="intake-stack">
+        <div className="intake-section">
+          <h4>Company and shareholders</h4>
+          <div className="form-row equal">
+            <label>Company name<input name="companyName" defaultValue="Ndlovu Holdings (Pty) Ltd" /></label>
+            <label>Registration number<input name="companyRegistration" defaultValue="2024/123456/07" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Shareholder 1<input name="shareholderOne" defaultValue="Sipho Ndlovu" /></label>
+            <label>Shareholder 2<input name="shareholderTwo" defaultValue="Aisha Patel" /></label>
+          </div>
+          <label>Shareholding table<textarea name="shareholdingTable" defaultValue="Sipho Ndlovu - 60 ordinary shares - 60%; Aisha Patel - 40 ordinary shares - 40%." /></label>
+        </div>
+        <div className="intake-section">
+          <h4>Governance and controls</h4>
+          <label>Business of the company<input name="businessDescription" defaultValue="Legal technology services and related consulting." /></label>
+          <div className="form-row equal">
+            <label>Board composition<input name="boardComposition" defaultValue="3 directors, with each major shareholder appointing one director." /></label>
+            <label>Reserved matter threshold<input name="reservedThreshold" defaultValue="75% shareholder approval" /></label>
+          </div>
+          <label>Reserved matters<textarea name="reservedMatters" defaultValue="Issuing shares, changing the business, borrowing above R500 000, selling material assets, appointing auditors, approving annual budgets and entering related-party transactions." /></label>
+        </div>
+        <div className="intake-section">
+          <h4>Transfers, deadlock and exit</h4>
+          <div className="form-row equal">
+            <label>Funding / shareholder loans<input name="fundingTerms" defaultValue="Initial shareholder loans pro rata to shareholding, interest-free unless agreed in writing." /></label>
+            <label>Valuation method<input name="valuationMethod" defaultValue="Independent CA(SA) valuation using fair market value." /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Deadlock mechanism<input name="deadlockMechanism" defaultValue="Escalation, mediation, then buy-sell procedure." /></label>
+            <label>Restraint period<input name="restraintPeriod" defaultValue="24 months in South Africa, subject to attorney review." /></label>
+          </div>
+          <label>Dispute resolution<input name="disputeResolution" defaultValue="Negotiation, mediation, then arbitration in Johannesburg." /></label>
+        </div>
+      </section>
+    );
+  }
+
+  if (template === "Lease agreement") {
+    return (
+      <section className="intake-stack">
+        <div className="intake-section">
+          <h4>Parties and premises</h4>
+          <div className="form-row equal">
+            <label>Landlord<input name="landlordName" defaultValue="Protea Property Holdings (Pty) Ltd" /></label>
+            <label>Tenant<input name="tenantName" defaultValue="Ubuntu Legal Services Inc." /></label>
+          </div>
+          <label>Premises address<input name="leasePremises" defaultValue="Suite 4, 18 Loop Street, Cape Town" /></label>
+          <label>Permitted use<input name="permittedUse" defaultValue="Professional legal offices and administrative support services." /></label>
+        </div>
+        <div className="intake-section">
+          <h4>Term and money</h4>
+          <div className="form-row equal">
+            <label>Lease start<input name="leaseStart" type="date" defaultValue="2026-07-01" /></label>
+            <label>Lease end<input name="leaseEnd" type="date" defaultValue="2029-06-30" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Monthly rental<input name="monthlyRental" defaultValue="R 38 000 plus VAT" /></label>
+            <label>Deposit<input name="leaseDeposit" defaultValue="R 76 000" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Annual escalation<input name="rentalEscalation" defaultValue="7% per annum" /></label>
+            <label>Utilities and operating costs<input name="utilities" defaultValue="Tenant pays electricity, water, refuse, parking and proportionate operating costs." /></label>
+          </div>
+        </div>
+        <div className="intake-section">
+          <h4>Controls and exit</h4>
+          <div className="form-row equal">
+            <label>Renewal option<input name="renewalOption" defaultValue="One renewal period of 3 years on terms agreed 90 days before expiry." /></label>
+            <label>Notice period<input name="leaseNotice" defaultValue="20 business days for breach notices." /></label>
+          </div>
+          <label>Special conditions<textarea name="leaseSpecialConditions" defaultValue="Tenant may install ordinary office signage subject to landlord approval and municipal rules." /></label>
+        </div>
+      </section>
+    );
+  }
+
+  if (template === "Employment contract") {
+    return (
+      <section className="intake-stack">
+        <div className="intake-section">
+          <h4>Employer and employee</h4>
+          <div className="form-row equal">
+            <label>Employer<input name="employerName" defaultValue="LawPath SA (Pty) Ltd" /></label>
+            <label>Employee<input name="employeeName" defaultValue="Nomsa Khumalo" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Position<input name="positionTitle" defaultValue="Legal Operations Manager" /></label>
+            <label>Work location<input name="workLocation" defaultValue="Hybrid, Johannesburg office and remote work" /></label>
+          </div>
+        </div>
+        <div className="intake-section">
+          <h4>Pay and working terms</h4>
+          <div className="form-row equal">
+            <label>Start date<input name="employmentStart" type="date" defaultValue="2026-07-01" /></label>
+            <label>Probation<input name="probationPeriod" defaultValue="3 months" /></label>
+          </div>
+          <div className="form-row equal">
+            <label>Remuneration<input name="remuneration" defaultValue="R 65 000 cost to company per month" /></label>
+            <label>Working hours<input name="workingHours" defaultValue="08:30 to 17:00, Monday to Friday" /></label>
+          </div>
+          <label>Benefits<input name="benefits" defaultValue="Group risk benefits, paid annual leave and approved professional training." /></label>
+        </div>
+        <div className="intake-section">
+          <h4>Risk clauses</h4>
+          <div className="form-row equal">
+            <label>Notice period<input name="employmentNotice" defaultValue="One calendar month after probation" /></label>
+            <label>Restraint / non-solicit<input name="employmentRestraint" defaultValue="12 month client and employee non-solicitation, subject to attorney review." /></label>
+          </div>
+          <label>Confidentiality and IP<textarea name="employmentConfidentiality" defaultValue="Employee must protect confidential information, return company property and assign work product and intellectual property created in the course and scope of employment." /></label>
+        </div>
+      </section>
+    );
+  }
+
+  if (template === "Sale of business agreement") {
+    return (
+      <section className="intake-stack">
+        <div className="intake-section">
+          <h4>Parties and business</h4>
+          <div className="form-row equal">
+            <label>Seller<input name="businessSeller" defaultValue="Kopano Consulting (Pty) Ltd" /></label>
+            <label>Purchaser<input name="businessBuyer" defaultValue="Mabena Growth Partners (Pty) Ltd" /></label>
+          </div>
+          <label>Business being sold<input name="businessDescription" defaultValue="The seller's accounting and payroll services business operated from Rosebank, Johannesburg." /></label>
+          <label>Effective date<input name="effectiveDate" type="date" defaultValue="2026-08-01" /></label>
+        </div>
+        <div className="intake-section">
+          <h4>Assets, price and staff</h4>
+          <div className="form-row equal">
+            <label>Purchase price<input name="businessPurchasePrice" defaultValue="R 4 500 000" /></label>
+            <label>Deposit<input name="businessDeposit" defaultValue="R 450 000" /></label>
+          </div>
+          <label>Assets included<textarea name="assetsIncluded" defaultValue="Goodwill, customer contracts, equipment, software licences capable of transfer, trading name and business records." /></label>
+          <label>Excluded assets<textarea name="assetsExcluded" defaultValue="Seller bank accounts, tax refunds, pre-effective-date debtors and personal vehicles." /></label>
+          <label>Employees transferring<input name="employeesTransferring" defaultValue="8 employees, subject to section 197 review and consultation." /></label>
+        </div>
+        <div className="intake-section">
+          <h4>Conditions and protections</h4>
+          <div className="form-row equal">
+            <label>Due diligence deadline<input name="dueDiligenceDeadline" type="date" defaultValue="2026-07-15" /></label>
+            <label>Restraint period<input name="businessRestraint" defaultValue="24 months within Gauteng" /></label>
+          </div>
+          <label>Warranties and special conditions<textarea name="businessWarranties" defaultValue="Seller warrants accuracy of financial records, ownership of assets, no undisclosed material liabilities and no threatened major customer termination." /></label>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="intake-stack">
+      <div className="intake-section">
+        <h4>Intended spouses</h4>
+        <div className="form-row equal">
+          <label>First intended spouse<input name="spouseOne" defaultValue="Michael Botha" /></label>
+          <label>Second intended spouse<input name="spouseTwo" defaultValue="Zanele Maseko" /></label>
+        </div>
+        <div className="form-row equal">
+          <label>Marriage date<input name="marriageDate" type="date" defaultValue="2026-09-12" /></label>
+          <label>Marriage location<input name="marriageLocation" defaultValue="Pretoria, Gauteng" /></label>
+        </div>
+      </div>
+      <div className="intake-section">
+        <h4>Marital property system</h4>
+        <label>Chosen regime
+          <select name="maritalRegime" defaultValue="Out of community of property with accrual">
+            <option>Out of community of property with accrual</option>
+            <option>Out of community of property without accrual</option>
+          </select>
+        </label>
+        <div className="form-row equal">
+          <label>Spouse 1 commencement value<input name="spouseOneCommencement" defaultValue="R 250 000" /></label>
+          <label>Spouse 2 commencement value<input name="spouseTwoCommencement" defaultValue="R 180 000" /></label>
+        </div>
+        <label>Excluded assets<textarea name="excludedAssets" defaultValue="Inherited property, pre-marriage retirement interests, family trust distributions and listed personal assets are to be considered for exclusion." /></label>
+      </div>
+      <div className="intake-section">
+        <h4>Notary and registration</h4>
+        <div className="form-row equal">
+          <label>Notary<input name="notaryName" defaultValue="Mokoena & Partners Notaries" /></label>
+          <label>Registration deadline<input name="registrationDeadline" type="date" defaultValue="2026-12-12" /></label>
+        </div>
+        <label>Special instructions<textarea name="ancSpecialInstructions" defaultValue="Confirm both parties received independent explanation of accrual consequences before signature." /></label>
+      </div>
+    </section>
+  );
+}
+
 function formText(form: FormData, key: string, fallback = "[insert]") {
   const value = String(form.get(key) || "").trim();
   return value || fallback;
+}
+
+function buildDocumentDraft(template: string, form: FormData) {
+  if (template === "Residential offer to purchase") {
+    return {
+      partyA: formText(form, "sellerName"),
+      partyB: formText(form, "buyerName"),
+      category: "Conveyancing",
+      body: buildOfferToPurchaseBody(form)
+    };
+  }
+
+  if (template === "Shareholder agreement") {
+    return {
+      partyA: formText(form, "shareholderOne"),
+      partyB: formText(form, "shareholderTwo"),
+      category: "Commercial",
+      body: buildShareholderAgreementBody(form)
+    };
+  }
+
+  if (template === "Lease agreement") {
+    return {
+      partyA: formText(form, "landlordName"),
+      partyB: formText(form, "tenantName"),
+      category: "Property",
+      body: buildLeaseAgreementBody(form)
+    };
+  }
+
+  if (template === "Employment contract") {
+    return {
+      partyA: formText(form, "employerName"),
+      partyB: formText(form, "employeeName"),
+      category: "Employment",
+      body: buildEmploymentContractBody(form)
+    };
+  }
+
+  if (template === "Sale of business agreement") {
+    return {
+      partyA: formText(form, "businessSeller"),
+      partyB: formText(form, "businessBuyer"),
+      category: "Commercial",
+      body: buildSaleOfBusinessBody(form)
+    };
+  }
+
+  return {
+    partyA: formText(form, "spouseOne"),
+    partyB: formText(form, "spouseTwo"),
+    category: "Family",
+    body: buildAntenuptialContractIntakeBody(form)
+  };
+}
+
+function documentHeader(title: string, lines: string[], instructions: string) {
+  return [
+    title.toUpperCase(),
+    "",
+    "IMPORTANT ATTORNEY REVIEW NOTE",
+    "This document is a comprehensive working draft generated from the available instructions. It must be reviewed, completed and approved by a qualified South African legal practitioner before signature or client release.",
+    "",
+    ...lines,
+    "Governing law: Republic of South Africa",
+    "",
+    "Drafting instructions captured:",
+    instructions,
+    "",
+    "------------------------------------------------------------",
+    ""
+  ].join("\n");
 }
 
 function buildOfferToPurchaseBody(form: FormData) {
@@ -821,6 +1080,362 @@ function buildOfferToPurchaseBody(form: FormData) {
     "D. Compliance certificate schedule",
     "E. Linked-sale proof and timeline schedule",
     "F. Estate agent mandate or commission confirmation"
+  ].join("\n");
+}
+
+function buildShareholderAgreementBody(form: FormData) {
+  const companyName = formText(form, "companyName");
+  const companyRegistration = formText(form, "companyRegistration");
+  const shareholderOne = formText(form, "shareholderOne");
+  const shareholderTwo = formText(form, "shareholderTwo");
+  const shareholdingTable = formText(form, "shareholdingTable");
+  const businessDescription = formText(form, "businessDescription");
+  const boardComposition = formText(form, "boardComposition");
+  const reservedThreshold = formText(form, "reservedThreshold");
+  const reservedMatters = formText(form, "reservedMatters");
+  const fundingTerms = formText(form, "fundingTerms");
+  const valuationMethod = formText(form, "valuationMethod");
+  const deadlockMechanism = formText(form, "deadlockMechanism");
+  const restraintPeriod = formText(form, "restraintPeriod");
+  const disputeResolution = formText(form, "disputeResolution");
+  const instructions = formText(form, "instructions", "No additional instructions captured.");
+
+  return documentHeader("Shareholders Agreement", [
+    `Company: ${companyName} (${companyRegistration})`,
+    `Shareholders: ${shareholderOne}; ${shareholderTwo}`,
+    `Business: ${businessDescription}`
+  ], instructions) + [
+    "1. PARTIES AND COMPANY",
+    `1.1 The company is ${companyName}, registration number ${companyRegistration}, a private company incorporated in South Africa.`,
+    `1.2 The initial shareholders are ${shareholderOne} and ${shareholderTwo}, together with any further shareholder who signs a deed of adherence.`,
+    "1.3 The parties agree to regulate their relationship as shareholders and their participation in the company through this agreement, the Companies Act and the company's MOI.",
+    "",
+    "2. SHARE CAPITAL AND OWNERSHIP",
+    `2.1 The initial shareholding is recorded as follows: ${shareholdingTable}`,
+    "2.2 No shares, options or convertible securities may be issued unless approved under the reserved matters clause.",
+    "2.3 The company secretary or authorised officer shall keep the securities register aligned with this agreement and the Companies Act.",
+    "",
+    "3. BUSINESS OF THE COMPANY",
+    `3.1 The business of the company is ${businessDescription}.`,
+    "3.2 The company may not materially change its business, dispose of a material undertaking or enter a new line of business without the required reserved matter approval.",
+    "",
+    "4. BOARD, MANAGEMENT AND VOTING",
+    `4.1 The board composition shall be: ${boardComposition}.`,
+    "4.2 Directors shall act in the best interests of the company and comply with fiduciary duties under South African law.",
+    "4.3 Board meetings require reasonable notice, an agenda and proper minutes.",
+    `4.4 Reserved matters require ${reservedThreshold}.`,
+    `4.5 Reserved matters include: ${reservedMatters}.`,
+    "",
+    "5. FUNDING AND SHAREHOLDER LOANS",
+    `5.1 Funding arrangements are: ${fundingTerms}.`,
+    "5.2 Any shareholder loan must be recorded in writing, including amount, interest, repayment terms, ranking and whether subordination is required.",
+    "5.3 No shareholder is obliged to provide further funding unless expressly agreed in writing.",
+    "",
+    "6. TRANSFER OF SHARES",
+    "6.1 A shareholder may not transfer, pledge or otherwise encumber shares except as permitted by this agreement.",
+    "6.2 A selling shareholder must first give a transfer notice to the other shareholders, who shall have pre-emptive rights on the same terms.",
+    "6.3 Any transferee must sign a deed of adherence before becoming registered as shareholder.",
+    "",
+    "7. TAG-ALONG, DRAG-ALONG AND EXIT",
+    "7.1 If a majority shareholder receives a bona fide third-party offer, minority shareholders shall have tag-along rights on equivalent terms.",
+    "7.2 Drag-along rights may apply if the required majority approves a sale, subject to fair process and equivalent terms for all affected shareholders.",
+    `7.3 Fair value or fair market value shall be determined by ${valuationMethod}.`,
+    "",
+    "8. DEADLOCK",
+    `8.1 A deadlock shall be handled through ${deadlockMechanism}.`,
+    "8.2 Until the deadlock is resolved, the company must continue ordinary-course business and avoid prejudicing assets, staff, clients or statutory compliance.",
+    "",
+    "9. RESTRAINT, CONFIDENTIALITY AND IP",
+    `9.1 Restraint and non-solicitation undertakings shall apply for ${restraintPeriod}, subject to enforceability review.`,
+    "9.2 Shareholders must protect confidential information and may use it only for company purposes.",
+    "9.3 Intellectual property created for the company or using company resources shall belong to the company unless otherwise agreed.",
+    "",
+    "10. DEFAULT",
+    "10.1 Default events include material breach, fraud, insolvency, prohibited transfer, loss of capacity, death or ceasing employment where founder-employment terms apply.",
+    "10.2 Non-defaulting shareholders may require a compulsory transfer mechanism, valuation or other remedy selected by the attorney.",
+    "",
+    "11. DISPUTE RESOLUTION",
+    `11.1 Disputes shall be handled by ${disputeResolution}.`,
+    "11.2 Urgent interdictory relief may still be sought from a competent South African court.",
+    "",
+    "12. SIGNATURE",
+    `Signed by ${shareholderOne}: __________________`,
+    `Signed by ${shareholderTwo}: __________________`,
+    "",
+    "SCHEDULES",
+    "1. Shareholding table",
+    "2. Reserved matters",
+    "3. Funding and loan terms",
+    "4. Transfer notice form",
+    "5. Deed of adherence"
+  ].join("\n");
+}
+
+function buildLeaseAgreementBody(form: FormData) {
+  const landlordName = formText(form, "landlordName");
+  const tenantName = formText(form, "tenantName");
+  const leasePremises = formText(form, "leasePremises");
+  const permittedUse = formText(form, "permittedUse");
+  const leaseStart = formText(form, "leaseStart");
+  const leaseEnd = formText(form, "leaseEnd");
+  const monthlyRental = formText(form, "monthlyRental");
+  const leaseDeposit = formText(form, "leaseDeposit");
+  const rentalEscalation = formText(form, "rentalEscalation");
+  const utilities = formText(form, "utilities");
+  const renewalOption = formText(form, "renewalOption");
+  const leaseNotice = formText(form, "leaseNotice");
+  const leaseSpecialConditions = formText(form, "leaseSpecialConditions");
+  const instructions = formText(form, "instructions", "No additional instructions captured.");
+
+  return documentHeader("Lease Agreement", [
+    `Landlord: ${landlordName}`,
+    `Tenant: ${tenantName}`,
+    `Premises: ${leasePremises}`,
+    `Term: ${leaseStart} to ${leaseEnd}`
+  ], instructions) + [
+    "1. PARTIES AND PREMISES",
+    `1.1 The Landlord is ${landlordName}.`,
+    `1.2 The Tenant is ${tenantName}.`,
+    `1.3 The leased premises are ${leasePremises}.`,
+    `1.4 The premises may be used only for ${permittedUse}, unless the Landlord gives prior written consent.`,
+    "",
+    "2. TERM",
+    `2.1 The lease starts on ${leaseStart} and ends on ${leaseEnd}.`,
+    "2.2 The Tenant shall not occupy before the commencement date unless the Landlord gives written permission.",
+    `2.3 Renewal option: ${renewalOption}.`,
+    "",
+    "3. RENTAL, DEPOSIT AND CHARGES",
+    `3.1 Monthly rental is ${monthlyRental}, payable monthly in advance on or before the first business day of each month.`,
+    `3.2 The Tenant shall pay a deposit of ${leaseDeposit}, to be held as security for obligations under this lease.`,
+    `3.3 Rental escalation shall be ${rentalEscalation}.`,
+    `3.4 Utilities and operating costs: ${utilities}.`,
+    "3.5 Late payments shall bear interest at the rate permitted by law or the rate agreed by the parties, subject to attorney review.",
+    "",
+    "4. CONDITION, MAINTENANCE AND ALTERATIONS",
+    "4.1 The Tenant acknowledges receipt of the premises in the condition recorded in the incoming inspection schedule.",
+    "4.2 The Tenant must keep the premises clean, safe and in good order, fair wear and tear excepted.",
+    "4.3 No structural alterations, signage or installations may be made without prior written approval and required municipal or body corporate approvals.",
+    "",
+    "5. COMPLIANCE AND CONDUCT",
+    "5.1 The Tenant must comply with applicable laws, building rules, health and safety requirements, fire regulations and municipal by-laws.",
+    "5.2 The Tenant may not cause nuisance, overload services, store hazardous goods or use the premises for unlawful purposes.",
+    "",
+    "6. BREACH AND CANCELLATION",
+    `6.1 Breach notices require ${leaseNotice}, unless a shorter period is permitted by law for urgent or repeated breach.`,
+    "6.2 If the breach is not remedied, the aggrieved party may claim specific performance, cancel the lease, claim damages and recover legal costs where permitted.",
+    "",
+    "7. SPECIAL CONDITIONS",
+    `7.1 ${leaseSpecialConditions}`,
+    "",
+    "8. POPIA AND FICA",
+    "8.1 Each party consents to processing of personal information for lease administration, compliance, billing and enforcement.",
+    "8.2 Each party shall provide FICA and authority documents reasonably required by the other party.",
+    "",
+    "9. SIGNATURE",
+    `Landlord signature for ${landlordName}: __________________`,
+    `Tenant signature for ${tenantName}: __________________`,
+    "",
+    "ANNEXURES",
+    "A. Premises plan",
+    "B. Incoming inspection",
+    "C. Building rules",
+    "D. Deposit and charge schedule"
+  ].join("\n");
+}
+
+function buildEmploymentContractBody(form: FormData) {
+  const employerName = formText(form, "employerName");
+  const employeeName = formText(form, "employeeName");
+  const positionTitle = formText(form, "positionTitle");
+  const workLocation = formText(form, "workLocation");
+  const employmentStart = formText(form, "employmentStart");
+  const probationPeriod = formText(form, "probationPeriod");
+  const remuneration = formText(form, "remuneration");
+  const workingHours = formText(form, "workingHours");
+  const benefits = formText(form, "benefits");
+  const employmentNotice = formText(form, "employmentNotice");
+  const employmentRestraint = formText(form, "employmentRestraint");
+  const employmentConfidentiality = formText(form, "employmentConfidentiality");
+  const instructions = formText(form, "instructions", "No additional instructions captured.");
+
+  return documentHeader("Employment Contract", [
+    `Employer: ${employerName}`,
+    `Employee: ${employeeName}`,
+    `Position: ${positionTitle}`,
+    `Start date: ${employmentStart}`
+  ], instructions) + [
+    "1. APPOINTMENT",
+    `1.1 ${employerName} appoints ${employeeName} as ${positionTitle}.`,
+    `1.2 Employment commences on ${employmentStart}.`,
+    `1.3 The primary work location is ${workLocation}, subject to reasonable operational requirements.`,
+    "",
+    "2. DUTIES AND POLICIES",
+    "2.1 The Employee shall perform all duties reasonably associated with the position and any lawful instruction given by the Employer.",
+    "2.2 The Employee shall comply with workplace policies, confidentiality rules, technology policies, client-care standards and professional conduct requirements.",
+    "",
+    "3. PROBATION AND PERFORMANCE",
+    `3.1 The probation period is ${probationPeriod}.`,
+    "3.2 During probation, performance, conduct, suitability and operational fit may be assessed through reasonable process.",
+    "3.3 Confirmation after probation does not remove the Employer's rights under labour law, workplace discipline or operational requirements.",
+    "",
+    "4. REMUNERATION, BENEFITS AND HOURS",
+    `4.1 Remuneration is ${remuneration}.`,
+    `4.2 Working hours are ${workingHours}.`,
+    `4.3 Benefits are ${benefits}.`,
+    "4.4 Statutory deductions, tax, leave accrual and benefits administration shall be handled according to applicable South African law and employer policy.",
+    "",
+    "5. LEAVE",
+    "5.1 Annual leave, sick leave, family responsibility leave and other statutory leave shall be granted according to the Basic Conditions of Employment Act and employer policy.",
+    "5.2 Leave must be applied for and approved in advance except where impractical due to illness or emergency.",
+    "",
+    "6. CONFIDENTIALITY, IP AND DATA",
+    `6.1 ${employmentConfidentiality}`,
+    "6.2 The Employee shall comply with POPIA and protect client, employee and business information.",
+    "6.3 Work product, documents, templates, software, processes and inventions created in the course and scope of employment shall belong to the Employer unless otherwise agreed.",
+    "",
+    "7. RESTRAINT AND NON-SOLICITATION",
+    `7.1 ${employmentRestraint}`,
+    "7.2 The enforceability of any restraint depends on reasonableness, protectable interests, scope, duration and territory and must be reviewed before enforcement.",
+    "",
+    "8. TERMINATION",
+    `8.1 Notice period: ${employmentNotice}.`,
+    "8.2 Termination must comply with South African labour law, fair procedure and any applicable disciplinary or incapacity process.",
+    "8.3 On termination, the Employee must return property, passwords, records, client files and confidential information.",
+    "",
+    "9. SIGNATURE",
+    `For the Employer, ${employerName}: __________________`,
+    `Employee, ${employeeName}: __________________`
+  ].join("\n");
+}
+
+function buildSaleOfBusinessBody(form: FormData) {
+  const businessSeller = formText(form, "businessSeller");
+  const businessBuyer = formText(form, "businessBuyer");
+  const businessDescription = formText(form, "businessDescription");
+  const effectiveDate = formText(form, "effectiveDate");
+  const businessPurchasePrice = formText(form, "businessPurchasePrice");
+  const businessDeposit = formText(form, "businessDeposit");
+  const assetsIncluded = formText(form, "assetsIncluded");
+  const assetsExcluded = formText(form, "assetsExcluded");
+  const employeesTransferring = formText(form, "employeesTransferring");
+  const dueDiligenceDeadline = formText(form, "dueDiligenceDeadline");
+  const businessRestraint = formText(form, "businessRestraint");
+  const businessWarranties = formText(form, "businessWarranties");
+  const instructions = formText(form, "instructions", "No additional instructions captured.");
+
+  return documentHeader("Sale of Business Agreement", [
+    `Seller: ${businessSeller}`,
+    `Purchaser: ${businessBuyer}`,
+    `Business: ${businessDescription}`,
+    `Effective date: ${effectiveDate}`,
+    `Purchase price: ${businessPurchasePrice}`
+  ], instructions) + [
+    "1. SALE",
+    `1.1 The Seller sells and the Purchaser purchases the business described as ${businessDescription}.`,
+    `1.2 The effective date is ${effectiveDate}, subject to fulfilment or waiver of suspensive conditions.`,
+    "1.3 The sale is a sale of business assets and goodwill unless expressly structured otherwise by the attorney.",
+    "",
+    "2. PURCHASE PRICE AND PAYMENT",
+    `2.1 The purchase price is ${businessPurchasePrice}.`,
+    `2.2 The Purchaser shall pay a deposit of ${businessDeposit} into the nominated trust or business account on signature or as otherwise agreed.`,
+    "2.3 The balance shall be paid on closing against delivery of the assets, records and completion deliverables.",
+    "",
+    "3. ASSETS INCLUDED AND EXCLUDED",
+    `3.1 Included assets: ${assetsIncluded}.`,
+    `3.2 Excluded assets: ${assetsExcluded}.`,
+    "3.3 Risk and benefit in the included assets shall pass on the effective date or closing date selected by the attorney.",
+    "",
+    "4. DUE DILIGENCE AND CONDITIONS",
+    `4.1 Due diligence must be completed by ${dueDiligenceDeadline}.`,
+    "4.2 The Purchaser may review financial records, contracts, employee information, licences, tax records, customer information and material liabilities.",
+    "4.3 Any regulatory approvals, landlord consents, customer novations or supplier consents must be listed as suspensive conditions where required.",
+    "",
+    "5. EMPLOYEES",
+    `5.1 Employees transferring or affected: ${employeesTransferring}.`,
+    "5.2 The parties must obtain labour-law advice on whether section 197 of the Labour Relations Act applies.",
+    "5.3 Employee consultation, accrued leave, benefits, restraint arrangements and payroll transition must be handled before closing.",
+    "",
+    "6. WARRANTIES",
+    `6.1 ${businessWarranties}`,
+    "6.2 The Seller warrants that it has authority to sell the business and that no undisclosed encumbrances affect the included assets, except as disclosed.",
+    "6.3 Warranty claims shall be subject to agreed notice periods, thresholds, caps and exclusions.",
+    "",
+    "7. RESTRAINT AND CONFIDENTIALITY",
+    `7.1 Restraint: ${businessRestraint}.`,
+    "7.2 The Seller shall not solicit transferred clients, customers or employees except as permitted in writing.",
+    "7.3 Both parties must protect confidential business information and personal information processed during the transaction.",
+    "",
+    "8. CLOSING DELIVERABLES",
+    "8.1 Closing deliverables include asset handover, customer list, supplier records, licences capable of transfer, employee records, passwords, keys, accounting records and signed transfer documents.",
+    "8.2 The parties shall sign all documents reasonably required to implement the transaction.",
+    "",
+    "9. BREACH AND DISPUTES",
+    "9.1 A party in breach shall have 7 days to remedy breach after written notice unless urgency requires immediate relief.",
+    "9.2 Disputes shall be handled by negotiation, mediation and competent South African courts unless arbitration is selected.",
+    "",
+    "10. SIGNATURE",
+    `For the Seller, ${businessSeller}: __________________`,
+    `For the Purchaser, ${businessBuyer}: __________________`
+  ].join("\n");
+}
+
+function buildAntenuptialContractIntakeBody(form: FormData) {
+  const spouseOne = formText(form, "spouseOne");
+  const spouseTwo = formText(form, "spouseTwo");
+  const marriageDate = formText(form, "marriageDate");
+  const marriageLocation = formText(form, "marriageLocation");
+  const maritalRegime = formText(form, "maritalRegime");
+  const spouseOneCommencement = formText(form, "spouseOneCommencement");
+  const spouseTwoCommencement = formText(form, "spouseTwoCommencement");
+  const excludedAssets = formText(form, "excludedAssets");
+  const notaryName = formText(form, "notaryName");
+  const registrationDeadline = formText(form, "registrationDeadline");
+  const ancSpecialInstructions = formText(form, "ancSpecialInstructions");
+  const instructions = formText(form, "instructions", "No additional instructions captured.");
+
+  return documentHeader("Antenuptial Contract Intake", [
+    `Intended spouses: ${spouseOne}; ${spouseTwo}`,
+    `Marriage date and place: ${marriageDate}, ${marriageLocation}`,
+    `Selected regime: ${maritalRegime}`,
+    `Notary: ${notaryName}`
+  ], instructions) + [
+    "1. INTAKE PURPOSE",
+    `1.1 This intake records instructions for an antenuptial contract between ${spouseOne} and ${spouseTwo}.`,
+    `1.2 The intended marriage is scheduled for ${marriageDate} at ${marriageLocation}.`,
+    "1.3 This intake must be converted into a notarial antenuptial contract and registered in the deeds registry within the legally required period.",
+    "",
+    "2. SELECTED MARITAL PROPERTY SYSTEM",
+    `2.1 The selected regime is: ${maritalRegime}.`,
+    "2.2 The notary must explain the legal consequences of the chosen regime, including accrual, excluded assets, commencement values, debts and estate planning implications.",
+    "",
+    "3. COMMENCEMENT VALUES",
+    `3.1 ${spouseOne} commencement value: ${spouseOneCommencement}.`,
+    `3.2 ${spouseTwo} commencement value: ${spouseTwoCommencement}.`,
+    "3.3 Supporting schedules of assets, liabilities and valuations should be attached and signed.",
+    "",
+    "4. EXCLUDED ASSETS",
+    `4.1 Proposed excluded assets: ${excludedAssets}.`,
+    "4.2 Exclusions must be described clearly enough to avoid later dispute and should be reviewed against the Matrimonial Property Act and current practice.",
+    "",
+    "5. NOTARY, EXECUTION AND REGISTRATION",
+    `5.1 The appointed notary is ${notaryName}.`,
+    `5.2 The target registration deadline is ${registrationDeadline}.`,
+    "5.3 The parties must sign before a notary before marriage unless a court-authorised postnuptial process is followed.",
+    "",
+    "6. SPECIAL INSTRUCTIONS",
+    `6.1 ${ancSpecialInstructions}`,
+    "",
+    "7. DOCUMENTS TO COLLECT",
+    "7.1 Identity documents, proof of address, marriage officer details, asset schedules, liability schedules, valuation support and any trust or inheritance documents.",
+    "",
+    "8. ATTORNEY AND NOTARY CHECKLIST",
+    "8.1 Confirm capacity, independent consent, absence of duress and clear explanation of accrual consequences.",
+    "8.2 Confirm POPIA consent and FICA documents.",
+    "8.3 Prepare the notarial deed, arrange signature, lodge for registration and provide registered copies to the parties.",
+    "",
+    "9. CLIENT ACKNOWLEDGEMENT",
+    `Acknowledged by ${spouseOne}: __________________`,
+    `Acknowledged by ${spouseTwo}: __________________`
   ].join("\n");
 }
 
