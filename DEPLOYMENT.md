@@ -226,13 +226,24 @@ psql -d lawpath -f db/migrations/001_initial_saas_schema.sql
 
 ## Recommended Deployment Flow
 
-For each release:
+The repo includes a deployment helper:
 
 ```bash
-git pull
-npm ci
-npm run build
-sudo systemctl restart lawpath-api
+deploy.sh
+```
+
+Because the first two migrations were applied manually before migration tracking existed, run this once on the server:
+
+```bash
+cd /home2/lawpath/app/LawPath
+bash deploy.sh --baseline
+```
+
+For each release after that:
+
+```bash
+cd /home2/lawpath/app/LawPath
+bash deploy.sh
 ```
 
 Then confirm Apache serves:
