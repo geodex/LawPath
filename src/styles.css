@@ -901,6 +901,25 @@ textarea {
   background: #f7faf7;
 }
 
+.indexing-status {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf7;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.42;
+}
+
+.indexing-status svg {
+  color: var(--blue);
+  margin-top: 1px;
+}
+
 .table {
   display: grid;
   overflow-x: auto;

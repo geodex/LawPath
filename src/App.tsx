@@ -259,7 +259,7 @@ export function App() {
 
         {activeView === "overview" && <Overview matters={matters} tasks={tasks} invoices={invoices} research={research} activity={activity} setActiveView={setActiveView} />}
         {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} />}
-        {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} />}
+        {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
         {activeView === "secretary" && <Secretary tasks={tasks} setTasks={setTasks} log={log} />}
         {activeView === "billing" && <Billing invoices={invoices} setInvoices={setInvoices} log={log} />}
         {activeView === "booking" && <Booking appointments={appointments} setAppointments={setAppointments} log={log} />}
@@ -1721,27 +1721,69 @@ function DocumentPreviewModal({ body, onClose }: { body: string; onClose: () => 
   );
 }
 
-function ResearchDesk({ research, setResearch, log }: { research: ResearchItem[]; setResearch: React.Dispatch<React.SetStateAction<ResearchItem[]>>; log: (message: string) => void }) {
+function ResearchDesk({
+  research,
+  setResearch,
+  log,
+  showToast
+}: {
+  research: ResearchItem[];
+  setResearch: React.Dispatch<React.SetStateAction<ResearchItem[]>>;
+  log: (message: string) => void;
+  showToast: (type: Toast["type"], title: string, message: string) => void;
+}) {
   const [query, setQuery] = useState("");
+  const [indexingBusy, setIndexingBusy] = useState(false);
+  const [indexingStatus, setIndexingStatus] = useState("No indexing job running.");
   const results = useMemo(() => {
     const term = query.toLowerCase();
     return research.filter((item) => [item.title, item.court, item.year, item.tags.join(" "), item.summary].join(" ").toLowerCase().includes(term));
   }, [query, research]);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const title = String(form.get("title"));
+    const title = String(form.get("title") || "").trim();
+    const sourceType = String(form.get("sourceType") || "Document bundle");
+    const sourceUrl = String(form.get("sourceUrl") || "").trim();
+    const court = String(form.get("court") || "").trim();
+    const tags = String(form.get("tags")).split(",").map((tag) => tag.trim()).filter(Boolean);
+    const summary = String(form.get("summary") || "").trim();
+
+    if (!title) {
+      const message = "Add a bundle title before indexing research.";
+      setIndexingStatus(message);
+      showToast("error", "Indexing blocked", message);
+      return;
+    }
+
+    if (sourceType === "Website URL" && !sourceUrl) {
+      const message = "Add the website URL you want LawPath to index.";
+      setIndexingStatus(message);
+      showToast("error", "Web source missing", message);
+      return;
+    }
+
+    setIndexingBusy(true);
+    setIndexingStatus(`Indexing queued for ${title}... extracting text, tags and source metadata.`);
+    showToast("info", "Indexing queued", `${title} has been sent to the research index.`);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
+
+    const sourceLine = sourceUrl ? ` Source URL: ${sourceUrl}.` : "";
     const item: ResearchItem = {
       id: uid("R"),
       title,
-      court: String(form.get("court")),
+      court: court || sourceType,
       year: new Date().getFullYear().toString(),
-      tags: String(form.get("tags")).split(",").map((tag) => tag.trim()).filter(Boolean),
-      summary: String(form.get("summary"))
+      tags: tags.length ? tags : [sourceType.toLowerCase()],
+      summary: `${summary || "Research source indexed for search and matter notes."}${sourceLine}`
     };
     setResearch((items) => [item, ...items]);
+    setIndexingStatus(`Indexed ${title}. ${item.tags.length} tags captured and ${sourceUrl ? "web source metadata" : "source metadata"} attached.`);
     log(`Indexed research bundle: ${title}`);
+    showToast("success", "Research indexed", `${title} is now searchable in the local research index.`);
+    setIndexingBusy(false);
   }
 
   return (
@@ -1749,10 +1791,25 @@ function ResearchDesk({ research, setResearch, log }: { research: ResearchItem[]
       <Panel title="Case-law ingestion" badge="Bulk-ready">
         <form className="form" onSubmit={submit}>
           <label>Bundle title<input name="title" defaultValue="New authority bundle" /></label>
+          <label>Source type
+            <select name="sourceType" defaultValue="Website URL">
+              <option>Website URL</option>
+              <option>Case law bundle</option>
+              <option>Legislation</option>
+              <option>Practice manual</option>
+              <option>Firm precedent</option>
+              <option>Document bundle</option>
+            </select>
+          </label>
+          <label>Web source URL<input name="sourceUrl" type="url" placeholder="https://www.saflii.org/..." /></label>
           <label>Court or source<input name="court" defaultValue="High Court / SCA / Constitutional Court" /></label>
           <label>Tags<input name="tags" defaultValue="conveyancing, mandate, damages" /></label>
           <label>Research note<textarea name="summary" defaultValue="Paste a large judgment bundle here. The app indexes the text for quick searching, tagging and matter notes." /></label>
-          <button className="primary" type="submit"><Archive size={18} /> Index research</button>
+          <div className="indexing-status">
+            <Clock3 size={18} />
+            <span>{indexingStatus}</span>
+          </div>
+          <button className="primary" type="submit" disabled={indexingBusy}><Archive size={18} /> {indexingBusy ? "Indexing..." : "Index research"}</button>
         </form>
       </Panel>
       <Panel title="Research search" badge="Local index">
