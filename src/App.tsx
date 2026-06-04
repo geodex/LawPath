@@ -113,6 +113,7 @@ export function App() {
   ]);
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
+  const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
 
   function log(message: string) {
     setActivity((items) => [message, ...items].slice(0, 8));
@@ -249,6 +250,7 @@ export function App() {
             emailStatus={emailStatus}
             setEmailStatus={setEmailStatus}
             log={log}
+            isPlatformSuperAdmin={isPlatformSuperAdmin}
           />
         )}
       </main>
@@ -1017,7 +1019,8 @@ function AdminSettings({
   setAssistantTraining,
   emailStatus,
   setEmailStatus,
-  log
+  log,
+  isPlatformSuperAdmin
 }: {
   settings: SmtpSettings;
   setSettings: React.Dispatch<React.SetStateAction<SmtpSettings>>;
@@ -1032,6 +1035,7 @@ function AdminSettings({
   emailStatus: string;
   setEmailStatus: (status: string) => void;
   log: (message: string) => void;
+  isPlatformSuperAdmin: boolean;
 }) {
   const [savedAt, setSavedAt] = useState("Not saved yet");
   const [apiSavedAt, setApiSavedAt] = useState("Not saved yet");
@@ -1130,7 +1134,7 @@ function AdminSettings({
       <section className="settings-hero">
         <div>
           <p className="eyebrow">SaaS administration</p>
-          <h2>Email delivery settings</h2>
+          <h2>{isPlatformSuperAdmin ? "Platform super admin settings" : "Tenant settings"}</h2>
           <p>Super admins control shared infrastructure and AI credentials. Tenant admins control only their company sender identity, so portal invitations show the firm while still being delivered through the LawPath mail server.</p>
         </div>
         <div className="status-card">

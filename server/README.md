@@ -36,6 +36,19 @@ DATABASE_SSL=false
 npm run start:api
 ```
 
+## Create First Super Admin
+
+Set environment variables in the shell, then run:
+
+```bash
+SUPER_ADMIN_NAME="Your Name" \
+SUPER_ADMIN_EMAIL="you@lawpath.co.za" \
+SUPER_ADMIN_PASSWORD="a-long-secure-password" \
+npm run create-super-admin
+```
+
+This creates or updates a `platform_super_admin` user with no tenant.
+
 ## Notes
 
 Registration creates:

@@ -100,6 +100,16 @@ Then check:
 curl http://127.0.0.1:3069/api/health
 ```
 
+Create the first platform super admin:
+
+```bash
+cd /home2/lawpath/app/LawPath
+SUPER_ADMIN_NAME="Your Name" \
+SUPER_ADMIN_EMAIL="you@lawpath.co.za" \
+SUPER_ADMIN_PASSWORD="a-long-secure-password" \
+npm run create-super-admin
+```
+
 For production, run the API under PM2, and configure Apache to proxy `/api` to `http://127.0.0.1:3069`.
 
 ### PM2 Process Manager

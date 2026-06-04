@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "dev:api": "node server/index.js",
+    "create-super-admin": "node server/scripts/create-super-admin.js",
     "start": "vite --host 0.0.0.0",
     "start:api": "node server/index.js",
     "build": "tsc --noEmit && vite build",

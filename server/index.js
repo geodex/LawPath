@@ -45,7 +45,7 @@ function publicUser(row) {
     fullName: row.full_name,
     email: row.email,
     role: row.role,
-    companyName: row.company_name,
+    companyName: row.company_name || "LawPath Platform",
     tenantSlug: row.slug
   };
 }
