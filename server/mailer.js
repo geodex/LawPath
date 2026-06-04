@@ -12,31 +12,38 @@ function smtpSecure() {
   return smtpPort() === 465;
 }
 
-function requireSmtpConfig() {
-  const missing = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"].filter((key) => !process.env[key]);
+function requireSmtpConfig(settings = {}) {
+  const values = {
+    SMTP_HOST: settings.host || process.env.SMTP_HOST,
+    SMTP_USERNAME: settings.username || process.env.SMTP_USERNAME,
+    SMTP_PASSWORD: settings.password || process.env.SMTP_PASSWORD
+  };
+  const missing = Object.entries(values).filter(([, value]) => !value).map(([key]) => key);
 
   if (missing.length) {
     throw new Error(`SMTP is not configured. Missing ${missing.join(", ")}.`);
   }
 }
 
-function createTransporter() {
-  requireSmtpConfig();
+function createTransporter(settings = {}) {
+  requireSmtpConfig(settings);
+  const port = Number(settings.port || smtpPort());
+  const secure = settings.encryption === "SSL" || settings.secure === true || (!settings.encryption && smtpSecure());
 
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: smtpPort(),
-    secure: smtpSecure(),
+    host: settings.host || process.env.SMTP_HOST,
+    port,
+    secure,
     auth: {
-      user: process.env.SMTP_USERNAME,
-      pass: process.env.SMTP_PASSWORD
+      user: settings.username || process.env.SMTP_USERNAME,
+      pass: settings.password || process.env.SMTP_PASSWORD
     }
   });
 }
 
-async function sendTransactionalEmail({ to, subject, text, html, tenantFromName, tenantFromEmail, replyTo }) {
-  const transporter = createTransporter();
-  const platformFromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USERNAME;
+async function sendTransactionalEmail({ to, subject, text, html, tenantFromName, tenantFromEmail, replyTo, smtpSettings }) {
+  const transporter = createTransporter(smtpSettings);
+  const platformFromEmail = process.env.SMTP_FROM_EMAIL || smtpSettings?.username || process.env.SMTP_USERNAME;
   const safeFromName = tenantFromName || process.env.SMTP_FROM_NAME || "LawPath SA";
 
   return transporter.sendMail({

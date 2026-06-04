@@ -26,10 +26,10 @@ import {
   UsersRound,
   X
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
-import { clearToken, forgotPassword, getCurrentUser, login, registerTenant, saveTenantEmailIdentity, sendTestEmail } from "./api";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { clearToken, forgotPassword, getBootstrapSettings, getCurrentUser, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendTestEmail } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
-import type { ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, Invoice, Matter, NavItem, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, ViewKey, WorkTask } from "./types";
+import type { ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, Invoice, Matter, NavItem, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, ViewKey, WorkTask } from "./types";
 
 const nav: NavItem[] = [
   { key: "overview", label: "Overview", icon: Home },
@@ -48,6 +48,52 @@ const today = () => new Date().toISOString().slice(0, 10);
 const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
 type Toast = { id: string; type: "success" | "error" | "info"; title: string; message: string };
 
+const defaultSmtpSettings = (): SmtpSettings => ({
+  providerName: "LawPath SMTP",
+  host: "",
+  port: 587,
+  username: "",
+  password: "",
+  encryption: "TLS",
+  bounceEmail: "",
+  transactionalEnabled: true,
+  systemEnabled: true,
+  testRecipient: ""
+});
+
+const defaultTenantEmailSettings = (): TenantEmailSettings => ({
+  tenantName: "",
+  tenantDomain: "",
+  fromName: "",
+  fromEmail: "",
+  replyTo: "",
+  portalSignature: "",
+  verifiedDomain: false
+});
+
+const defaultTenantProfile = (companyName = ""): TenantProfile => ({
+  tradingName: companyName,
+  practiceType: "",
+  addressLine1: "",
+  addressLine2: "",
+  city: "",
+  province: "",
+  postalCode: "",
+  phone: "",
+  website: "",
+  lpcRegistrationNumber: "",
+  companyRegistrationNumber: "",
+  vatNumber: "",
+  conveyancerCount: 0,
+  seniorAttorneyCount: 0,
+  juniorAttorneyCount: 0,
+  candidateAttorneyCount: 0,
+  legalSecretaryCount: 0,
+  logoDataUrl: "",
+  onboardingCompleted: false,
+  onboardingStep: 1
+});
+
 export function App() {
   const [authMode, setAuthMode] = useState<"landing" | "login" | "register" | "forgot">("landing");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -61,27 +107,9 @@ export function App() {
   const [tasks, setTasks] = useState<WorkTask[]>(taskSeed);
   const [invoices, setInvoices] = useState<Invoice[]>(invoiceSeed);
   const [appointments, setAppointments] = useState<Appointment[]>(appointmentSeed);
-  const [smtpSettings, setSmtpSettings] = useState<SmtpSettings>({
-    providerName: "LawPath SMTP",
-    host: "smtp.yourfirm.co.za",
-    port: 587,
-    username: "notifications@yourfirm.co.za",
-    password: "",
-    encryption: "TLS",
-    bounceEmail: "bounces@yourfirm.co.za",
-    transactionalEnabled: true,
-    systemEnabled: true,
-    testRecipient: "admin@yourfirm.co.za"
-  });
-  const [tenantEmailSettings, setTenantEmailSettings] = useState<TenantEmailSettings>({
-    tenantName: "Mokoena & Partners Inc.",
-    tenantDomain: "mokoenalaw.co.za",
-    fromName: "Mokoena & Partners Conveyancing",
-    fromEmail: "transfers@mokoenalaw.co.za",
-    replyTo: "transfers@mokoenalaw.co.za",
-    portalSignature: "Mokoena & Partners Inc. Conveyancing Department",
-    verifiedDomain: true
-  });
+  const [smtpSettings, setSmtpSettings] = useState<SmtpSettings>(defaultSmtpSettings);
+  const [tenantEmailSettings, setTenantEmailSettings] = useState<TenantEmailSettings>(defaultTenantEmailSettings);
+  const [tenantProfile, setTenantProfile] = useState<TenantProfile>(defaultTenantProfile);
   const [apiSettings, setApiSettings] = useState<ApiProviderSettings>({
     exchangeRatesApiKey: "",
     exchangeRatesBaseCurrency: "ZAR",
@@ -117,6 +145,40 @@ export function App() {
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
   const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
+
+  useEffect(() => {
+    if (!authUser) return;
+
+    loadWorkspaceSettings(authUser);
+  }, [authUser?.id]);
+
+  async function loadWorkspaceSettings(user: AuthUser) {
+    try {
+      const bootstrap = await getBootstrapSettings();
+      if (bootstrap.tenantProfile) {
+        setTenantProfile(bootstrap.tenantProfile);
+      } else {
+        setTenantProfile(defaultTenantProfile(user.companyName));
+      }
+      if (bootstrap.emailIdentity) {
+        setTenantEmailSettings({
+          tenantName: user.companyName,
+          tenantDomain: bootstrap.emailIdentity.verified_domain || "",
+          fromName: bootstrap.emailIdentity.from_name,
+          fromEmail: bootstrap.emailIdentity.from_email,
+          replyTo: bootstrap.emailIdentity.reply_to,
+          portalSignature: bootstrap.emailIdentity.portal_signature || "",
+          verifiedDomain: bootstrap.emailIdentity.is_domain_verified
+        });
+      }
+      if (bootstrap.smtpSettings) setSmtpSettings(bootstrap.smtpSettings);
+      if (bootstrap.apiSettings) setApiSettings(bootstrap.apiSettings);
+      if (bootstrap.assistantTraining) setAssistantTraining(bootstrap.assistantTraining);
+      if (bootstrap.ragSources.length) setRagSources(bootstrap.ragSources);
+    } catch (error) {
+      showToast("error", "Settings not loaded", error instanceof Error ? error.message : "Could not load saved workspace settings.");
+    }
+  }
 
   function log(message: string) {
     setActivity((items) => [message, ...items].slice(0, 8));
@@ -165,6 +227,7 @@ export function App() {
         portalSignature: `${companyName} Legal Team`,
         verifiedDomain: false
       }));
+      setTenantProfile(defaultTenantProfile(companyName));
       setAuthUser(user);
       setAuthMessage(`${companyName} tenant workspace created.`);
       showToast("success", "Tenant created", `${companyName} is ready.`);
@@ -258,7 +321,7 @@ export function App() {
         </header>
 
         {activeView === "overview" && <Overview matters={matters} tasks={tasks} invoices={invoices} research={research} activity={activity} setActiveView={setActiveView} />}
-        {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} />}
+        {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} tenantProfile={tenantProfile} />}
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
         {activeView === "secretary" && <Secretary tasks={tasks} setTasks={setTasks} log={log} />}
         {activeView === "billing" && <Billing invoices={invoices} setInvoices={setInvoices} log={log} />}
@@ -285,6 +348,14 @@ export function App() {
           />
         )}
       </main>
+      {authUser.tenantId && !tenantProfile.onboardingCompleted && (
+        <OnboardingFlow
+          profile={tenantProfile}
+          setProfile={setTenantProfile}
+          showToast={showToast}
+          companyName={authUser.companyName}
+        />
+      )}
       <ToastStack toasts={toasts} dismissToast={dismissToast} />
     </div>
   );
@@ -350,6 +421,127 @@ function MarketingAuth({
         <SalesCard icon={CircleDollarSign} title="Practice operations" text="Manage invoices, bookings, legal secretary tasks and tenant-branded communications." />
       </section>
     </main>
+  );
+}
+
+function OnboardingFlow({
+  profile,
+  setProfile,
+  showToast,
+  companyName
+}: {
+  profile: TenantProfile;
+  setProfile: React.Dispatch<React.SetStateAction<TenantProfile>>;
+  showToast: (type: Toast["type"], title: string, message: string) => void;
+  companyName: string;
+}) {
+  const [step, setStep] = useState(profile.onboardingStep || 1);
+  const [saving, setSaving] = useState(false);
+
+  function update<K extends keyof TenantProfile>(key: K, value: TenantProfile[K]) {
+    setProfile((current) => ({ ...current, [key]: value, onboardingStep: step }));
+  }
+
+  async function handleLogo(file: File | undefined) {
+    if (!file) return;
+    if (file.size > 800_000) {
+      showToast("error", "Logo too large", "Use a logo smaller than 800 KB for document generation.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => update("logoDataUrl", String(reader.result));
+    reader.readAsDataURL(file);
+  }
+
+  async function persist(nextStep: number, completed = false) {
+    setSaving(true);
+    try {
+      const payload = {
+        ...profile,
+        tradingName: profile.tradingName || companyName,
+        onboardingStep: nextStep,
+        onboardingCompleted: completed
+      };
+      const response = await saveTenantProfile(payload);
+      setProfile(response.tenantProfile);
+      setStep(nextStep);
+      showToast("success", completed ? "Onboarding complete" : "Onboarding saved", completed ? "Your firm profile will now be used on generated documents." : "Progress saved.");
+    } catch (error) {
+      showToast("error", "Onboarding not saved", error instanceof Error ? error.message : "Could not save onboarding.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="onboarding-backdrop" role="dialog" aria-modal="true" aria-label="Firm onboarding">
+      <section className="onboarding-panel">
+        <div className="onboarding-head">
+          <div>
+            <p className="eyebrow">Firm onboarding</p>
+            <h2>Set up your LawPath workspace</h2>
+            <p>These details customise tenant branding, generated documents, team workflows, billing communications and legal assistant context.</p>
+          </div>
+          <span className="pill">Step {step} of 3</span>
+        </div>
+
+        {step === 1 && (
+          <div className="onboarding-grid">
+            <label>Trading / practice name<input value={profile.tradingName} onChange={(event) => update("tradingName", event.target.value)} placeholder="Your law firm name" /></label>
+            <label>Practice type
+              <select value={profile.practiceType} onChange={(event) => update("practiceType", event.target.value)}>
+                <option value="">Select practice type</option>
+                <option>Conveyancing practice</option>
+                <option>Commercial law firm</option>
+                <option>Litigation practice</option>
+                <option>Estates and trusts practice</option>
+                <option>Full-service law firm</option>
+              </select>
+            </label>
+            <label>Address line 1<input value={profile.addressLine1} onChange={(event) => update("addressLine1", event.target.value)} placeholder="Street address" /></label>
+            <label>Address line 2<input value={profile.addressLine2} onChange={(event) => update("addressLine2", event.target.value)} placeholder="Building, suite or floor" /></label>
+            <label>City<input value={profile.city} onChange={(event) => update("city", event.target.value)} placeholder="City" /></label>
+            <label>Province<input value={profile.province} onChange={(event) => update("province", event.target.value)} placeholder="Province" /></label>
+            <label>Postal code<input value={profile.postalCode} onChange={(event) => update("postalCode", event.target.value)} placeholder="Postal code" /></label>
+            <label>Phone<input value={profile.phone} onChange={(event) => update("phone", event.target.value)} placeholder="Office phone" /></label>
+            <label>Website<input value={profile.website} onChange={(event) => update("website", event.target.value)} placeholder="https://yourfirm.co.za" /></label>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="onboarding-grid">
+            <label>LPC practice / firm number<input value={profile.lpcRegistrationNumber} onChange={(event) => update("lpcRegistrationNumber", event.target.value)} placeholder="Legal Practice Council registration" /></label>
+            <label>Company registration number<input value={profile.companyRegistrationNumber} onChange={(event) => update("companyRegistrationNumber", event.target.value)} placeholder="If incorporated" /></label>
+            <label>VAT number<input value={profile.vatNumber} onChange={(event) => update("vatNumber", event.target.value)} placeholder="If VAT registered" /></label>
+            <label>Conveyancers<input type="number" min="0" value={profile.conveyancerCount} onChange={(event) => update("conveyancerCount", Number(event.target.value))} /></label>
+            <label>Senior attorneys<input type="number" min="0" value={profile.seniorAttorneyCount} onChange={(event) => update("seniorAttorneyCount", Number(event.target.value))} /></label>
+            <label>Junior attorneys<input type="number" min="0" value={profile.juniorAttorneyCount} onChange={(event) => update("juniorAttorneyCount", Number(event.target.value))} /></label>
+            <label>Candidate attorneys<input type="number" min="0" value={profile.candidateAttorneyCount} onChange={(event) => update("candidateAttorneyCount", Number(event.target.value))} /></label>
+            <label>Legal secretaries<input type="number" min="0" value={profile.legalSecretaryCount} onChange={(event) => update("legalSecretaryCount", Number(event.target.value))} /></label>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="brand-upload">
+            <div className="logo-preview">{profile.logoDataUrl ? <img src={profile.logoDataUrl} alt="Tenant logo preview" /> : <Building2 size={36} />}</div>
+            <div>
+              <label>Firm logo<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => handleLogo(event.target.files?.[0])} /></label>
+              <p>Logo, address and phone number will appear on generated contracts, briefs and client-facing drafts.</p>
+            </div>
+          </div>
+        )}
+
+        <div className="onboarding-actions">
+          <button className="ghost" disabled={saving || step === 1} onClick={() => setStep((current) => Math.max(1, current - 1))}>Back</button>
+          {step < 3 ? (
+            <button className="primary" disabled={saving} onClick={() => persist(step + 1)}>{saving ? "Saving..." : "Save and continue"}</button>
+          ) : (
+            <button className="primary" disabled={saving} onClick={() => persist(3, true)}>{saving ? "Saving..." : "Finish setup"}</button>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -531,7 +723,17 @@ function Overview({
   );
 }
 
-function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]; setContracts: React.Dispatch<React.SetStateAction<ContractDraft[]>>; log: (message: string) => void }) {
+function Drafting({
+  contracts,
+  setContracts,
+  log,
+  tenantProfile
+}: {
+  contracts: ContractDraft[];
+  setContracts: React.Dispatch<React.SetStateAction<ContractDraft[]>>;
+  log: (message: string) => void;
+  tenantProfile: TenantProfile;
+}) {
   const [preview, setPreview] = useState(contracts[0]?.body ?? "");
   const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState("Residential offer to purchase");
@@ -540,7 +742,7 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const template = String(form.get("template"));
-    const draft = buildDocumentDraft(template, form);
+    const draft = buildDocumentDraft(template, form, tenantProfile);
     const { partyA, partyB, category, body } = draft;
     setPreview(body);
     setContracts((items) => [{ id: uid("C"), name: template, category, partyA, partyB, status: "Generated", updated: today(), body }, ...items]);
@@ -582,7 +784,7 @@ function Drafting({ contracts, setContracts, log }: { contracts: ContractDraft[]
       <Panel title="Contract register" badge={`${contracts.length} drafts`}>
         <div className="table">{contracts.map((contract) => <TableRow key={contract.id} cells={[contract.name, contract.partyA, contract.status, contract.updated]} />)}</div>
       </Panel>
-      {fullPreviewOpen && <DocumentPreviewModal body={preview} onClose={() => setFullPreviewOpen(false)} />}
+      {fullPreviewOpen && <DocumentPreviewModal body={preview} tenantProfile={tenantProfile} onClose={() => setFullPreviewOpen(false)} />}
     </>
   );
 }
@@ -594,61 +796,61 @@ function DocumentIntakeFields({ template }: { template: string }) {
         <div className="intake-section">
           <h4>Parties</h4>
           <div className="form-row equal">
-            <label>Seller full name<input name="sellerName" defaultValue="Thandi Mokoena" /></label>
-            <label>Seller ID / registration<input name="sellerId" defaultValue="740101 0123 08 7" /></label>
+            <label>Seller full name<input name="sellerName" placeholder="Seller full legal name" /></label>
+            <label>Seller ID / registration<input name="sellerId" placeholder="ID or registration number" /></label>
           </div>
-          <label>Seller address<input name="sellerAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
+          <label>Seller address<input name="sellerAddress" placeholder="Seller domicilium address" /></label>
           <div className="form-row equal">
-            <label>Buyer full name<input name="buyerName" defaultValue="Lerato Dlamini" /></label>
-            <label>Buyer ID / registration<input name="buyerId" defaultValue="850202 0456 08 2" /></label>
+            <label>Buyer full name<input name="buyerName" placeholder="Buyer full legal name" /></label>
+            <label>Buyer ID / registration<input name="buyerId" placeholder="ID or registration number" /></label>
           </div>
-          <label>Buyer address<input name="buyerAddress" defaultValue="45 Jacaranda Avenue, Bryanston, Johannesburg" /></label>
+          <label>Buyer address<input name="buyerAddress" placeholder="Buyer domicilium address" /></label>
         </div>
 
         <div className="intake-section">
           <h4>Property and price</h4>
-          <label>Property address<input name="propertyAddress" defaultValue="12 Protea Close, Sandton, Johannesburg" /></label>
+          <label>Property address<input name="propertyAddress" placeholder="Street address of property" /></label>
           <div className="form-row equal">
-            <label>Legal description<input name="propertyDescription" defaultValue="Erf 184 Sandton Township, Registration Division IR, Gauteng" /></label>
-            <label>Offer / selling price<input name="purchasePrice" defaultValue="R 2 850 000" /></label>
+            <label>Legal description<input name="propertyDescription" placeholder="Erf/unit/title deed description" /></label>
+            <label>Offer / selling price<input name="purchasePrice" placeholder="R [amount]" /></label>
           </div>
           <div className="form-row equal">
-            <label>Deposit<input name="deposit" defaultValue="R 285 000" /></label>
-            <label>Bond amount required<input name="bondAmount" defaultValue="R 2 565 000" /></label>
+            <label>Deposit<input name="deposit" placeholder="R [amount]" /></label>
+            <label>Bond amount required<input name="bondAmount" placeholder="R [amount]" /></label>
           </div>
         </div>
 
         <div className="intake-section">
           <h4>Estate agent and conveyancers</h4>
           <div className="form-row equal">
-            <label>Estate agency<input name="estateAgency" defaultValue="Cape & City Realty" /></label>
-            <label>Agent name<input name="estateAgentName" defaultValue="Nadia Jacobs" /></label>
+            <label>Estate agency<input name="estateAgency" placeholder="Estate agency name" /></label>
+            <label>Agent name<input name="estateAgentName" placeholder="Estate agent name" /></label>
           </div>
           <div className="form-row equal">
-            <label>Agent email<input name="estateAgentEmail" defaultValue="nadia@capeandcity.example" /></label>
-            <label>Commission<input name="agentCommission" defaultValue="5% plus VAT, payable by the Seller on registration" /></label>
+            <label>Agent email<input name="estateAgentEmail" placeholder="agent@example.co.za" /></label>
+            <label>Commission<input name="agentCommission" placeholder="Commission amount/percentage and payer" /></label>
           </div>
           <div className="form-row equal">
-            <label>Transferring attorney / conveyancer<input name="conveyancerName" defaultValue="Mokoena & Partners Inc." /></label>
-            <label>Conveyancer email<input name="conveyancerEmail" defaultValue="transfers@mokoenalaw.co.za" /></label>
+            <label>Transferring attorney / conveyancer<input name="conveyancerName" placeholder="Conveyancer firm/name" /></label>
+            <label>Conveyancer email<input name="conveyancerEmail" placeholder="transfers@example.co.za" /></label>
           </div>
         </div>
 
         <div className="intake-section">
           <h4>Linked sale and timelines</h4>
           <label className="switch-row"><input name="linkedSale" type="checkbox" defaultChecked /> Buyer must sell another property before this offer proceeds</label>
-          <label>Linked property address<input name="linkedPropertyAddress" defaultValue="8 Palm Street, Randburg, Johannesburg" /></label>
+          <label>Linked property address<input name="linkedPropertyAddress" placeholder="Address of buyer's linked sale property" /></label>
           <div className="form-row equal">
-            <label>Offer acceptance deadline<input name="acceptanceDeadline" type="date" defaultValue="2026-06-12" /></label>
-            <label>Bond approval deadline<input name="bondDeadline" type="date" defaultValue="2026-06-28" /></label>
+            <label>Offer acceptance deadline<input name="acceptanceDeadline" type="date" /></label>
+            <label>Bond approval deadline<input name="bondDeadline" type="date" /></label>
           </div>
           <div className="form-row equal">
-            <label>Linked sale deadline<input name="linkedSaleDeadline" type="date" defaultValue="2026-07-05" /></label>
-            <label>Target transfer date<input name="transferTargetDate" type="date" defaultValue="2026-08-30" /></label>
+            <label>Linked sale deadline<input name="linkedSaleDeadline" type="date" /></label>
+            <label>Target transfer date<input name="transferTargetDate" type="date" /></label>
           </div>
           <div className="form-row equal">
-            <label>Occupation date<input name="occupationDate" type="date" defaultValue="2026-09-01" /></label>
-            <label>Occupational rent<input name="occupationalRent" defaultValue="R 18 500 per month" /></label>
+            <label>Occupation date<input name="occupationDate" type="date" /></label>
+            <label>Occupational rent<input name="occupationalRent" placeholder="R [amount] per month" /></label>
           </div>
         </div>
       </section>
@@ -850,13 +1052,13 @@ function formText(form: FormData, key: string, fallback = "[insert]") {
   return value || fallback;
 }
 
-function buildDocumentDraft(template: string, form: FormData) {
+function buildDocumentDraft(template: string, form: FormData, tenantProfile: TenantProfile) {
   if (template === "Residential offer to purchase") {
     return {
       partyA: formText(form, "sellerName"),
       partyB: formText(form, "buyerName"),
       category: "Conveyancing",
-      body: buildOfferToPurchaseBody(form)
+      body: buildOfferToPurchaseBody(form, tenantProfile)
     };
   }
 
@@ -865,7 +1067,7 @@ function buildDocumentDraft(template: string, form: FormData) {
       partyA: formText(form, "shareholderOne"),
       partyB: formText(form, "shareholderTwo"),
       category: "Commercial",
-      body: buildShareholderAgreementBody(form)
+      body: buildShareholderAgreementBody(form, tenantProfile)
     };
   }
 
@@ -874,7 +1076,7 @@ function buildDocumentDraft(template: string, form: FormData) {
       partyA: formText(form, "landlordName"),
       partyB: formText(form, "tenantName"),
       category: "Property",
-      body: buildLeaseAgreementBody(form)
+      body: buildLeaseAgreementBody(form, tenantProfile)
     };
   }
 
@@ -883,7 +1085,7 @@ function buildDocumentDraft(template: string, form: FormData) {
       partyA: formText(form, "employerName"),
       partyB: formText(form, "employeeName"),
       category: "Employment",
-      body: buildEmploymentContractBody(form)
+      body: buildEmploymentContractBody(form, tenantProfile)
     };
   }
 
@@ -892,7 +1094,7 @@ function buildDocumentDraft(template: string, form: FormData) {
       partyA: formText(form, "businessSeller"),
       partyB: formText(form, "businessBuyer"),
       category: "Commercial",
-      body: buildSaleOfBusinessBody(form)
+      body: buildSaleOfBusinessBody(form, tenantProfile)
     };
   }
 
@@ -900,12 +1102,35 @@ function buildDocumentDraft(template: string, form: FormData) {
     partyA: formText(form, "spouseOne"),
     partyB: formText(form, "spouseTwo"),
     category: "Family",
-    body: buildAntenuptialContractIntakeBody(form)
+    body: buildAntenuptialContractIntakeBody(form, tenantProfile)
   };
 }
 
-function documentHeader(title: string, lines: string[], instructions: string) {
+function tenantLetterhead(profile: TenantProfile) {
+  const address = [profile.addressLine1, profile.addressLine2, profile.city, profile.province, profile.postalCode].filter(Boolean).join(", ");
+  const contacts = [profile.phone, profile.website, profile.lpcRegistrationNumber ? `LPC: ${profile.lpcRegistrationNumber}` : ""].filter(Boolean).join(" | ");
   return [
+    profile.logoDataUrl ? "[Tenant logo attached to document header]" : "",
+    profile.tradingName || "Tenant firm name",
+    address,
+    contacts,
+    ""
+  ].filter((line) => line !== "").join("\n");
+}
+
+function documentFooter(profile: TenantProfile) {
+  const address = [profile.addressLine1, profile.addressLine2, profile.city, profile.province, profile.postalCode].filter(Boolean).join(", ");
+  return [
+    "",
+    "------------------------------------------------------------",
+    `Document footer: ${profile.tradingName || "Tenant firm"}${address ? ` | ${address}` : ""}${profile.phone ? ` | ${profile.phone}` : ""}`,
+    "Generated by LawPath SA. Attorney review required before release."
+  ].join("\n");
+}
+
+function documentHeader(title: string, lines: string[], instructions: string, profile: TenantProfile) {
+  return [
+    tenantLetterhead(profile),
     title.toUpperCase(),
     "",
     "IMPORTANT ATTORNEY REVIEW NOTE",
@@ -922,7 +1147,7 @@ function documentHeader(title: string, lines: string[], instructions: string) {
   ].join("\n");
 }
 
-function buildOfferToPurchaseBody(form: FormData) {
+function buildOfferToPurchaseBody(form: FormData, tenantProfile: TenantProfile) {
   const sellerName = formText(form, "sellerName");
   const sellerId = formText(form, "sellerId");
   const sellerAddress = formText(form, "sellerAddress");
@@ -951,6 +1176,7 @@ function buildOfferToPurchaseBody(form: FormData) {
   const instructions = formText(form, "instructions", "No additional instructions captured.");
 
   return [
+    tenantLetterhead(tenantProfile),
     "RESIDENTIAL OFFER TO PURCHASE",
     "",
     "IMPORTANT ATTORNEY REVIEW NOTE",
@@ -1080,10 +1306,10 @@ function buildOfferToPurchaseBody(form: FormData) {
     "D. Compliance certificate schedule",
     "E. Linked-sale proof and timeline schedule",
     "F. Estate agent mandate or commission confirmation"
-  ].join("\n");
+  ].join("\n") + documentFooter(tenantProfile);
 }
 
-function buildShareholderAgreementBody(form: FormData) {
+function buildShareholderAgreementBody(form: FormData, tenantProfile: TenantProfile) {
   const companyName = formText(form, "companyName");
   const companyRegistration = formText(form, "companyRegistration");
   const shareholderOne = formText(form, "shareholderOne");
@@ -1104,7 +1330,7 @@ function buildShareholderAgreementBody(form: FormData) {
     `Company: ${companyName} (${companyRegistration})`,
     `Shareholders: ${shareholderOne}; ${shareholderTwo}`,
     `Business: ${businessDescription}`
-  ], instructions) + [
+  ], instructions, tenantProfile) + [
     "1. PARTIES AND COMPANY",
     `1.1 The company is ${companyName}, registration number ${companyRegistration}, a private company incorporated in South Africa.`,
     `1.2 The initial shareholders are ${shareholderOne} and ${shareholderTwo}, together with any further shareholder who signs a deed of adherence.`,
@@ -1168,10 +1394,10 @@ function buildShareholderAgreementBody(form: FormData) {
     "3. Funding and loan terms",
     "4. Transfer notice form",
     "5. Deed of adherence"
-  ].join("\n");
+  ].join("\n") + documentFooter(tenantProfile);
 }
 
-function buildLeaseAgreementBody(form: FormData) {
+function buildLeaseAgreementBody(form: FormData, tenantProfile: TenantProfile) {
   const landlordName = formText(form, "landlordName");
   const tenantName = formText(form, "tenantName");
   const leasePremises = formText(form, "leasePremises");
@@ -1192,7 +1418,7 @@ function buildLeaseAgreementBody(form: FormData) {
     `Tenant: ${tenantName}`,
     `Premises: ${leasePremises}`,
     `Term: ${leaseStart} to ${leaseEnd}`
-  ], instructions) + [
+  ], instructions, tenantProfile) + [
     "1. PARTIES AND PREMISES",
     `1.1 The Landlord is ${landlordName}.`,
     `1.2 The Tenant is ${tenantName}.`,
@@ -1240,10 +1466,10 @@ function buildLeaseAgreementBody(form: FormData) {
     "B. Incoming inspection",
     "C. Building rules",
     "D. Deposit and charge schedule"
-  ].join("\n");
+  ].join("\n") + documentFooter(tenantProfile);
 }
 
-function buildEmploymentContractBody(form: FormData) {
+function buildEmploymentContractBody(form: FormData, tenantProfile: TenantProfile) {
   const employerName = formText(form, "employerName");
   const employeeName = formText(form, "employeeName");
   const positionTitle = formText(form, "positionTitle");
@@ -1263,7 +1489,7 @@ function buildEmploymentContractBody(form: FormData) {
     `Employee: ${employeeName}`,
     `Position: ${positionTitle}`,
     `Start date: ${employmentStart}`
-  ], instructions) + [
+  ], instructions, tenantProfile) + [
     "1. APPOINTMENT",
     `1.1 ${employerName} appoints ${employeeName} as ${positionTitle}.`,
     `1.2 Employment commences on ${employmentStart}.`,
@@ -1305,10 +1531,10 @@ function buildEmploymentContractBody(form: FormData) {
     "9. SIGNATURE",
     `For the Employer, ${employerName}: __________________`,
     `Employee, ${employeeName}: __________________`
-  ].join("\n");
+  ].join("\n") + documentFooter(tenantProfile);
 }
 
-function buildSaleOfBusinessBody(form: FormData) {
+function buildSaleOfBusinessBody(form: FormData, tenantProfile: TenantProfile) {
   const businessSeller = formText(form, "businessSeller");
   const businessBuyer = formText(form, "businessBuyer");
   const businessDescription = formText(form, "businessDescription");
@@ -1329,7 +1555,7 @@ function buildSaleOfBusinessBody(form: FormData) {
     `Business: ${businessDescription}`,
     `Effective date: ${effectiveDate}`,
     `Purchase price: ${businessPurchasePrice}`
-  ], instructions) + [
+  ], instructions, tenantProfile) + [
     "1. SALE",
     `1.1 The Seller sells and the Purchaser purchases the business described as ${businessDescription}.`,
     `1.2 The effective date is ${effectiveDate}, subject to fulfilment or waiver of suspensive conditions.`,
@@ -1376,10 +1602,10 @@ function buildSaleOfBusinessBody(form: FormData) {
     "10. SIGNATURE",
     `For the Seller, ${businessSeller}: __________________`,
     `For the Purchaser, ${businessBuyer}: __________________`
-  ].join("\n");
+  ].join("\n") + documentFooter(tenantProfile);
 }
 
-function buildAntenuptialContractIntakeBody(form: FormData) {
+function buildAntenuptialContractIntakeBody(form: FormData, tenantProfile: TenantProfile) {
   const spouseOne = formText(form, "spouseOne");
   const spouseTwo = formText(form, "spouseTwo");
   const marriageDate = formText(form, "marriageDate");
@@ -1398,7 +1624,7 @@ function buildAntenuptialContractIntakeBody(form: FormData) {
     `Marriage date and place: ${marriageDate}, ${marriageLocation}`,
     `Selected regime: ${maritalRegime}`,
     `Notary: ${notaryName}`
-  ], instructions) + [
+  ], instructions, tenantProfile) + [
     "1. INTAKE PURPOSE",
     `1.1 This intake records instructions for an antenuptial contract between ${spouseOne} and ${spouseTwo}.`,
     `1.2 The intended marriage is scheduled for ${marriageDate} at ${marriageLocation}.`,
@@ -1436,7 +1662,7 @@ function buildAntenuptialContractIntakeBody(form: FormData) {
     "9. CLIENT ACKNOWLEDGEMENT",
     `Acknowledged by ${spouseOne}: __________________`,
     `Acknowledged by ${spouseTwo}: __________________`
-  ].join("\n");
+  ].join("\n") + documentFooter(tenantProfile);
 }
 
 function buildContractBody(template: string, partyA: string, partyB: string, instructions: string) {
@@ -1698,7 +1924,7 @@ function buildContractBody(template: string, partyA: string, partyB: string, ins
   ].join("\n");
 }
 
-function DocumentPreviewModal({ body, onClose }: { body: string; onClose: () => void }) {
+function DocumentPreviewModal({ body, tenantProfile, onClose }: { body: string; tenantProfile: TenantProfile; onClose: () => void }) {
   return (
     <div className="document-modal" role="dialog" aria-modal="true" aria-label="Full document preview">
       <div className="document-modal-bar">
@@ -1714,6 +1940,7 @@ function DocumentPreviewModal({ body, onClose }: { body: string; onClose: () => 
       </div>
       <div className="document-scroll">
         <article className="document-page">
+          {tenantProfile.logoDataUrl && <img className="document-logo" src={tenantProfile.logoDataUrl} alt={`${tenantProfile.tradingName || "Tenant"} logo`} />}
           <pre>{body}</pre>
         </article>
       </div>
@@ -2090,15 +2317,22 @@ function AdminSettings({
     setAssistantTraining((current) => ({ ...current, [key]: value }));
   }
 
-  function saveSettings(event: FormEvent<HTMLFormElement>) {
+  async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSettingsBusy("smtp");
-    const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
-    setSavedAt(stamp);
-    setEmailStatus(`Platform SMTP transport saved for ${settings.host}:${settings.port}.`);
-    log(`Super admin saved platform SMTP transport for ${settings.providerName}`);
-    showToast("info", "SMTP noted", "SMTP credentials are saved in the server .env file for secure delivery.");
-    setSettingsBusy(null);
+    try {
+      const response = await savePlatformSmtpSettings(settings);
+      setSettings(response.smtpSettings);
+      const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
+      setSavedAt(stamp);
+      setEmailStatus(`Platform SMTP transport saved for ${settings.host}:${settings.port}.`);
+      log(`Super admin saved platform SMTP transport for ${settings.providerName}`);
+      showToast("success", "SMTP saved", "SMTP settings are persisted in the database.");
+    } catch (error) {
+      showToast("error", "SMTP not saved", error instanceof Error ? error.message : "Could not save SMTP settings.");
+    } finally {
+      setSettingsBusy(null);
+    }
   }
 
   async function saveTenantEmailSettings(event: FormEvent<HTMLFormElement>) {
@@ -2160,41 +2394,63 @@ function AdminSettings({
     }
   }
 
-  function saveApiSettings(event: FormEvent<HTMLFormElement>) {
+  async function saveApiSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSettingsBusy("api");
-    const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
-    setApiSavedAt(stamp);
-    log("Admin saved API provider keys and model selections");
-    showToast("info", "API settings noted", "Provider keys should be stored in the server .env file before production use.");
-    setSettingsBusy(null);
+    try {
+      const response = await savePlatformApiSettings(apiSettings);
+      setApiSettings(response.apiSettings);
+      const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
+      setApiSavedAt(stamp);
+      log("Admin saved API provider keys and model selections");
+      showToast("success", "API settings saved", "Provider keys and model routing are persisted.");
+    } catch (error) {
+      showToast("error", "API settings not saved", error instanceof Error ? error.message : "Could not save API settings.");
+    } finally {
+      setSettingsBusy(null);
+    }
   }
 
-  function addRagSource(event: FormEvent<HTMLFormElement>) {
+  async function addRagSource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSettingsBusy("rag");
     const form = new FormData(event.currentTarget);
-    const source: RagSource = {
-      id: uid("RAG"),
-      name: String(form.get("name")),
-      scope: String(form.get("scope")) as RagSource["scope"],
-      sourceType: String(form.get("sourceType")) as RagSource["sourceType"],
-      status: "Queued",
-      documentCount: Number(form.get("documentCount") || 0),
-      lastIndexed: "Pending"
-    };
-    setRagSources((items) => [source, ...items]);
-    log(`Super admin queued RAG source: ${source.name}`);
-    showToast("success", "Source queued", `${source.name} has been added to the indexing queue.`);
-    setSettingsBusy(null);
+    const file = form.get("sourceFile") as File | null;
+    const extractedText = file && file.size ? await file.text().catch(() => "") : "";
+    try {
+      const response = await queueRagSource({
+        name: String(form.get("name")),
+        scope: String(form.get("scope")) as RagSource["scope"],
+        sourceType: String(form.get("sourceType")) as RagSource["sourceType"],
+        documentCount: Number(form.get("documentCount") || 1),
+        sourceUrl: String(form.get("sourceUrl") || ""),
+        fileName: file?.name || "",
+        mimeType: file?.type || "",
+        extractedText
+      });
+      setRagSources((items) => [response.source, ...items]);
+      log(`Super admin queued RAG source: ${response.source.name}`);
+      showToast("success", "Source queued", `${response.source.name} has been added to the indexing queue.`);
+    } catch (error) {
+      showToast("error", "Source not queued", error instanceof Error ? error.message : "Could not queue knowledge source.");
+    } finally {
+      setSettingsBusy(null);
+    }
   }
 
-  function saveTrainingSettings(event: FormEvent<HTMLFormElement>) {
+  async function saveTrainingSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSettingsBusy("training");
-    log(`Super admin saved AI training profile: ${assistantTraining.defaultAssistant}`);
-    showToast("success", "Training profile saved", `${assistantTraining.defaultAssistant} settings are updated.`);
-    setSettingsBusy(null);
+    try {
+      const response = await saveAssistantTraining(assistantTraining);
+      setAssistantTraining(response.assistantTraining);
+      log(`Super admin saved AI training profile: ${assistantTraining.defaultAssistant}`);
+      showToast("success", "Training profile saved", `${assistantTraining.defaultAssistant} settings are persisted.`);
+    } catch (error) {
+      showToast("error", "Training not saved", error instanceof Error ? error.message : "Could not save training profile.");
+    } finally {
+      setSettingsBusy(null);
+    }
   }
 
   const configuredProviders = [
@@ -2437,6 +2693,8 @@ function AdminSettings({
               <label>Source type
                 <select name="sourceType">
                   <option>Case law</option>
+                  <option>Website</option>
+                  <option>Document upload</option>
                   <option>Contract bank</option>
                   <option>Practice manual</option>
                   <option>Legislation</option>
@@ -2447,8 +2705,11 @@ function AdminSettings({
                 <select name="scope">
                   <option>Platform</option>
                   <option>Tenant template</option>
+                  <option>Tenant private</option>
                 </select>
               </label>
+              <label>Website URL<input name="sourceUrl" type="url" placeholder="https://www.saflii.org/..." /></label>
+              <label>Upload document<input name="sourceFile" type="file" accept=".txt,.md,.csv,.html,.htm,.pdf,.doc,.docx" /></label>
               <label>Estimated documents<input name="documentCount" type="number" defaultValue="0" /></label>
               <button className="primary" type="submit" disabled={settingsBusy === "rag"}><Plus size={18} /> {settingsBusy === "rag" ? "Queueing..." : "Queue source"}</button>
             </form>

@@ -1,4 +1,4 @@
-import type { AuthUser, TenantEmailSettings } from "./types";
+import type { ApiProviderSettings, AssistantTrainingSettings, AuthUser, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -68,6 +68,17 @@ export async function getCurrentUser() {
   return request<{ user: AuthUser }>("/api/me");
 }
 
+export async function getBootstrapSettings() {
+  return request<{
+    tenantProfile: TenantProfile | null;
+    emailIdentity: TenantEmailIdentityResponse["emailIdentity"];
+    smtpSettings: SmtpSettings | null;
+    apiSettings: ApiProviderSettings | null;
+    assistantTraining: AssistantTrainingSettings | null;
+    ragSources: RagSource[];
+  }>("/api/bootstrap");
+}
+
 type TenantEmailIdentityResponse = {
   emailIdentity: {
     from_name: string;
@@ -92,6 +103,50 @@ export async function saveTenantEmailIdentity(settings: TenantEmailSettings) {
   });
 
   return response.emailIdentity;
+}
+
+export async function saveTenantProfile(profile: TenantProfile) {
+  return request<{ tenantProfile: TenantProfile }>("/api/tenant/profile", {
+    method: "PUT",
+    body: JSON.stringify(profile)
+  });
+}
+
+export async function savePlatformSmtpSettings(settings: SmtpSettings) {
+  return request<{ smtpSettings: SmtpSettings }>("/api/platform/smtp-settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function savePlatformApiSettings(settings: ApiProviderSettings) {
+  return request<{ apiSettings: ApiProviderSettings }>("/api/platform/api-settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function saveAssistantTraining(settings: AssistantTrainingSettings) {
+  return request<{ assistantTraining: AssistantTrainingSettings }>("/api/platform/assistant-training", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function queueRagSource(input: {
+  name: string;
+  scope: RagSource["scope"];
+  sourceType: RagSource["sourceType"];
+  documentCount: number;
+  sourceUrl?: string;
+  fileName?: string;
+  mimeType?: string;
+  extractedText?: string;
+}) {
+  return request<{ source: RagSource }>("/api/rag/sources", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
 }
 
 export async function sendTestEmail(input: {

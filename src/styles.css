@@ -769,12 +769,98 @@ textarea {
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
 }
 
+.document-logo {
+  max-width: 180px;
+  max-height: 90px;
+  object-fit: contain;
+  display: block;
+  margin: 0 0 28px;
+}
+
 .document-page pre {
   margin: 0;
   white-space: pre-wrap;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 1rem;
   line-height: 1.72;
+}
+
+.onboarding-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(16, 36, 31, 0.72);
+}
+
+.onboarding-panel {
+  width: min(980px, 100%);
+  max-height: min(780px, calc(100vh - 36px));
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.24);
+}
+
+.onboarding-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.onboarding-head h2 {
+  margin-bottom: 8px;
+  font-size: clamp(1.7rem, 3vw, 2.6rem);
+}
+
+.onboarding-head p {
+  max-width: 720px;
+  color: var(--muted);
+}
+
+.onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.brand-upload {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 18px;
+  align-items: center;
+}
+
+.logo-preview {
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #f7faf7;
+  color: var(--green);
+}
+
+.logo-preview img {
+  max-width: 150px;
+  max-height: 120px;
+  object-fit: contain;
+}
+
+.brand-upload p {
+  color: var(--muted);
+}
+
+.onboarding-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .training-hero {
@@ -1431,6 +1517,17 @@ textarea {
   .training-actions,
   .training-actions button {
     width: 100%;
+  }
+
+  .onboarding-head,
+  .onboarding-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .onboarding-grid,
+  .brand-upload {
+    grid-template-columns: 1fr;
   }
 
   .client-head {

@@ -87,6 +87,29 @@ export type TenantEmailSettings = {
   verifiedDomain: boolean;
 };
 
+export type TenantProfile = {
+  tradingName: string;
+  practiceType: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  province: string;
+  postalCode: string;
+  phone: string;
+  website: string;
+  lpcRegistrationNumber: string;
+  companyRegistrationNumber: string;
+  vatNumber: string;
+  conveyancerCount: number;
+  seniorAttorneyCount: number;
+  juniorAttorneyCount: number;
+  candidateAttorneyCount: number;
+  legalSecretaryCount: number;
+  logoDataUrl: string;
+  onboardingCompleted: boolean;
+  onboardingStep: number;
+};
+
 export type ApiProviderSettings = {
   exchangeRatesApiKey: string;
   exchangeRatesBaseCurrency: "ZAR" | "USD" | "EUR" | "GBP";
@@ -101,9 +124,9 @@ export type ApiProviderSettings = {
 export type RagSource = {
   id: string;
   name: string;
-  scope: "Platform" | "Tenant template";
-  sourceType: "Case law" | "Contract bank" | "Practice manual" | "Legislation" | "Firm precedent";
-  status: "Indexed" | "Queued" | "Needs review";
+  scope: "Platform" | "Tenant template" | "Tenant private";
+  sourceType: "Case law" | "Contract bank" | "Practice manual" | "Legislation" | "Firm precedent" | "Website" | "Document upload";
+  status: "Indexed" | "Queued" | "Needs review" | "Failed";
   documentCount: number;
   lastIndexed: string;
 };
