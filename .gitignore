@@ -6,4 +6,5 @@ dist
 !.env.example
 vite-dev.log
 vite-dev.err.log
+logs/
 *.local
