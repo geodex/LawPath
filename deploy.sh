@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 APP_DIR="/home2/lawpath/app/LawPath"
+PUBLIC_DIR="/home2/lawpath/public_html"
 PM2_APP="lawpath-api"
 MIGRATIONS_DIR="db/migrations"
 MIGRATIONS_TABLE="schema_migrations"
@@ -71,6 +72,17 @@ install_and_build() {
 
   log "Building frontend"
   npm run build
+}
+
+sync_public_html() {
+  log "Publishing frontend to public_html"
+
+  if [[ ! -d "dist" ]]; then
+    fail "dist folder not found after build."
+  fi
+
+  mkdir -p "$PUBLIC_DIR"
+  rsync -a --delete "dist/" "$PUBLIC_DIR/"
 }
 
 ensure_migrations_table() {
@@ -163,6 +175,7 @@ main() {
   require_command pm2
   require_command curl
   require_command sha256sum
+  require_command rsync
 
   case "${1:-deploy}" in
     --baseline)
@@ -174,6 +187,7 @@ main() {
       show_remote_changes
       pull_latest
       install_and_build
+      sync_public_html
       run_migrations
       restart_app
       health_check
