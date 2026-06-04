@@ -1,0 +1,132 @@
+import type { LucideIcon } from "lucide-react";
+
+export type ViewKey = "overview" | "drafting" | "research" | "secretary" | "billing" | "booking" | "portal" | "settings";
+
+export type Matter = {
+  id: string;
+  title: string;
+  client: string;
+  matterType: string;
+  role: string;
+  property: string;
+  estateAgent: string;
+  stage: string;
+  progress: number;
+  nextStep: string;
+  due: string;
+  portalAccess: boolean;
+  risk: "Low" | "Medium" | "High";
+};
+
+export type ContractDraft = {
+  id: string;
+  name: string;
+  category: string;
+  partyA: string;
+  partyB: string;
+  status: string;
+  updated: string;
+  body: string;
+};
+
+export type ResearchItem = {
+  id: string;
+  title: string;
+  court: string;
+  year: string;
+  tags: string[];
+  summary: string;
+};
+
+export type WorkTask = {
+  id: string;
+  title: string;
+  owner: string;
+  due: string;
+  done: boolean;
+  priority: "Normal" | "Urgent";
+};
+
+export type Invoice = {
+  id: string;
+  client: string;
+  matter: string;
+  amount: number;
+  paid: number;
+  status: "Draft" | "Part-paid" | "Paid" | "Overdue";
+};
+
+export type Appointment = {
+  id: string;
+  title: string;
+  person: string;
+  time: string;
+  mode: "Office" | "Teams" | "Phone" | "Deeds office";
+};
+
+export type SmtpSettings = {
+  providerName: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  encryption: "TLS" | "SSL" | "None";
+  bounceEmail: string;
+  transactionalEnabled: boolean;
+  systemEnabled: boolean;
+  testRecipient: string;
+};
+
+export type TenantEmailSettings = {
+  tenantName: string;
+  tenantDomain: string;
+  fromName: string;
+  fromEmail: string;
+  replyTo: string;
+  portalSignature: string;
+  verifiedDomain: boolean;
+};
+
+export type ApiProviderSettings = {
+  exchangeRatesApiKey: string;
+  exchangeRatesBaseCurrency: "ZAR" | "USD" | "EUR" | "GBP";
+  openAiApiKey: string;
+  openAiModel: string;
+  geminiApiKey: string;
+  geminiModel: "gemini-3.1-pro" | "gemini-3.5-flash" | "gemini-3.5-flash-lite";
+  grokApiKey: string;
+  grokModel: string;
+};
+
+export type RagSource = {
+  id: string;
+  name: string;
+  scope: "Platform" | "Tenant template";
+  sourceType: "Case law" | "Contract bank" | "Practice manual" | "Legislation" | "Firm precedent";
+  status: "Indexed" | "Queued" | "Needs review";
+  documentCount: number;
+  lastIndexed: string;
+};
+
+export type AssistantTrainingSettings = {
+  defaultAssistant: string;
+  retrievalMode: "Strict sources only" | "Balanced" | "Broad discovery";
+  chunkSize: number;
+  topK: number;
+  requireCitations: boolean;
+  allowTenantPrivateSources: boolean;
+  systemInstructions: string;
+};
+
+export type AuthUser = {
+  fullName: string;
+  email: string;
+  companyName: string;
+  role: "Tenant Admin" | "Attorney";
+};
+
+export type NavItem = {
+  key: ViewKey;
+  label: string;
+  icon: LucideIcon;
+};
