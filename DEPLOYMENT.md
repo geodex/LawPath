@@ -64,15 +64,28 @@ cp .env.example .env
 nano .env
 ```
 
+For `lawpath.co.za`, use the template at:
+
+```text
+deploy/lawpath.co.za.env.example
+```
+
+Copy it to the live server:
+
+```bash
+cp deploy/lawpath.co.za.env.example .env
+nano .env
+```
+
 Set at least:
 
 ```bash
-PORT=3001
+PORT=3069
 NODE_ENV=production
 DATABASE_URL=postgresql://lawpath:YOUR_PASSWORD@127.0.0.1:5432/lawpath
 SESSION_SECRET=replace_with_a_long_random_value
 JWT_EXPIRES_IN=7d
-CORS_ORIGIN=https://your-domain.co.za
+CORS_ORIGIN=https://lawpath.co.za
 ```
 
 Start the API manually for a smoke test:
@@ -93,8 +106,8 @@ Example Apache proxy rules inside the VirtualHost:
 
 ```apache
 ProxyPreserveHost On
-ProxyPass /api http://127.0.0.1:3001/api
-ProxyPassReverse /api http://127.0.0.1:3001/api
+ProxyPass /api http://127.0.0.1:3069/api
+ProxyPassReverse /api http://127.0.0.1:3069/api
 ```
 
 Ensure these Apache modules are enabled:
