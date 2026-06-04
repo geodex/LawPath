@@ -6,6 +6,7 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
 const { authMiddleware, signToken } = require("./auth");
+const { sendTransactionalEmail } = require("./mailer");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -48,6 +49,15 @@ function publicUser(row) {
     companyName: row.company_name || "LawPath Platform",
     tenantSlug: row.slug
   };
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 app.get("/api/health", async (_req, res) => {
@@ -246,6 +256,68 @@ app.put("/api/tenant/email-identity", authMiddleware, async (req, res, next) => 
     res.json({ emailIdentity: result.rows[0] });
   } catch (error) {
     next(error);
+  }
+});
+
+app.post("/api/email/test", authMiddleware, async (req, res, next) => {
+  const { recipientEmail, tenantFromName, tenantFromEmail, replyTo } = req.body;
+
+  if (!recipientEmail) {
+    return res.status(400).json({ error: "Test recipient email is required." });
+  }
+
+  const normalizedRecipient = String(recipientEmail).trim().toLowerCase();
+  const normalizedTenantFrom = tenantFromEmail ? String(tenantFromEmail).trim().toLowerCase() : null;
+  const normalizedReplyTo = replyTo ? String(replyTo).trim().toLowerCase() : normalizedTenantFrom;
+  const eventValues = [
+    req.user.tenantId || null,
+    normalizedRecipient,
+    tenantFromName || "LawPath SA",
+    normalizedTenantFrom
+  ];
+
+  try {
+    const safeTenantFromName = tenantFromName || "LawPath SA";
+    const safeReplyTo = normalizedReplyTo || "Not supplied";
+    const info = await sendTransactionalEmail({
+      to: normalizedRecipient,
+      subject: "LawPath SA email delivery test",
+      tenantFromName,
+      tenantFromEmail: normalizedTenantFrom,
+      replyTo: normalizedReplyTo,
+      text: [
+        "This is a LawPath SA email delivery test.",
+        "",
+        `Tenant display name: ${safeTenantFromName}`,
+        `Tenant reply-to: ${safeReplyTo}`,
+        "",
+        "If you received this message, the platform SMTP transport is working."
+      ].join("\n"),
+      html: `
+        <p>This is a <strong>LawPath SA</strong> email delivery test.</p>
+        <p><strong>Tenant display name:</strong> ${escapeHtml(safeTenantFromName)}<br />
+        <strong>Tenant reply-to:</strong> ${escapeHtml(safeReplyTo)}</p>
+        <p>If you received this message, the platform SMTP transport is working.</p>
+      `
+    });
+
+    await pool.query(
+      `insert into email_events
+        (tenant_id, event_type, recipient_email, tenant_from_name, tenant_from_email, status, provider_message_id)
+       values ($1, 'test_email', $2, $3, $4, 'sent', $5)`,
+      [...eventValues, info.messageId || null]
+    );
+
+    res.json({ ok: true, messageId: info.messageId || null });
+  } catch (error) {
+    await pool.query(
+      `insert into email_events
+        (tenant_id, event_type, recipient_email, tenant_from_name, tenant_from_email, status, error_message)
+       values ($1, 'test_email', $2, $3, $4, 'failed', $5)`,
+      [...eventValues, error.message || "Email delivery failed."]
+    ).catch((logError) => console.error("Failed to record email event", logError));
+
+    res.status(500).json({ error: error.message || "Email delivery failed." });
   }
 });
 

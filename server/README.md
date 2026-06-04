@@ -11,6 +11,7 @@ Node/Express API for the LawPath SaaS backend.
 - `GET /api/me`
 - `GET /api/tenant/email-identity`
 - `PUT /api/tenant/email-identity`
+- `POST /api/email/test`
 
 ## Environment
 
@@ -28,6 +29,13 @@ PORT=3001
 JWT_EXPIRES_IN=7d
 CORS_ORIGIN=https://your-domain.co.za
 DATABASE_SSL=false
+SMTP_HOST=smtp.example.co.za
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USERNAME=notifications@example.co.za
+SMTP_PASSWORD=change_me
+SMTP_FROM_EMAIL=notifications@example.co.za
+SMTP_FROM_NAME=LawPath SA
 ```
 
 ## Run
@@ -58,4 +66,4 @@ Registration creates:
 - tenant email identity
 - activity log entry
 
-Forgot password currently creates a reset token record. SMTP sending will be connected to `platform_smtp_settings` in a later backend step.
+Forgot password currently creates a reset token record. Test email delivery uses the SMTP environment variables above, records the result in `email_events`, and applies the tenant sender identity as the display name/reply-to while the authorised LawPath SMTP address remains the actual envelope sender.

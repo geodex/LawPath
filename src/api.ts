@@ -93,3 +93,15 @@ export async function saveTenantEmailIdentity(settings: TenantEmailSettings) {
 
   return response.emailIdentity;
 }
+
+export async function sendTestEmail(input: {
+  recipientEmail: string;
+  tenantFromName: string;
+  tenantFromEmail: string;
+  replyTo: string;
+}) {
+  return request<{ ok: boolean; messageId: string | null }>("/api/email/test", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}

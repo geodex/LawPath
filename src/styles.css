@@ -35,6 +35,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .public-page {
   min-height: 100vh;
   background: var(--paper);
@@ -367,6 +372,85 @@ h3 {
 .small {
   min-height: 34px;
   font-size: 0.84rem;
+}
+
+.toast-stack {
+  position: fixed;
+  right: clamp(14px, 3vw, 28px);
+  bottom: clamp(14px, 3vw, 28px);
+  z-index: 40;
+  display: grid;
+  gap: 10px;
+  width: min(420px, calc(100vw - 28px));
+  pointer-events: none;
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 32px;
+  gap: 12px;
+  align-items: start;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--green);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.toast-error {
+  border-left-color: var(--rose);
+}
+
+.toast-info {
+  border-left-color: var(--blue);
+}
+
+.toast-icon,
+.toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #eef4ef;
+  color: var(--green);
+}
+
+.toast-error .toast-icon {
+  background: #f8ecee;
+  color: var(--rose);
+}
+
+.toast-info .toast-icon {
+  background: #eaf0f8;
+  color: var(--blue);
+}
+
+.toast strong,
+.toast p {
+  margin: 0;
+}
+
+.toast p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.38;
+}
+
+.toast-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
 }
 
 .hero {

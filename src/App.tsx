@@ -27,7 +27,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
-import { clearToken, forgotPassword, getCurrentUser, login, registerTenant, saveTenantEmailIdentity } from "./api";
+import { clearToken, forgotPassword, getCurrentUser, login, registerTenant, saveTenantEmailIdentity, sendTestEmail } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
 import type { ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, Invoice, Matter, NavItem, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, ViewKey, WorkTask } from "./types";
 
@@ -45,6 +45,7 @@ const nav: NavItem[] = [
 const money = (value: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(value);
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+type Toast = { id: string; type: "success" | "error" | "info"; title: string; message: string };
 
 export function App() {
   const [authMode, setAuthMode] = useState<"landing" | "login" | "register" | "forgot">("landing");
@@ -105,6 +106,7 @@ export function App() {
     systemInstructions: "Use South African legal context, cite retrieved sources, flag uncertainty, and require attorney review before client-facing legal advice is sent."
   });
   const [emailStatus, setEmailStatus] = useState("SMTP settings not tested in this session.");
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [activity, setActivity] = useState<string[]>([
     "Portal access granted for estate agent on M-1048",
     "Draft shareholder agreement updated",
@@ -119,14 +121,29 @@ export function App() {
     setActivity((items) => [message, ...items].slice(0, 8));
   }
 
+  function showToast(type: Toast["type"], title: string, message: string) {
+    const id = uid("TOAST");
+    setToasts((items) => [{ id, type, title, message }, ...items].slice(0, 4));
+    window.setTimeout(() => {
+      setToasts((items) => items.filter((toast) => toast.id !== id));
+    }, 5200);
+  }
+
+  function dismissToast(id: string) {
+    setToasts((items) => items.filter((toast) => toast.id !== id));
+  }
+
   async function handleLogin(email: string, password: string) {
     setAuthBusy(true);
     try {
       const user = await login({ email, password });
       setAuthUser(user);
       setAuthMessage("Logged in to the tenant workspace.");
+      showToast("success", "Logged in", `Welcome back, ${user.fullName}.`);
     } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : "Login failed.");
+      const message = error instanceof Error ? error.message : "Login failed.";
+      setAuthMessage(message);
+      showToast("error", "Login failed", message);
     } finally {
       setAuthBusy(false);
     }
@@ -149,8 +166,11 @@ export function App() {
       }));
       setAuthUser(user);
       setAuthMessage(`${companyName} tenant workspace created.`);
+      showToast("success", "Tenant created", `${companyName} is ready.`);
     } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : "Registration failed.");
+      const message = error instanceof Error ? error.message : "Registration failed.";
+      setAuthMessage(message);
+      showToast("error", "Registration failed", message);
     } finally {
       setAuthBusy(false);
     }
@@ -162,8 +182,11 @@ export function App() {
       const response = await forgotPassword(email);
       setAuthMessage(response.message);
       setAuthMode("login");
+      showToast("info", "Reset requested", response.message);
     } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : "Password reset request failed.");
+      const message = error instanceof Error ? error.message : "Password reset request failed.";
+      setAuthMessage(message);
+      showToast("error", "Reset failed", message);
     } finally {
       setAuthBusy(false);
     }
@@ -175,9 +198,11 @@ export function App() {
       const response = await getCurrentUser();
       setAuthUser(response.user);
       setAuthMessage("Session restored.");
+      showToast("success", "Session restored", `Signed in as ${response.user.fullName}.`);
     } catch (error) {
       clearToken();
       setAuthMessage("Please login or register to continue.");
+      showToast("info", "Login required", "Please login or register to continue.");
     } finally {
       setAuthBusy(false);
     }
@@ -192,16 +217,19 @@ export function App() {
 
   if (!authUser) {
     return (
-      <MarketingAuth
-        mode={authMode}
-        setMode={setAuthMode}
-        message={authMessage}
-        onLogin={handleLogin}
-        onRegister={handleRegister}
-        onForgotPassword={handleForgotPassword}
-        onResumeSession={handleResumeSession}
-        busy={authBusy}
-      />
+      <>
+        <MarketingAuth
+          mode={authMode}
+          setMode={setAuthMode}
+          message={authMessage}
+          onLogin={handleLogin}
+          onRegister={handleRegister}
+          onForgotPassword={handleForgotPassword}
+          onResumeSession={handleResumeSession}
+          busy={authBusy}
+        />
+        <ToastStack toasts={toasts} dismissToast={dismissToast} />
+      </>
     );
   }
 
@@ -249,11 +277,13 @@ export function App() {
             setAssistantTraining={setAssistantTraining}
             emailStatus={emailStatus}
             setEmailStatus={setEmailStatus}
+            showToast={showToast}
             log={log}
             isPlatformSuperAdmin={isPlatformSuperAdmin}
           />
         )}
       </main>
+      <ToastStack toasts={toasts} dismissToast={dismissToast} />
     </div>
   );
 }
@@ -1019,6 +1049,7 @@ function AdminSettings({
   setAssistantTraining,
   emailStatus,
   setEmailStatus,
+  showToast,
   log,
   isPlatformSuperAdmin
 }: {
@@ -1034,11 +1065,13 @@ function AdminSettings({
   setAssistantTraining: React.Dispatch<React.SetStateAction<AssistantTrainingSettings>>;
   emailStatus: string;
   setEmailStatus: (status: string) => void;
+  showToast: (type: Toast["type"], title: string, message: string) => void;
   log: (message: string) => void;
   isPlatformSuperAdmin: boolean;
 }) {
   const [savedAt, setSavedAt] = useState("Not saved yet");
   const [apiSavedAt, setApiSavedAt] = useState("Not saved yet");
+  const [settingsBusy, setSettingsBusy] = useState<null | "smtp" | "tenant" | "test" | "api" | "training" | "rag">(null);
 
   function update<K extends keyof SmtpSettings>(key: K, value: SmtpSettings[K]) {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -1058,51 +1091,87 @@ function AdminSettings({
 
   function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSettingsBusy("smtp");
     const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
     setSavedAt(stamp);
     setEmailStatus(`Platform SMTP transport saved for ${settings.host}:${settings.port}.`);
     log(`Super admin saved platform SMTP transport for ${settings.providerName}`);
+    showToast("info", "SMTP noted", "SMTP credentials are saved in the server .env file for secure delivery.");
+    setSettingsBusy(null);
   }
 
   async function saveTenantEmailSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSettingsBusy("tenant");
     try {
       await saveTenantEmailIdentity(tenantEmailSettings);
       const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
       setSavedAt(stamp);
       setEmailStatus(`${tenantEmailSettings.tenantName} sender identity saved. Mail still routes through the platform SMTP server.`);
       log(`Tenant sender identity saved for ${tenantEmailSettings.tenantName}`);
+      showToast("success", "Sender saved", `${tenantEmailSettings.tenantName} email identity is updated.`);
     } catch (error) {
-      setEmailStatus(error instanceof Error ? error.message : "Tenant sender identity could not be saved.");
+      const message = error instanceof Error ? error.message : "Tenant sender identity could not be saved.";
+      setEmailStatus(message);
+      showToast("error", "Sender not saved", message);
+    } finally {
+      setSettingsBusy(null);
     }
   }
 
-  function testEmail() {
+  async function testEmail() {
     const missing = [
-      ["SMTP host", settings.host],
-      ["username", settings.username],
       ["tenant from email", tenantEmailSettings.fromEmail],
       ["test recipient", settings.testRecipient]
     ].filter(([, value]) => !String(value).trim());
 
     if (missing.length) {
-      setEmailStatus(`Test blocked: add ${missing.map(([label]) => label).join(", ")}.`);
+      const message = `Test blocked: add ${missing.map(([label]) => label).join(", ")}.`;
+      setEmailStatus(message);
+      showToast("error", "Test blocked", message);
       return;
     }
 
-    setEmailStatus(`Test email queued to ${settings.testRecipient} from ${tenantEmailSettings.fromName} <${tenantEmailSettings.fromEmail}> using the platform SMTP transport.`);
-    log(`Admin queued SMTP test email to ${settings.testRecipient}`);
+    setSettingsBusy("test");
+    setEmailStatus(`Sending test email to ${settings.testRecipient} using the platform SMTP transport...`);
+    showToast("info", "Sending test", `Trying delivery to ${settings.testRecipient}.`);
+
+    try {
+      const response = await sendTestEmail({
+        recipientEmail: settings.testRecipient,
+        tenantFromName: tenantEmailSettings.fromName,
+        tenantFromEmail: tenantEmailSettings.fromEmail,
+        replyTo: tenantEmailSettings.replyTo
+      });
+      const message = response.messageId
+        ? `Test email sent to ${settings.testRecipient}. Provider message ID: ${response.messageId}.`
+        : `Test email sent to ${settings.testRecipient}.`;
+      setEmailStatus(message);
+      log(`Admin sent SMTP test email to ${settings.testRecipient}`);
+      showToast("success", "Test email sent", "Check the recipient inbox and spam folder.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Test email could not be delivered.";
+      setEmailStatus(message);
+      log(`SMTP test email failed for ${settings.testRecipient}`);
+      showToast("error", "Test email failed", message);
+    } finally {
+      setSettingsBusy(null);
+    }
   }
 
   function saveApiSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSettingsBusy("api");
     const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
     setApiSavedAt(stamp);
     log("Admin saved API provider keys and model selections");
+    showToast("info", "API settings noted", "Provider keys should be stored in the server .env file before production use.");
+    setSettingsBusy(null);
   }
 
   function addRagSource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSettingsBusy("rag");
     const form = new FormData(event.currentTarget);
     const source: RagSource = {
       id: uid("RAG"),
@@ -1115,11 +1184,16 @@ function AdminSettings({
     };
     setRagSources((items) => [source, ...items]);
     log(`Super admin queued RAG source: ${source.name}`);
+    showToast("success", "Source queued", `${source.name} has been added to the indexing queue.`);
+    setSettingsBusy(null);
   }
 
   function saveTrainingSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSettingsBusy("training");
     log(`Super admin saved AI training profile: ${assistantTraining.defaultAssistant}`);
+    showToast("success", "Training profile saved", `${assistantTraining.defaultAssistant} settings are updated.`);
+    setSettingsBusy(null);
   }
 
   const configuredProviders = [
@@ -1164,7 +1238,7 @@ function AdminSettings({
             </div>
             <label>Password or app token<input type="password" value={settings.password} onChange={(event) => update("password", event.target.value)} placeholder="Stored securely on the backend later" /></label>
             <label>Bounce handling email<input type="email" value={settings.bounceEmail} onChange={(event) => update("bounceEmail", event.target.value)} /></label>
-            <button className="primary" type="submit"><ServerCog size={18} /> Save SMTP settings</button>
+            <button className="primary" type="submit" disabled={settingsBusy === "smtp"}><ServerCog size={18} /> {settingsBusy === "smtp" ? "Saving..." : "Save SMTP settings"}</button>
           </form>
         </Panel>
 
@@ -1181,13 +1255,13 @@ function AdminSettings({
               <label className="switch-row"><input type="checkbox" checked={settings.systemEnabled} onChange={(event) => update("systemEnabled", event.target.checked)} /> System/admin emails</label>
               <label className="switch-row"><input type="checkbox" checked={tenantEmailSettings.verifiedDomain} onChange={(event) => updateTenantEmail("verifiedDomain", event.target.checked)} /> Domain verified for sender display</label>
             </div>
-            <button className="primary" type="submit"><Mail size={18} /> Save tenant identity</button>
+            <button className="primary" type="submit" disabled={settingsBusy === "tenant"}><Mail size={18} /> {settingsBusy === "tenant" ? "Saving..." : "Save tenant identity"}</button>
           </form>
         </Panel>
       </section>
 
       <section className="settings-grid">
-        <Panel title="Send test email" action={<button className="small" onClick={testEmail}><Send size={16} /> Send test</button>}>
+        <Panel title="Send test email" action={<button className="small" onClick={testEmail} disabled={settingsBusy === "test"}><Send size={16} /> {settingsBusy === "test" ? "Sending..." : "Send test"}</button>}>
           <div className="form">
             <label>Test recipient<input type="email" value={settings.testRecipient} onChange={(event) => update("testRecipient", event.target.value)} /></label>
             <div className="email-preview">
@@ -1313,7 +1387,7 @@ function AdminSettings({
 
           <div className="integration-actions">
             <span>Last saved: {apiSavedAt}</span>
-            <button className="primary" type="submit"><ServerCog size={18} /> Save API settings</button>
+            <button className="primary" type="submit" disabled={settingsBusy === "api"}><ServerCog size={18} /> {settingsBusy === "api" ? "Saving..." : "Save API settings"}</button>
           </div>
         </form>
       </section>
@@ -1352,7 +1426,7 @@ function AdminSettings({
               </div>
               <label className="switch-row"><input type="checkbox" checked={assistantTraining.requireCitations} onChange={(event) => updateTraining("requireCitations", event.target.checked)} /> Require citations from retrieved sources</label>
               <label>Assistant system instructions<textarea value={assistantTraining.systemInstructions} onChange={(event) => updateTraining("systemInstructions", event.target.value)} /></label>
-              <button className="primary" type="submit"><LibraryBig size={18} /> Save training profile</button>
+              <button className="primary" type="submit" disabled={settingsBusy === "training"}><LibraryBig size={18} /> {settingsBusy === "training" ? "Saving..." : "Save training profile"}</button>
             </form>
           </Panel>
 
@@ -1375,7 +1449,7 @@ function AdminSettings({
                 </select>
               </label>
               <label>Estimated documents<input name="documentCount" type="number" defaultValue="0" /></label>
-              <button className="primary" type="submit"><Plus size={18} /> Queue source</button>
+              <button className="primary" type="submit" disabled={settingsBusy === "rag"}><Plus size={18} /> {settingsBusy === "rag" ? "Queueing..." : "Queue source"}</button>
             </form>
           </Panel>
         </section>
@@ -1407,6 +1481,27 @@ function DeliveryItem({ title, text, enabled }: { title: string; text: string; e
         <p>{text}</p>
       </div>
     </article>
+  );
+}
+
+function ToastStack({ toasts, dismissToast }: { toasts: Toast[]; dismissToast: (id: string) => void }) {
+  return (
+    <div className="toast-stack" role="status" aria-live="polite">
+      {toasts.map((toast) => (
+        <article className={`toast toast-${toast.type}`} key={toast.id}>
+          <div className="toast-icon">
+            {toast.type === "success" ? <CheckCircle2 size={18} /> : toast.type === "error" ? <X size={18} /> : <Clock3 size={18} />}
+          </div>
+          <div>
+            <strong>{toast.title}</strong>
+            <p>{toast.message}</p>
+          </div>
+          <button className="toast-close" onClick={() => dismissToast(toast.id)} aria-label="Dismiss notification">
+            <X size={16} />
+          </button>
+        </article>
+      ))}
+    </div>
   );
 }
 
