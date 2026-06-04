@@ -150,6 +150,155 @@ function ragSourceFromRow(row) {
   };
 }
 
+const agentProfiles = {
+  general: {
+    title: "General legal suite assistant",
+    instruction: "Help the user navigate LawPath, prioritise work and explain next actions. Keep legal-risk warnings concise."
+  },
+  drafting: {
+    title: "Document drafting assistant",
+    instruction: "Help draft, review and improve South African legal documents. Ask for missing parties, dates, money terms and attorney-review risks."
+  },
+  research: {
+    title: "Legal research assistant",
+    instruction: "Help research South African legal issues using tenant research items, RAG sources, case-law bundles and cited source summaries."
+  },
+  secretary: {
+    title: "Legal secretary assistant",
+    instruction: "Help convert instructions into tasks, reminders, filing checklists, client updates and attorney follow-ups."
+  },
+  billing: {
+    title: "Billing assistant",
+    instruction: "Help with billing workflow, payment follow-ups, invoice summaries and matter-level recoverability."
+  },
+  portal: {
+    title: "Client portal assistant",
+    instruction: "Help produce client-safe progress updates without exposing confidential internal notes or legal advice beyond approved summaries."
+  },
+  settings: {
+    title: "Platform configuration assistant",
+    instruction: "Help super admins and tenant admins configure email, AI providers, RAG training and tenant branding."
+  }
+};
+
+function trimForContext(value, max = 900) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+async function buildTenantAiContext(req, agentKey) {
+  const tenantId = req.user.tenantId;
+  const [profile, matters, research, ragSources, tasks, invoices] = await Promise.all([
+    tenantId ? pool.query("select * from tenant_profiles where tenant_id = $1", [tenantId]) : Promise.resolve({ rows: [] }),
+    tenantId ? pool.query("select matter_number, title, client_name, matter_type, stage, progress, next_step, risk from matters where tenant_id = $1 order by updated_at desc limit 8", [tenantId]) : Promise.resolve({ rows: [] }),
+    tenantId ? pool.query("select title, court_or_source, decision_year, tags, summary, source_url from research_items where tenant_id = $1 order by updated_at desc limit 8", [tenantId]) : Promise.resolve({ rows: [] }),
+    pool.query(
+      `select name, scope, source_type, status, document_count, source_url, extraction_summary
+       from rag_sources
+       where tenant_id is null or tenant_id = $1
+       order by updated_at desc
+       limit 10`,
+      [tenantId]
+    ),
+    tenantId ? pool.query("select title, owner_label, due_at, priority, done from work_tasks where tenant_id = $1 order by created_at desc limit 8", [tenantId]) : Promise.resolve({ rows: [] }),
+    tenantId ? pool.query("select invoice_number, client_name, amount_cents, paid_cents, currency, status from invoices where tenant_id = $1 order by created_at desc limit 8", [tenantId]) : Promise.resolve({ rows: [] })
+  ]);
+
+  return {
+    agent: agentProfiles[agentKey] || agentProfiles.general,
+    tenantProfile: tenantProfileFromRow(profile.rows[0]),
+    matters: matters.rows,
+    research: research.rows,
+    ragSources: ragSources.rows.map((row) => ({
+      ...row,
+      extraction_summary: trimForContext(row.extraction_summary, 600)
+    })),
+    tasks: tasks.rows,
+    invoices: invoices.rows
+  };
+}
+
+function buildContextSummary(context) {
+  return [
+    context.tenantProfile ? `Firm: ${context.tenantProfile.tradingName || "unnamed firm"}; practice type: ${context.tenantProfile.practiceType || "not set"}.` : "No tenant profile loaded.",
+    `Matters: ${context.matters.length}. Research items: ${context.research.length}. RAG sources: ${context.ragSources.length}. Tasks: ${context.tasks.length}. Invoices: ${context.invoices.length}.`
+  ].join(" ");
+}
+
+async function getOpenAiSettings() {
+  const result = await pool.query("select * from platform_api_provider_settings where provider = 'openai' and active = true limit 1");
+  const row = result.rows[0];
+  return {
+    apiKey: row?.api_key_secret_ref || process.env.OPENAI_API_KEY || "",
+    model: row?.default_model || process.env.OPENAI_MODEL || "gpt-4.1-mini"
+  };
+}
+
+async function callOpenAiAssistant({ message, agentKey, context }) {
+  const { apiKey, model } = await getOpenAiSettings();
+
+  if (!apiKey) {
+    return {
+      provider: "local",
+      model: "fallback",
+      content: [
+        `${context.agent.title} is ready, but no OpenAI API key is configured yet.`,
+        "",
+        "I can still show the tenant context I would use:",
+        buildContextSummary(context),
+        "",
+        `Next step: configure the OpenAI key under Settings, then ask again: "${message}".`
+      ].join("\n")
+    };
+  }
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "system",
+          content: [
+            "You are LawPath SA, an AI-native legal practice assistant for South African law firms.",
+            "Use only the tenant-scoped context supplied. Do not invent database facts. Keep attorney review requirements explicit.",
+            context.agent.instruction,
+            `Current agent key: ${agentKey}.`
+          ].join("\n")
+        },
+        {
+          role: "user",
+          content: [
+            "Tenant-scoped context JSON:",
+            JSON.stringify(context).slice(0, 18000),
+            "",
+            "User request:",
+            message
+          ].join("\n")
+        }
+      ]
+    })
+  });
+
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload.error?.message || "OpenAI request failed.");
+  }
+
+  const content = payload.output_text || payload.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("\n") || "No assistant response returned.";
+
+  return {
+    provider: "openai",
+    model,
+    content,
+    usage: payload.usage
+  };
+}
+
 app.get("/api/health", async (_req, res) => {
   const result = await pool.query("select now() as server_time");
   res.json({ ok: true, database: "connected", serverTime: result.rows[0].server_time });
@@ -620,6 +769,102 @@ app.post("/api/rag/sources", authMiddleware, async (req, res, next) => {
     res.status(201).json({ source: ragSourceFromRow(source.rows[0]) });
   } catch (error) {
     next(error);
+  }
+});
+
+app.post("/api/ai/chat", authMiddleware, async (req, res, next) => {
+  const { message, agentKey = "general", conversationId } = req.body;
+
+  if (!message || !String(message).trim()) {
+    return res.status(400).json({ error: "Message is required." });
+  }
+
+  const tenantId = req.user.tenantId || null;
+  const client = await pool.connect();
+
+  try {
+    await client.query("begin");
+
+    let conversation = null;
+    if (conversationId) {
+      const existing = await client.query(
+        `select * from ai_conversations
+         where id = $1 and (tenant_id is not distinct from $2)`,
+        [conversationId, tenantId]
+      );
+      conversation = existing.rows[0] || null;
+    }
+
+    if (!conversation) {
+      const created = await client.query(
+        `insert into ai_conversations (tenant_id, user_id, agent_key, title)
+         values ($1, $2, $3, $4)
+         returning *`,
+        [tenantId, req.user.sub, agentKey, `${agentProfiles[agentKey]?.title || "Assistant"} chat`]
+      );
+      conversation = created.rows[0];
+    }
+
+    await client.query(
+      `insert into ai_messages (conversation_id, tenant_id, role, content)
+       values ($1, $2, 'user', $3)`,
+      [conversation.id, tenantId, message]
+    );
+
+    const run = await client.query(
+      `insert into ai_agent_runs (tenant_id, user_id, conversation_id, agent_key, status)
+       values ($1, $2, $3, $4, 'running')
+       returning id`,
+      [tenantId, req.user.sub, conversation.id, agentKey]
+    );
+
+    await client.query("commit");
+
+    const context = await buildTenantAiContext(req, agentKey);
+    const contextSummary = buildContextSummary(context);
+    const ai = await callOpenAiAssistant({ message: String(message), agentKey, context });
+
+    await pool.query(
+      `insert into ai_messages (conversation_id, tenant_id, role, content, model, context_summary)
+       values ($1, $2, 'assistant', $3, $4, $5)`,
+      [conversation.id, tenantId, ai.content, ai.model, contextSummary]
+    );
+
+    await pool.query(
+      `update ai_agent_runs
+       set status = 'completed',
+           provider = $2,
+           model = $3,
+           prompt_tokens = $4,
+           completion_tokens = $5,
+           tools_used = $6,
+           completed_at = now()
+       where id = $1`,
+      [
+        run.rows[0].id,
+        ai.provider,
+        ai.model,
+        ai.usage?.input_tokens || null,
+        ai.usage?.output_tokens || null,
+        ["tenant_context", "rag_sources", "research_items"]
+      ]
+    );
+
+    await pool.query("update ai_conversations set updated_at = now() where id = $1", [conversation.id]);
+
+    res.json({
+      conversationId: conversation.id,
+      agentKey,
+      answer: ai.content,
+      contextSummary,
+      model: ai.model,
+      provider: ai.provider
+    });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    next(error);
+  } finally {
+    client.release();
   }
 });
 

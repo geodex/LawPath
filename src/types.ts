@@ -151,6 +151,14 @@ export type AuthUser = {
   tenantSlug?: string;
 };
 
+export type AiAgentKey = "general" | "drafting" | "research" | "secretary" | "billing" | "portal" | "settings";
+
+export type AiChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
 export type NavItem = {
   key: ViewKey;
   label: string;

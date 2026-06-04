@@ -27,9 +27,9 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, forgotPassword, getBootstrapSettings, getCurrentUser, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendTestEmail } from "./api";
+import { clearToken, forgotPassword, getBootstrapSettings, getCurrentUser, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
-import type { ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, Invoice, Matter, NavItem, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, ViewKey, WorkTask } from "./types";
+import type { AiAgentKey, AiChatMessage, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, Invoice, Matter, NavItem, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, ViewKey, WorkTask } from "./types";
 
 const nav: NavItem[] = [
   { key: "overview", label: "Overview", icon: Home },
@@ -42,6 +42,28 @@ const nav: NavItem[] = [
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
   { key: "settings", label: "Settings", icon: Settings }
 ];
+
+const viewAgentMap: Record<ViewKey, AiAgentKey> = {
+  overview: "general",
+  drafting: "drafting",
+  research: "research",
+  secretary: "secretary",
+  billing: "billing",
+  booking: "secretary",
+  portal: "portal",
+  "training-guide": "research",
+  settings: "settings"
+};
+
+const aiAgentLabels: Record<AiAgentKey, string> = {
+  general: "General Assistant",
+  drafting: "Drafting Agent",
+  research: "Research Agent",
+  secretary: "Secretary Agent",
+  billing: "Billing Agent",
+  portal: "Portal Agent",
+  settings: "Settings Agent"
+};
 
 const money = (value: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(value);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -136,6 +158,13 @@ export function App() {
   });
   const [emailStatus, setEmailStatus] = useState("SMTP settings not tested in this session.");
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [aiMessages, setAiMessages] = useState<AiChatMessage[]>([
+    { id: uid("AI"), role: "assistant", content: "Ask me to draft, research, summarise a matter, prepare a client update, or explain what to do next. I use tenant-scoped context and never cross into another firm." }
+  ]);
+  const [aiConversationId, setAiConversationId] = useState<string | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiContextSummary, setAiContextSummary] = useState("Tenant context will appear after the first AI response.");
   const [activity, setActivity] = useState<string[]>([
     "Portal access granted for estate agent on M-1048",
     "Draft shareholder agreement updated",
@@ -145,6 +174,7 @@ export function App() {
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
   const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
+  const activeAgent = viewAgentMap[activeView];
 
   useEffect(() => {
     if (!authUser) return;
@@ -279,6 +309,29 @@ export function App() {
     setAuthMessage("Signed out.");
   }
 
+  async function askAi(message: string, agentKey: AiAgentKey = activeAgent) {
+    const cleaned = message.trim();
+    if (!cleaned) return;
+
+    setAssistantOpen(true);
+    setAiBusy(true);
+    setAiMessages((items) => [...items, { id: uid("AI"), role: "user", content: cleaned }]);
+
+    try {
+      const response = await sendAiChat({ message: cleaned, agentKey, conversationId: aiConversationId });
+      setAiConversationId(response.conversationId);
+      setAiContextSummary(response.contextSummary);
+      setAiMessages((items) => [...items, { id: uid("AI"), role: "assistant", content: response.answer }]);
+      log(`${aiAgentLabels[agentKey]} answered using ${response.provider}/${response.model}`);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "The AI assistant could not respond.";
+      setAiMessages((items) => [...items, { id: uid("AI"), role: "assistant", content: messageText }]);
+      showToast("error", "AI request failed", messageText);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
   if (!authUser) {
     return (
       <>
@@ -348,6 +401,15 @@ export function App() {
           />
         )}
       </main>
+      <AIAssistantPanel
+        open={assistantOpen}
+        setOpen={setAssistantOpen}
+        activeAgent={activeAgent}
+        messages={aiMessages}
+        busy={aiBusy}
+        contextSummary={aiContextSummary}
+        askAi={askAi}
+      />
       {authUser.tenantId && !tenantProfile.onboardingCompleted && (
         <OnboardingFlow
           profile={tenantProfile}
@@ -542,6 +604,83 @@ function OnboardingFlow({
         </div>
       </section>
     </div>
+  );
+}
+
+function AIAssistantPanel({
+  open,
+  setOpen,
+  activeAgent,
+  messages,
+  busy,
+  contextSummary,
+  askAi
+}: {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  activeAgent: AiAgentKey;
+  messages: AiChatMessage[];
+  busy: boolean;
+  contextSummary: string;
+  askAi: (message: string, agentKey?: AiAgentKey) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState("");
+  const quickPrompts: Record<AiAgentKey, string[]> = {
+    general: ["What should I focus on today?", "Summarise this firm's current workload."],
+    drafting: ["Review the current document intake for missing fields.", "Draft a clause checklist for this document."],
+    research: ["Find the key legal issues in my latest research sources.", "Prepare a research plan with citations required."],
+    secretary: ["Turn open work into a secretary task list.", "Draft a professional client update."],
+    billing: ["Summarise billing follow-ups and payment risks.", "Draft a polite payment reminder."],
+    portal: ["Create a client-safe conveyancing progress update.", "Explain what portal data should be hidden."],
+    settings: ["Check what is missing from AI and email setup.", "Explain how to train the AI safely."]
+  };
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const message = draft;
+    setDraft("");
+    await askAi(message, activeAgent);
+  }
+
+  return (
+    <>
+      <button className="ai-launcher" onClick={() => setOpen(!open)}>
+        <Sparkles size={18} /> {aiAgentLabels[activeAgent]}
+      </button>
+      {open && (
+        <aside className="ai-panel">
+          <div className="ai-panel-head">
+            <div>
+              <p className="eyebrow">AI native workspace</p>
+              <strong>{aiAgentLabels[activeAgent]}</strong>
+            </div>
+            <button className="small" onClick={() => setOpen(false)}><X size={16} /></button>
+          </div>
+          <div className="ai-context">
+            <ShieldCheck size={16} />
+            <span>{contextSummary}</span>
+          </div>
+          <div className="ai-quick">
+            {quickPrompts[activeAgent].map((prompt) => (
+              <button className="small" key={prompt} disabled={busy} onClick={() => askAi(prompt, activeAgent)}>{prompt}</button>
+            ))}
+          </div>
+          <div className="ai-messages">
+            {messages.map((message) => (
+              <article className={`ai-message ${message.role}`} key={message.id}>
+                <span>{message.role === "user" ? "You" : "LawPath AI"}</span>
+                <p>{message.content}</p>
+              </article>
+            ))}
+            {busy && <article className="ai-message assistant"><span>LawPath AI</span><p>Thinking with tenant context...</p></article>}
+          </div>
+          <form className="ai-input" onSubmit={submit}>
+            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={`Ask the ${aiAgentLabels[activeAgent].toLowerCase()}...`} />
+            <button className="primary" type="submit" disabled={busy || !draft.trim()}><Send size={18} /> Send</button>
+          </form>
+        </aside>
+      )}
+    </>
   );
 }
 

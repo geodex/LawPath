@@ -1,4 +1,4 @@
-import type { ApiProviderSettings, AssistantTrainingSettings, AuthUser, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile } from "./types";
+import type { AiAgentKey, ApiProviderSettings, AssistantTrainingSettings, AuthUser, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -156,6 +156,20 @@ export async function sendTestEmail(input: {
   replyTo: string;
 }) {
   return request<{ ok: boolean; messageId: string | null }>("/api/email/test", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function sendAiChat(input: { message: string; agentKey: AiAgentKey; conversationId?: string | null }) {
+  return request<{
+    conversationId: string;
+    agentKey: AiAgentKey;
+    answer: string;
+    contextSummary: string;
+    model: string;
+    provider: string;
+  }>("/api/ai/chat", {
     method: "POST",
     body: JSON.stringify(input)
   });

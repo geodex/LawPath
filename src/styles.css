@@ -453,6 +453,124 @@ h3 {
   color: var(--muted);
 }
 
+.ai-launcher {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 35;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--green-dark);
+  color: #ffffff;
+  box-shadow: 0 16px 40px rgba(16, 36, 31, 0.22);
+  font-weight: 850;
+}
+
+.ai-panel {
+  position: fixed;
+  right: 22px;
+  bottom: 82px;
+  z-index: 45;
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 112px));
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 28px 90px rgba(16, 36, 31, 0.26);
+}
+
+.ai-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-panel-head strong {
+  display: block;
+}
+
+.ai-context {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 9px;
+  padding: 12px 14px;
+  background: #f7faf7;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.38;
+}
+
+.ai-context svg {
+  color: var(--green);
+}
+
+.ai-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-messages {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  overflow: auto;
+  padding: 14px;
+  background: #fbfcf8;
+}
+
+.ai-message {
+  max-width: 92%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ai-message.user {
+  justify-self: end;
+  background: #eef4ef;
+}
+
+.ai-message span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--green);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.ai-message p {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.ai-input {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.ai-input textarea {
+  min-height: 90px;
+}
+
 .hero {
   min-height: 420px;
   border-radius: 8px;
@@ -1517,6 +1635,18 @@ textarea {
   .training-actions,
   .training-actions button {
     width: 100%;
+  }
+
+  .ai-launcher {
+    right: 14px;
+    bottom: 14px;
+  }
+
+  .ai-panel {
+    right: 10px;
+    left: 10px;
+    bottom: 72px;
+    width: auto;
   }
 
   .onboarding-head,
