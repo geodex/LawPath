@@ -7,6 +7,7 @@ const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
 const { authMiddleware, signToken } = require("./auth");
 const { sendTransactionalEmail } = require("./mailer");
+const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText } = require("./gcs");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -88,7 +89,9 @@ function tenantProfileFromRow(row) {
     juniorAttorneyCount: Number(row.junior_attorney_count || 0),
     candidateAttorneyCount: Number(row.candidate_attorney_count || 0),
     legalSecretaryCount: Number(row.legal_secretary_count || 0),
-    logoDataUrl: row.logo_data_url || "",
+    logoDataUrl: row.logo_public_url || row.logo_data_url || "",
+    logoStorageUri: row.logo_storage_uri || "",
+    logoPublicUrl: row.logo_public_url || "",
     onboardingCompleted: Boolean(row.onboarding_completed),
     onboardingStep: Number(row.onboarding_step || 1)
   };
@@ -183,6 +186,46 @@ const agentProfiles = {
 
 function trimForContext(value, max = 900) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function htmlToText(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchWebSourceText(sourceUrl) {
+  const url = new URL(sourceUrl);
+  if (!["https:", "http:"].includes(url.protocol)) {
+    throw new Error("Only http and https web sources can be indexed.");
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "LawPath-SA-RAG-Indexer/1.0"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Could not fetch web source. HTTP ${response.status}.`);
+  }
+
+  const contentType = response.headers.get("content-type") || "text/plain";
+  const text = await response.text();
+  const extracted = contentType.includes("html") ? htmlToText(text) : text;
+
+  return {
+    contentType,
+    rawText: text.slice(0, 1_500_000),
+    extractedText: extracted.slice(0, 1_500_000)
+  };
 }
 
 async function buildTenantAiContext(req, agentKey) {
@@ -499,13 +542,30 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
   const profile = req.body;
 
   try {
+    let logoStorageUri = profile.logoStorageUri || "";
+    let logoPublicUrl = profile.logoPublicUrl || "";
+
+    if (profile.logoDataUrl && String(profile.logoDataUrl).startsWith("data:")) {
+      const uploadedLogo = await uploadDataUrl({
+        dataUrl: profile.logoDataUrl,
+        prefix: `tenants/${req.user.tenantId}/media/logos`,
+        fileName: "firm-logo",
+        metadata: {
+          ownerType: "tenant_logo",
+          tenantId: req.user.tenantId
+        }
+      });
+      logoStorageUri = uploadedLogo.gcsUri;
+      logoPublicUrl = uploadedLogo.publicUrl;
+    }
+
     const result = await pool.query(
       `insert into tenant_profiles
         (tenant_id, trading_name, practice_type, address_line_1, address_line_2, city, province, postal_code,
          phone, website, lpc_registration_number, company_registration_number, vat_number, conveyancer_count,
          senior_attorney_count, junior_attorney_count, candidate_attorney_count, legal_secretary_count,
-         logo_data_url, onboarding_completed, onboarding_step)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+         logo_data_url, logo_storage_uri, logo_public_url, onboarding_completed, onboarding_step)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        on conflict (tenant_id) do update set
         trading_name = excluded.trading_name,
         practice_type = excluded.practice_type,
@@ -525,6 +585,8 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
         candidate_attorney_count = excluded.candidate_attorney_count,
         legal_secretary_count = excluded.legal_secretary_count,
         logo_data_url = excluded.logo_data_url,
+        logo_storage_uri = excluded.logo_storage_uri,
+        logo_public_url = excluded.logo_public_url,
         onboarding_completed = excluded.onboarding_completed,
         onboarding_step = excluded.onboarding_step,
         updated_at = now()
@@ -548,11 +610,35 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
         Number(profile.juniorAttorneyCount || 0),
         Number(profile.candidateAttorneyCount || 0),
         Number(profile.legalSecretaryCount || 0),
-        profile.logoDataUrl || "",
+        logoPublicUrl || "",
+        logoStorageUri,
+        logoPublicUrl,
         Boolean(profile.onboardingCompleted),
         Number(profile.onboardingStep || 1)
       ]
     );
+
+    if (logoStorageUri) {
+      const parsedLogo = logoStorageUri.match(/^gs:\/\/([^/]+)\/(.+)$/);
+      const logoBucket = parsedLogo?.[1] || configuredBucketName();
+      const objectName = parsedLogo?.[2] || logoStorageUri.replace(`gs://${logoBucket}/`, "");
+      await pool.query(
+        `insert into storage_objects
+          (tenant_id, owner_type, owner_id, bucket, object_name, gcs_uri, public_url, content_type, metadata, created_by)
+         values ($1, 'tenant_logo', $1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (bucket, object_name) do nothing`,
+        [
+          req.user.tenantId,
+          logoBucket,
+          objectName,
+          logoStorageUri,
+          logoPublicUrl,
+          "image/*",
+          { source: "tenant_onboarding" },
+          req.user.sub
+        ]
+      );
+    }
 
     await pool.query(
       `insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details)
@@ -720,7 +806,7 @@ app.put("/api/platform/assistant-training", authMiddleware, async (req, res, nex
 });
 
 app.post("/api/rag/sources", authMiddleware, async (req, res, next) => {
-  const { name, scope, sourceType, documentCount, sourceUrl, fileName, mimeType, extractedText } = req.body;
+  const { name, scope, sourceType, documentCount, sourceUrl, fileName, mimeType, extractedText, fileDataUrl } = req.body;
 
   if (!name || !scope || !sourceType) {
     return res.status(400).json({ error: "Source name, scope and source type are required." });
@@ -733,17 +819,73 @@ app.post("/api/rag/sources", authMiddleware, async (req, res, next) => {
   }
 
   try {
-    const summary = extractedText
-      ? String(extractedText).replace(/\s+/g, " ").slice(0, 900)
-      : sourceUrl
-        ? `Web source queued for server-side retrieval and legal relevance extraction: ${sourceUrl}`
-        : "Source queued for document extraction.";
+    const sourcePrefix = `ai-training/${tenantId || "platform"}/${safeObjectPart(scope)}/${safeObjectPart(sourceType)}`;
+    let uploaded = null;
+    let extracted = extractedText || "";
+    let storedFileName = fileName || "";
+    let storedMimeType = mimeType || "";
+
+    if (fileDataUrl) {
+      uploaded = await uploadDataUrl({
+        dataUrl: fileDataUrl,
+        prefix: sourcePrefix,
+        fileName: fileName || name,
+        metadata: {
+          ownerType: "rag_source",
+          tenantId: tenantId || "",
+          sourceType,
+          geminiReady: "true"
+        }
+      });
+      storedFileName = fileName || name;
+      storedMimeType = uploaded.contentType;
+    } else if (sourceUrl) {
+      const web = await fetchWebSourceText(sourceUrl);
+      extracted = web.extractedText;
+      storedMimeType = "text/plain";
+      storedFileName = `${safeObjectPart(name)}-web-extract.txt`;
+      uploaded = await uploadText({
+        text: web.extractedText,
+        prefix: sourcePrefix,
+        fileName: storedFileName,
+        contentType: "text/plain",
+        metadata: {
+          ownerType: "rag_source",
+          tenantId: tenantId || "",
+          sourceType,
+          sourceUrl,
+          originalContentType: web.contentType,
+          geminiReady: "true"
+        }
+      });
+    } else if (extracted) {
+      storedMimeType = "text/plain";
+      storedFileName = `${safeObjectPart(name)}-training-notes.txt`;
+      uploaded = await uploadText({
+        text: extracted,
+        prefix: sourcePrefix,
+        fileName: storedFileName,
+        contentType: "text/plain",
+        metadata: {
+          ownerType: "rag_source",
+          tenantId: tenantId || "",
+          sourceType,
+          geminiReady: "true"
+        }
+      });
+    }
+
+    const summary = extracted
+      ? String(extracted).replace(/\s+/g, " ").slice(0, 900)
+      : uploaded
+        ? `Source stored in Google Cloud Storage for Gemini/RAG processing: ${uploaded.gcsUri}`
+        : "Source queued; no file or URL payload was supplied.";
 
     const source = await pool.query(
       `insert into rag_sources
-        (tenant_id, name, scope, source_type, status, document_count, source_url, original_file_name, mime_type,
-         extraction_summary, metadata, created_by)
-       values ($1, $2, $3, $4, 'Queued', $5, $6, $7, $8, $9, $10, $11)
+       (tenant_id, name, scope, source_type, status, document_count, source_url, original_file_name, mime_type,
+         extraction_summary, metadata, gcs_bucket, gcs_prefix, storage_uri, gemini_file_uri, created_by)
+       values ($1, $2, $3, $4, 'Queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        returning *`,
       [
         tenantId,
@@ -752,13 +894,56 @@ app.post("/api/rag/sources", authMiddleware, async (req, res, next) => {
         sourceType,
         Number(documentCount || 1),
         sourceUrl || null,
-        fileName || null,
-        mimeType || null,
+        storedFileName || null,
+        storedMimeType || null,
         summary,
-        { sourceUrl: sourceUrl || null, fileName: fileName || null },
+        { sourceUrl: sourceUrl || null, fileName: storedFileName || null, storage: uploaded?.gcsUri || null },
+        uploaded?.bucket || null,
+        uploaded ? sourcePrefix : null,
+        uploaded?.gcsUri || null,
+        uploaded?.gcsUri || null,
         req.user.sub
       ]
     );
+
+    if (uploaded) {
+      const document = await pool.query(
+        `insert into rag_documents
+          (rag_source_id, tenant_id, title, source_uri, content_hash, status, metadata, gcs_uri, public_url, byte_size)
+         values ($1, $2, $3, $4, $5, 'Queued', $6, $7, $8, $9)
+         returning id`,
+        [
+          source.rows[0].id,
+          tenantId,
+          storedFileName || name,
+          sourceUrl || uploaded.gcsUri,
+          crypto.createHash("sha256").update(uploaded.gcsUri).digest("hex"),
+          { sourceType, mimeType: storedMimeType, geminiFileUri: uploaded.gcsUri },
+          uploaded.gcsUri,
+          uploaded.publicUrl,
+          uploaded.byteSize
+        ]
+      );
+
+      await pool.query(
+        `insert into storage_objects
+          (tenant_id, owner_type, owner_id, bucket, object_name, gcs_uri, public_url, content_type, byte_size, metadata, created_by)
+         values ($1, 'rag_document', $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         on conflict (bucket, object_name) do nothing`,
+        [
+          tenantId,
+          document.rows[0].id,
+          uploaded.bucket,
+          uploaded.objectName,
+          uploaded.gcsUri,
+          uploaded.publicUrl,
+          uploaded.contentType,
+          uploaded.byteSize,
+          { sourceId: source.rows[0].id, sourceType, geminiFileUri: uploaded.gcsUri },
+          req.user.sub
+        ]
+      );
+    }
 
     await pool.query(
       `insert into rag_index_jobs (rag_source_id, status, documents_seen, documents_indexed, created_by)

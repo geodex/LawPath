@@ -36,6 +36,11 @@ SMTP_USERNAME=notifications@example.co.za
 SMTP_PASSWORD=change_me
 SMTP_FROM_EMAIL=notifications@example.co.za
 SMTP_FROM_NAME=LawPath SA
+GCS_BUCKET_NAME=lawpath-ai-training
+GEMINI_GCS_BUCKET_NAME=lawpath-ai-training
+GOOGLE_CLOUD_PROJECT=your-google-cloud-project-id
+GOOGLE_APPLICATION_CREDENTIALS=/home2/lawpath/secure/gcp-service-account.json
+GCS_SIGNED_URLS=true
 ```
 
 ## Run
@@ -67,3 +72,5 @@ Registration creates:
 - activity log entry
 
 Forgot password currently creates a reset token record. Test email delivery uses the SMTP environment variables above, records the result in `email_events`, and applies the tenant sender identity as the display name/reply-to while the authorised LawPath SMTP address remains the actual envelope sender.
+
+Google Cloud Storage is the storage-of-record for tenant logos, uploaded legal documents, media and AI training data. Use `GCS_BUCKET_NAME` for the bucket that stores LawPath objects; `GEMINI_GCS_BUCKET_NAME` may point to the same bucket so Gemini/RAG pipelines can consume `gs://` URIs.

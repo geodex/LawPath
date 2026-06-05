@@ -112,9 +112,20 @@ const defaultTenantProfile = (companyName = ""): TenantProfile => ({
   candidateAttorneyCount: 0,
   legalSecretaryCount: 0,
   logoDataUrl: "",
+  logoStorageUri: "",
+  logoPublicUrl: "",
   onboardingCompleted: false,
   onboardingStep: 1
 });
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error("Could not read file."));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function App() {
   const [authMode, setAuthMode] = useState<"landing" | "login" | "register" | "forgot">("landing");
@@ -2555,6 +2566,8 @@ function AdminSettings({
     setSettingsBusy("rag");
     const form = new FormData(event.currentTarget);
     const file = form.get("sourceFile") as File | null;
+    const hasFile = Boolean(file && file.size);
+    const fileDataUrl = hasFile ? await fileToDataUrl(file as File) : "";
     const extractedText = file && file.size ? await file.text().catch(() => "") : "";
     try {
       const response = await queueRagSource({
@@ -2565,11 +2578,12 @@ function AdminSettings({
         sourceUrl: String(form.get("sourceUrl") || ""),
         fileName: file?.name || "",
         mimeType: file?.type || "",
+        fileDataUrl,
         extractedText
       });
       setRagSources((items) => [response.source, ...items]);
       log(`Super admin queued RAG source: ${response.source.name}`);
-      showToast("success", "Source queued", `${response.source.name} has been added to the indexing queue.`);
+      showToast("success", "Source queued", `${response.source.name} has been stored in Google Cloud Storage and queued for indexing.`);
     } catch (error) {
       showToast("error", "Source not queued", error instanceof Error ? error.message : "Could not queue knowledge source.");
     } finally {

@@ -106,6 +106,8 @@ export type TenantProfile = {
   candidateAttorneyCount: number;
   legalSecretaryCount: number;
   logoDataUrl: string;
+  logoStorageUri: string;
+  logoPublicUrl: string;
   onboardingCompleted: boolean;
   onboardingStep: number;
 };

@@ -141,6 +141,7 @@ export async function queueRagSource(input: {
   sourceUrl?: string;
   fileName?: string;
   mimeType?: string;
+  fileDataUrl?: string;
   extractedText?: string;
 }) {
   return request<{ source: RagSource }>("/api/rag/sources", {
