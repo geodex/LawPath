@@ -2450,110 +2450,166 @@ app.get("/api/windeed/search", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-// ─── STRIPE BILLING ───────────────────────────────────────────────────────────
+// ─── YOCO BILLING (South African payment gateway — ZAR only) ─────────────────
+// Pattern replicated from geodex/SpellGameKit Yoco integration.
+// Docs: https://developer.yoco.com/online/checkout-flow/
 
-const stripe = process.env.STRIPE_SECRET_KEY ? require("stripe")(process.env.STRIPE_SECRET_KEY) : null;
+const YOCO_API = "https://payments.yoco.com/v1";
+const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY || "";
 
-const STRIPE_PLANS = {
-  solo:     { priceId: process.env.STRIPE_PRICE_SOLO     || "", name: "Solo",     priceCents: 79900  },
-  practice: { priceId: process.env.STRIPE_PRICE_PRACTICE || "", name: "Practice", priceCents: 249900 },
-  firm:     { priceId: process.env.STRIPE_PRICE_FIRM     || "", name: "Firm",     priceCents: 599900 }
+const YOCO_PLANS = {
+  solo:     { name: "Solo",     priceCents: 79900,  maxUsers: 1 },
+  practice: { name: "Practice", priceCents: 249900, maxUsers: 5 },
+  firm:     { name: "Firm",     priceCents: 599900, maxUsers: 999 }
 };
 
 app.get("/api/billing/status", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
     const tenant = await pool.query("select plan, plan_status, trial_ends_at from tenants where id=$1", [req.user.tenantId]);
-    const customer = await pool.query("select * from stripe_customers where tenant_id=$1", [req.user.tenantId]).catch(() => ({ rows: [] }));
+    const sub = await pool.query("select * from yoco_subscriptions where tenant_id=$1", [req.user.tenantId]).catch(() => ({ rows: [] }));
     res.json({
       plan: tenant.rows[0]?.plan || "trial",
       planStatus: tenant.rows[0]?.plan_status || "trialing",
       trialEndsAt: tenant.rows[0]?.trial_ends_at,
-      stripeCustomerId: customer.rows[0]?.stripe_customer_id || null,
-      currentPeriodEnd: customer.rows[0]?.current_period_end || null,
-      cancelAtPeriodEnd: customer.rows[0]?.cancel_at_period_end || false,
-      plans: STRIPE_PLANS
+      currentPeriodEnd: sub.rows[0]?.current_period_end || null,
+      yocoConfigured: Boolean(YOCO_SECRET_KEY),
+      plans: YOCO_PLANS
     });
   } catch (error) { next(error); }
 });
 
 app.post("/api/billing/checkout", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  if (!stripe) return res.status(503).json({ error: "Stripe is not configured. Set STRIPE_SECRET_KEY in .env." });
+  if (!YOCO_SECRET_KEY) return res.status(503).json({ error: "Yoco is not configured. Set YOCO_SECRET_KEY in .env." });
   const { plan, successUrl, cancelUrl } = req.body;
-  const planConfig = STRIPE_PLANS[plan];
-  if (!planConfig || !planConfig.priceId) return res.status(400).json({ error: `Plan "${plan}" not configured. Set STRIPE_PRICE_${plan?.toUpperCase()} in .env.` });
+  const planConfig = YOCO_PLANS[plan];
+  if (!planConfig) return res.status(400).json({ error: `Invalid plan: ${plan}. Use solo, practice or firm.` });
   try {
-    const tenant = await pool.query("select company_name from tenants where id=$1", [req.user.tenantId]);
-    const existingCustomer = await pool.query("select stripe_customer_id from stripe_customers where tenant_id=$1", [req.user.tenantId]).catch(() => ({ rows: [] }));
-    let customerId = existingCustomer.rows[0]?.stripe_customer_id;
-    if (!customerId) {
-      const customer = await stripe.customers.create({ email: req.user.email, name: tenant.rows[0]?.company_name || req.user.email, metadata: { tenantId: req.user.tenantId, userId: req.user.sub } });
-      customerId = customer.id;
-      await pool.query("insert into stripe_customers (tenant_id, stripe_customer_id, plan, plan_status) values ($1,$2,$3,'trialing') on conflict (tenant_id) do update set stripe_customer_id=$2", [req.user.tenantId, customerId, plan]).catch(() => {});
-    }
-    const session = await stripe.checkout.sessions.create({
-      customer: customerId,
-      payment_method_types: ["card"],
-      line_items: [{ price: planConfig.priceId, quantity: 1 }],
-      mode: "subscription",
-      success_url: successUrl || `${process.env.VITE_APP_URL || "https://lawpath.co.za"}/?billing=success`,
-      cancel_url: cancelUrl || `${process.env.VITE_APP_URL || "https://lawpath.co.za"}/?billing=cancelled`,
-      metadata: { tenantId: req.user.tenantId, plan }
+    const baseUrl = process.env.VITE_APP_URL || "https://lawpath.co.za";
+    const yocoRes = await fetch(`${YOCO_API}/checkouts`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${YOCO_SECRET_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: planConfig.priceCents,
+        currency: "ZAR",
+        successUrl: successUrl || `${baseUrl}/?billing=success&plan=${plan}`,
+        cancelUrl: cancelUrl || `${baseUrl}/?billing=cancelled`,
+        metadata: { tenantId: req.user.tenantId, plan, userId: req.user.sub }
+      })
     });
-    res.json({ checkoutUrl: session.url, sessionId: session.id });
+    if (!yocoRes.ok) {
+      const err = await yocoRes.text();
+      console.error("[yoco checkout] Failed:", err);
+      return res.status(502).json({ error: "Yoco checkout creation failed. Check YOCO_SECRET_KEY." });
+    }
+    const yocoData = await yocoRes.json();
+    const now = new Date();
+    const periodEnd = new Date(now); periodEnd.setDate(periodEnd.getDate() + 30);
+    await pool.query(
+      `insert into yoco_subscriptions (tenant_id, yoco_checkout_id, plan, plan_status, current_period_start, current_period_end, monthly_price_cents)
+       values ($1,$2,$3,'pending',$4,$5,$6)
+       on conflict (tenant_id) do update set yoco_checkout_id=$2, plan=$3, plan_status='pending', current_period_start=$4, current_period_end=$5, monthly_price_cents=$6, updated_at=now()`,
+      [req.user.tenantId, yocoData.id, plan, now, periodEnd, planConfig.priceCents]
+    );
+    res.json({ checkoutUrl: yocoData.redirectUrl, checkoutId: yocoData.id });
   } catch (error) { next(error); }
 });
 
 app.post("/api/billing/portal", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  if (!stripe) return res.status(503).json({ error: "Stripe not configured." });
-  try {
-    const customer = await pool.query("select stripe_customer_id from stripe_customers where tenant_id=$1", [req.user.tenantId]);
-    if (!customer.rowCount) return res.status(404).json({ error: "No billing account found. Subscribe first." });
-    const session = await stripe.billingPortal.sessions.create({ customer: customer.rows[0].stripe_customer_id, return_url: `${process.env.VITE_APP_URL || "https://lawpath.co.za"}/` });
-    res.json({ portalUrl: session.url });
-  } catch (error) { next(error); }
+  // Yoco doesn't have a managed billing portal like Stripe.
+  // Direct users to the Yoco merchant dashboard.
+  res.json({ portalUrl: "https://payments.yoco.com/", note: "Manage your subscription directly at payments.yoco.com" });
 });
 
 app.post("/api/billing/webhook", async (req, res, next) => {
-  if (!stripe) return res.status(503).json({ error: "Stripe not configured." });
-  const sig = req.headers["stripe-signature"];
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
-  let event;
-  try {
-    const rawBody = JSON.stringify(req.body);
-    event = webhookSecret ? stripe.webhooks.constructEvent(rawBody, sig, webhookSecret) : req.body;
-  } catch (err) { return res.status(400).json({ error: `Webhook signature error: ${err.message}` }); }
+  // Yoco webhook signature verification (HMAC-SHA256)
+  // Replicated from geodex/SpellGameKit production implementation.
+  const webhookId = req.headers["webhook-id"];
+  const webhookTimestamp = req.headers["webhook-timestamp"];
+  const webhookSignature = req.headers["webhook-signature"];
+  const webhookSecret = process.env.YOCO_WEBHOOK_SECRET || "";
 
-  await pool.query("insert into stripe_webhook_events (stripe_event_id, event_type, raw_payload) values ($1,$2,$3) on conflict (stripe_event_id) do nothing", [event.id || `evt_${Date.now()}`, event.type, event]).catch(() => {});
+  if (!webhookId || !webhookTimestamp || !webhookSignature) {
+    return res.status(400).json({ error: "Missing Yoco webhook headers." });
+  }
 
-  try {
-    if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.created") {
-      const sub = event.data.object;
-      const tenantId = sub.metadata?.tenantId;
-      if (tenantId) {
-        const plan = sub.metadata?.plan || "solo";
-        const status = sub.status === "active" ? "active" : sub.status === "past_due" ? "past_due" : sub.status === "canceled" ? "cancelled" : sub.status;
-        await pool.query("update tenants set plan=$2, plan_status=$3 where id=$1", [tenantId, plan, status]);
-        await pool.query("update stripe_customers set plan=$2, plan_status=$3, stripe_subscription_id=$4, current_period_start=$5, current_period_end=$6, cancel_at_period_end=$7, updated_at=now() where tenant_id=$1",
-          [tenantId, plan, status, sub.id, new Date(sub.current_period_start * 1000), new Date(sub.current_period_end * 1000), sub.cancel_at_period_end]);
-      }
+  // Replay attack prevention — reject events older than 3 minutes
+  const timeDiff = Math.abs(Math.floor(Date.now() / 1000) - parseInt(String(webhookTimestamp), 10));
+  if (timeDiff > 180) {
+    return res.status(400).json({ error: "Webhook timestamp out of range." });
+  }
+
+  if (webhookSecret) {
+    const rawBody = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+    const signedContent = `${webhookId}.${webhookTimestamp}.${rawBody}`;
+    // Yoco secret format: whsec_<base64> — strip the prefix before decoding
+    const secretBytes = Buffer.from((String(webhookSecret).split("_")[1] || webhookSecret), "base64");
+    const expectedSig = crypto.createHmac("sha256", secretBytes).update(signedContent).digest("base64");
+    const providedSig = String(webhookSignature).split(" ")[0]?.split(",")[1] || "";
+    const expBuf = Buffer.from(expectedSig);
+    const provBuf = Buffer.from(providedSig);
+    if (expBuf.length !== provBuf.length || !crypto.timingSafeEqual(expBuf, provBuf)) {
+      console.error("[yoco webhook] Signature verification failed");
+      return res.status(403).json({ error: "Invalid webhook signature." });
     }
-    if (event.type === "customer.subscription.deleted") {
-      const sub = event.data.object;
-      const tenantId = sub.metadata?.tenantId;
+  }
+
+  const event = req.body;
+  const webhookIdStr = String(webhookId || `yoco_${Date.now()}`);
+  await pool.query(
+    "insert into yoco_webhook_events (webhook_id, event_type, raw_payload) values ($1,$2,$3) on conflict (webhook_id) do nothing",
+    [webhookIdStr, event.type || "unknown", event]
+  ).catch(() => {});
+
+  try {
+    const payload = event.payload || {};
+    const metadata = payload.metadata || {};
+    const checkoutId = metadata.checkoutId || payload.id;
+    const tenantId = metadata.tenantId;
+
+    if (event.type === "payment.succeeded") {
+      if (tenantId) {
+        const plan = metadata.plan || "solo";
+        const now = new Date(); const periodEnd = new Date(); periodEnd.setDate(now.getDate() + 30);
+        await pool.query("update tenants set plan=$2, plan_status='active' where id=$1", [tenantId, plan]);
+        await pool.query(
+          "update yoco_subscriptions set plan_status='active', current_period_start=$2, current_period_end=$3, updated_at=now() where tenant_id=$1",
+          [tenantId, now, periodEnd]
+        );
+        console.info(`[yoco] Subscription activated: tenant ${tenantId}, plan ${plan}`);
+      } else if (checkoutId) {
+        // Look up by checkout ID if tenantId not in metadata
+        await pool.query("update yoco_subscriptions set plan_status='active', updated_at=now() where yoco_checkout_id=$1", [checkoutId]);
+        const sub = await pool.query("select tenant_id, plan from yoco_subscriptions where yoco_checkout_id=$1", [checkoutId]);
+        if (sub.rowCount) await pool.query("update tenants set plan=$2, plan_status='active' where id=$1", [sub.rows[0].tenant_id, sub.rows[0].plan]);
+      }
+    } else if (event.type === "payment.failed") {
+      if (tenantId) {
+        await pool.query("update tenants set plan_status='past_due' where id=$1", [tenantId]);
+        await pool.query("update yoco_subscriptions set plan_status='past_due', updated_at=now() where tenant_id=$1", [tenantId]);
+      } else if (checkoutId) {
+        const sub = await pool.query("select tenant_id from yoco_subscriptions where yoco_checkout_id=$1", [checkoutId]);
+        if (sub.rowCount) {
+          await pool.query("update tenants set plan_status='past_due' where id=$1", [sub.rows[0].tenant_id]);
+          await pool.query("update yoco_subscriptions set plan_status='past_due', updated_at=now() where yoco_checkout_id=$1", [checkoutId]);
+        }
+      }
+      console.info("[yoco] Payment failed:", { checkoutId, tenantId, reason: payload.failureReason });
+    } else if (event.type === "refund.succeeded") {
       if (tenantId) {
         await pool.query("update tenants set plan_status='cancelled' where id=$1", [tenantId]);
-        await pool.query("update stripe_customers set plan_status='cancelled', updated_at=now() where tenant_id=$1", [tenantId]);
+        await pool.query("update yoco_subscriptions set plan_status='cancelled', updated_at=now() where tenant_id=$1", [tenantId]);
       }
+      console.info("[yoco] Refund succeeded — subscription cancelled:", { checkoutId, tenantId });
     }
-    await pool.query("update stripe_webhook_events set processed=true where stripe_event_id=$1", [event.id || ""]).catch(() => {});
+
+    await pool.query("update yoco_webhook_events set processed=true where webhook_id=$1", [webhookIdStr]).catch(() => {});
   } catch (err) {
-    console.error("[stripe webhook] Processing error:", err.message);
-    await pool.query("update stripe_webhook_events set error_message=$2 where stripe_event_id=$1", [event.id || "", err.message]).catch(() => {});
+    console.error("[yoco webhook] Processing error:", err.message);
+    await pool.query("update yoco_webhook_events set error_message=$2 where webhook_id=$1", [webhookIdStr, err.message]).catch(() => {});
   }
-  res.json({ received: true });
+  res.status(200).json({ received: true });
 });
 
 // Wire notifications into conveyancing stage advance

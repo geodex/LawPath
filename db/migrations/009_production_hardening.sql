@@ -28,29 +28,27 @@ alter table users add column if not exists job_title text;
 alter table users add column if not exists phone text;
 
 -- ──────────────────────────────────────────────────────────────────────────────
--- STRIPE SUBSCRIPTION BILLING
+-- YOCO SUBSCRIPTION BILLING (South African payment gateway — ZAR only)
 -- ──────────────────────────────────────────────────────────────────────────────
 
-create table if not exists stripe_customers (
+create table if not exists yoco_subscriptions (
   id                    uuid primary key default gen_random_uuid(),
   tenant_id             uuid not null unique references tenants(id) on delete cascade,
-  stripe_customer_id    text not null unique,
-  stripe_subscription_id text,
+  yoco_checkout_id      text,
   plan                  text not null default 'solo' check (plan in ('solo','practice','firm','enterprise')),
   plan_status           text not null default 'trialing' check (plan_status in ('trialing','active','past_due','cancelled','paused')),
   trial_ends_at         timestamptz,
   current_period_start  timestamptz,
   current_period_end    timestamptz,
-  cancel_at_period_end  boolean not null default false,
   monthly_price_cents   integer not null default 0,
-  currency              text not null default 'zar',
+  currency              text not null default 'ZAR',
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now()
 );
 
-create table if not exists stripe_webhook_events (
+create table if not exists yoco_webhook_events (
   id                uuid primary key default gen_random_uuid(),
-  stripe_event_id   text not null unique,
+  webhook_id        text not null unique,
   event_type        text not null,
   processed         boolean not null default false,
   error_message     text,

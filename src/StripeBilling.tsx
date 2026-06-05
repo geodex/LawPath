@@ -1,396 +1,237 @@
-import { CheckCircle2, CreditCard, Shield, TrendingUp, Users } from "lucide-react";
+// StripeBilling.tsx → Yoco billing (ZAR-native South African payment gateway)
+// Replicated from geodex/SpellGameKit production Yoco integration.
+
+import { CheckCircle2, CreditCard, ExternalLink, Shield } from "lucide-react";
 import { useEffect, useState } from "react";
+
+const TOKEN_KEY = "lawpath.auth.token";
+
+async function apiFetch(path: string, options: RequestInit = {}) {
+  const token = localStorage.getItem(TOKEN_KEY) || "";
+  const res = await fetch(path, { ...options, headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}`, ...(options.headers || {}) } });
+  return res.json();
+}
 
 type BillingStatus = {
   plan: string;
   planStatus: string;
   trialEndsAt: string;
-  stripeCustomerId: string | null;
   currentPeriodEnd: string | null;
-  cancelAtPeriodEnd: boolean;
-  plans: Record<string, { name: string; priceCents: number; priceId: string }>;
+  yocoConfigured: boolean;
+  plans: Record<string, { name: string; priceCents: number; maxUsers: number }>;
 };
 
-type Props = {
-  showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
+const PLAN_FEATURES: Record<string, string[]> = {
+  solo: [
+    "1 user account",
+    "All matter types (conveyancing, litigation, commercial)",
+    "Trust account ledger",
+    "FICA/KYC compliance",
+    "Client portal",
+    "AI legal assistant",
+    "e-Signature (5 requests/month)"
+  ],
+  practice: [
+    "Up to 5 user accounts",
+    "Everything in Solo",
+    "Time recording & WIP management",
+    "POPIA compliance centre",
+    "Conveyancing pipeline",
+    "Practice analytics",
+    "SAFLII corpus access",
+    "Email notifications",
+    "e-Signature (unlimited)"
+  ],
+  firm: [
+    "Unlimited users",
+    "Everything in Practice",
+    "WhatsApp Business integration",
+    "Estate agent referral network",
+    "Accounting integration (Sage Pastel, Xero)",
+    "SAFLII + legislation corpus (full)",
+    "Custom AI training (firm precedents)",
+    "Priority support",
+    "PDF document generation"
+  ]
 };
 
-async function apiFetch(path: string, options?: RequestInit) {
-  const token = localStorage.getItem("lawpath.auth.token") ?? "";
-  const res = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(options?.headers ?? {}),
-    },
-  });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-const PLAN_META: Record<
-  string,
-  {
-    icon: React.ReactNode;
-    label: string;
-    price: string;
-    features: string[];
-    highlight: boolean;
-  }
-> = {
-  solo: {
-    icon: <Shield size={22} />,
-    label: "Solo",
-    price: "R 799/month",
-    features: ["1 user", "Matter management", "Billing & invoicing", "Client portal"],
-    highlight: false,
-  },
-  practice: {
-    icon: <Users size={22} />,
-    label: "Practice",
-    price: "R 2,499/month",
-    features: [
-      "Up to 5 users",
-      "Trust account",
-      "FICA / KYC compliance",
-      "Conveyancing pipeline",
-    ],
-    highlight: true,
-  },
-  firm: {
-    icon: <TrendingUp size={22} />,
-    label: "Firm",
-    price: "R 5,999/month",
-    features: [
-      "Unlimited users",
-      "WhatsApp communications",
-      "Practice analytics",
-      "Accounting integration",
-    ],
-    highlight: false,
-  },
+const STATUS_LABEL: Record<string, { label: string; colour: string }> = {
+  trialing: { label: "Free trial",       colour: "var(--gold)"  },
+  active:   { label: "Active",           colour: "var(--green)" },
+  past_due: { label: "Payment overdue",  colour: "var(--rose)"  },
+  cancelled:{ label: "Cancelled",        colour: "var(--rose)"  },
+  paused:   { label: "Paused",           colour: "var(--muted)" },
+  trial:    { label: "Free trial",       colour: "var(--gold)"  }
 };
 
-function statusBadgeClass(status: string) {
-  switch (status) {
-    case "trialing":
-      return "pill" as const;
-    case "active":
-      return "pill" as const;
-    case "past_due":
-      return "pill" as const;
-    case "canceled":
-    case "cancelled":
-      return "pill" as const;
-    default:
-      return "pill" as const;
-  }
-}
-
-function statusBadgeStyle(status: string): React.CSSProperties {
-  switch (status) {
-    case "trialing":
-      return { background: "#fdf3dc", color: "#b8860b", fontWeight: 800 };
-    case "active":
-      return { background: "#e8f4ee", color: "#1f6f5b", fontWeight: 800 };
-    case "past_due":
-      return { background: "#fdf0f2", color: "#c0525f", fontWeight: 800 };
-    case "canceled":
-    case "cancelled":
-      return { background: "#fdf0f2", color: "#c0525f", fontWeight: 800 };
-    default:
-      return { background: "#f0f2f0", color: "#6b7280", fontWeight: 800 };
-  }
-}
-
-function statusLabel(status: string) {
-  const map: Record<string, string> = {
-    trialing: "Trial",
-    active: "Active",
-    past_due: "Past due",
-    canceled: "Cancelled",
-    cancelled: "Cancelled",
-    incomplete: "Incomplete",
-    unpaid: "Unpaid",
-  };
-  return map[status] ?? status;
-}
-
-function fmtDate(iso: string | null) {
-  if (!iso) return null;
-  try {
-    return new Date(iso).toLocaleDateString("en-ZA", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
-  } catch {
-    return iso;
-  }
-}
-
-export function StripeBilling({ showToast }: Props) {
+export function StripeBilling({ showToast }: { showToast: (type: "success" | "error" | "info", title: string, msg: string) => void }) {
   const [status, setStatus] = useState<BillingStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [stripeConfigured, setStripeConfigured] = useState(true);
-  const [portalLoading, setPortalLoading] = useState(false);
-  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [checkingOut, setCheckingOut] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const data = await apiFetch("/api/billing/status");
-        setStatus(data);
-        const hasPlans = data.plans && Object.keys(data.plans).length > 0;
-        setStripeConfigured(hasPlans);
-      } catch {
-        showToast("error", "Billing error", "Could not load billing status.");
-        setStripeConfigured(false);
-      } finally {
-        setLoading(false);
-      }
-    })();
+    apiFetch("/api/billing/status")
+      .then(data => setStatus(data))
+      .catch(() => showToast("error", "Billing error", "Could not load billing status."))
+      .finally(() => setLoading(false));
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("billing") === "success") {
+      showToast("success", "Subscription activated", "Welcome to LawPath SA. Your subscription is now active.");
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (params.get("billing") === "cancelled") {
+      showToast("info", "Checkout cancelled", "Your subscription was not changed.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   }, []);
 
-  async function handleSubscribe(planKey: string) {
-    if (!status) return;
-    setCheckoutLoading(planKey);
+  async function handleSubscribe(plan: string) {
+    if (!status?.yocoConfigured) {
+      showToast("error", "Yoco not configured", "Set YOCO_SECRET_KEY in .env then restart the API.");
+      return;
+    }
+    setCheckingOut(plan);
     try {
-      const { checkoutUrl } = await apiFetch("/api/billing/checkout", {
-        method: "POST",
-        body: JSON.stringify({
-          plan: planKey,
-          successUrl: window.location.href + "?billing=success",
-          cancelUrl: window.location.href + "?billing=cancel",
-        }),
-      });
-      window.location.href = checkoutUrl;
+      const data = await apiFetch("/api/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) });
+      if (data.checkoutUrl) {
+        window.location.href = data.checkoutUrl;
+      } else {
+        showToast("error", "Checkout failed", data.error || "Could not create Yoco checkout session.");
+      }
     } catch {
-      showToast("error", "Checkout failed", "Could not start Stripe checkout. Please try again.");
-      setCheckoutLoading(null);
+      showToast("error", "Checkout error", "Could not reach billing server.");
+    } finally {
+      setCheckingOut(null);
     }
   }
 
-  async function handlePortal() {
-    setPortalLoading(true);
-    try {
-      const { portalUrl } = await apiFetch("/api/billing/portal", { method: "POST" });
-      window.location.href = portalUrl;
-    } catch {
-      showToast("error", "Portal error", "Could not open billing portal. Please try again.");
-      setPortalLoading(false);
-    }
-  }
+  const currentPlan = status?.plan || "trial";
+  const planStatus = status?.planStatus || "trialing";
+  const statusStyle = STATUS_LABEL[planStatus] ?? STATUS_LABEL.trialing;
 
-  if (loading) {
-    return (
-      <div className="panel" style={{ padding: 32, textAlign: "center", color: "var(--muted)" }}>
-        Loading billing…
-      </div>
-    );
-  }
-
-  const currentPlan = status?.plan ?? "none";
-  const planStatus = status?.planStatus ?? "";
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>Loading billing...</div>;
 
   return (
-    <div className="tier1-section">
-      {/* Stripe not configured notice */}
-      {!stripeConfigured && (
-        <div
-          style={{
-            borderLeft: "4px solid #b8860b",
-            background: "#fdf9ec",
-            padding: "14px 18px",
-            borderRadius: 8,
-            marginBottom: 20,
-            fontSize: "0.9rem",
-          }}
-        >
-          <strong style={{ color: "#b8860b" }}>Stripe billing not configured.</strong> Set{" "}
-          <code>STRIPE_SECRET_KEY</code>, <code>STRIPE_PRICE_SOLO</code>,{" "}
-          <code>STRIPE_PRICE_PRACTICE</code>, <code>STRIPE_PRICE_FIRM</code> in <code>.env</code>.
-        </div>
-      )}
-
+    <>
       {/* Current plan banner */}
-      {status && (
-        <div className="panel" style={{ marginBottom: 20 }}>
-          <div className="panel-head">
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <CreditCard size={20} color="var(--green)" />
-              <span style={{ fontWeight: 800, fontSize: "1rem" }}>Current subscription</span>
-            </div>
-            {status.stripeCustomerId && (
-              <button
-                className="ghost small"
-                onClick={handlePortal}
-                disabled={portalLoading}
-              >
-                {portalLoading ? "Redirecting…" : "Manage billing"}
-              </button>
-            )}
+      <section className="panel tier1-section">
+        <div className="panel-head">
+          <div>
+            <p className="eyebrow">Current subscription</p>
+            <h3 style={{ margin: 0 }}>
+              {status?.plans?.[currentPlan]?.name ?? "Free trial"}
+              {status?.plans?.[currentPlan]?.priceCents
+                ? <span style={{ fontSize: "1rem", fontWeight: 400, color: "var(--muted)", marginLeft: 10 }}>R {((status.plans[currentPlan].priceCents) / 100).toLocaleString("en-ZA")}/month</span>
+                : null}
+            </h3>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 700, fontSize: "1.1rem", textTransform: "capitalize" }}>
-              {PLAN_META[currentPlan]?.label ?? currentPlan}
-            </span>
-            <span className={statusBadgeClass(planStatus)} style={statusBadgeStyle(planStatus)}>
-              {statusLabel(planStatus)}
-            </span>
-            {planStatus === "trialing" && status.trialEndsAt && (
-              <span style={{ color: "var(--muted)", fontSize: "0.87rem" }}>
-                Trial ends {fmtDate(status.trialEndsAt)}
-              </span>
-            )}
-            {planStatus === "active" && status.currentPeriodEnd && (
-              <span style={{ color: "var(--muted)", fontSize: "0.87rem" }}>
-                {status.cancelAtPeriodEnd
-                  ? `Cancels ${fmtDate(status.currentPeriodEnd)}`
-                  : `Renews ${fmtDate(status.currentPeriodEnd)}`}
-              </span>
-            )}
+          <span className="pill" style={{ background: `${statusStyle.colour}22`, color: statusStyle.colour, fontWeight: 800 }}>
+            {statusStyle.label}
+          </span>
+        </div>
+        <div style={{ fontSize: "0.87rem", color: "var(--muted)" }}>
+          {status?.trialEndsAt && planStatus === "trialing" && (
+            <span>Trial ends: {new Date(status.trialEndsAt).toLocaleDateString("en-ZA")}</span>
+          )}
+          {status?.currentPeriodEnd && planStatus === "active" && (
+            <span>Next renewal: {new Date(status.currentPeriodEnd).toLocaleDateString("en-ZA")}</span>
+          )}
+        </div>
+        {planStatus === "past_due" && (
+          <div style={{ marginTop: 12, padding: "10px 14px", background: "#fdf0f2", border: "1px solid var(--rose)", borderRadius: 8, fontSize: "0.87rem", color: "var(--rose)" }}>
+            ⚠ Your last payment failed. Please re-subscribe to avoid service interruption.
           </div>
+        )}
+      </section>
+
+      {/* Yoco not configured warning */}
+      {!status?.yocoConfigured && (
+        <div style={{ padding: "14px 18px", background: "#fdf9ec", borderLeft: "4px solid var(--gold)", borderRadius: 8, marginBottom: 18, fontSize: "0.87rem" }}>
+          <strong>Yoco not configured</strong>
+          <p style={{ margin: "6px 0 0" }}>Add these to your <code>.env</code> file and restart the API:</p>
+          <pre style={{ margin: "8px 0 0", fontSize: "0.83rem", background: "#f8f4e4", padding: "8px 12px", borderRadius: 6 }}>{`YOCO_SECRET_KEY=sk_live_...\nYOCO_WEBHOOK_SECRET=whsec_...`}</pre>
+          <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>
+            Get your keys: <strong>Yoco App → Sales → Payment Gateways</strong>.
+            Register webhook at <strong>payments.yoco.com/api/webhooks</strong> → <code>/api/billing/webhook</code>.
+          </p>
         </div>
       )}
 
       {/* Plan cards */}
-      <p className="eyebrow" style={{ marginBottom: 12 }}>
-        Available plans
-      </p>
-      <div
-        className="metrics"
-        style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))", marginBottom: 24 }}
-      >
-        {(["solo", "practice", "firm"] as const).map((planKey) => {
-          const meta = PLAN_META[planKey];
-          const isCurrent = currentPlan === planKey;
-          return (
-            <div
-              key={planKey}
-              className="metric"
-              style={{
-                border: isCurrent ? "2px solid var(--green)" : "1px solid var(--line)",
-                borderRadius: 10,
-                padding: "22px 20px",
-                display: "flex",
-                flexDirection: "column",
-                gap: 14,
-                position: "relative",
-              }}
-            >
-              {meta.highlight && !isCurrent && (
-                <span
-                  className="pill"
-                  style={{
-                    position: "absolute",
-                    top: -12,
-                    left: "50%",
-                    transform: "translateX(-50%)",
-                    background: "var(--green)",
-                    color: "#fff",
-                    fontWeight: 800,
-                    fontSize: "0.75rem",
-                    padding: "3px 12px",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  Most popular
-                </span>
-              )}
-              {isCurrent && (
-                <span
-                  className="pill"
-                  style={{
-                    position: "absolute",
-                    top: -12,
-                    left: "50%",
-                    transform: "translateX(-50%)",
-                    background: "var(--green)",
-                    color: "#fff",
-                    fontWeight: 800,
-                    fontSize: "0.75rem",
-                    padding: "3px 12px",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  Current plan
-                </span>
-              )}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--green)" }}>
-                {meta.icon}
-                <span style={{ fontWeight: 800, fontSize: "1rem" }}>{meta.label}</span>
+      <section className="tier1-section">
+        <p className="eyebrow">Choose a plan — all prices in ZAR</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18 }}>
+          {(["solo", "practice", "firm"] as const).map(planKey => {
+            const planData = status?.plans?.[planKey];
+            const isCurrent = currentPlan === planKey && planStatus === "active";
+            return (
+              <div key={planKey} style={{
+                border: `2px solid ${isCurrent ? "var(--green)" : planKey === "practice" ? "var(--gold)" : "var(--line)"}`,
+                borderRadius: 12, padding: "22px 20px",
+                background: isCurrent ? "linear-gradient(135deg,#f0fdf4,#eaf1ed)" : "var(--panel)",
+                position: "relative"
+              }}>
+                {isCurrent && (
+                  <span style={{ position: "absolute", top: -12, left: "50%", transform: "translateX(-50%)", background: "var(--green)", color: "#fff", padding: "2px 14px", borderRadius: 999, fontSize: "0.78rem", fontWeight: 800, whiteSpace: "nowrap" }}>
+                    Current plan
+                  </span>
+                )}
+                {planKey === "practice" && !isCurrent && (
+                  <span style={{ position: "absolute", top: -12, left: "50%", transform: "translateX(-50%)", background: "var(--gold)", color: "#fff", padding: "2px 14px", borderRadius: 999, fontSize: "0.78rem", fontWeight: 800, whiteSpace: "nowrap" }}>
+                    Most popular
+                  </span>
+                )}
+                <h3 style={{ margin: "0 0 4px", color: "var(--green-dark)" }}>{planData?.name ?? planKey}</h3>
+                <div style={{ fontSize: "2rem", fontWeight: 900, color: "var(--green)", margin: "8px 0" }}>
+                  R {((planData?.priceCents ?? 0) / 100).toLocaleString("en-ZA")}
+                  <span style={{ fontSize: "0.9rem", fontWeight: 400, color: "var(--muted)" }}>/month</span>
+                </div>
+                <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 14 }}>
+                  {planKey === "solo" ? "Sole practitioner" : planKey === "practice" ? "Up to 5 attorneys" : "Unlimited users"} · ZAR incl. VAT
+                </p>
+                <ul style={{ listStyle: "none", padding: 0, margin: "0 0 18px", display: "grid", gap: 6 }}>
+                  {(PLAN_FEATURES[planKey] ?? []).map(f => (
+                    <li key={f} style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: "0.85rem" }}>
+                      <CheckCircle2 size={14} style={{ color: "var(--green)", flexShrink: 0, marginTop: 2 }} />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                {isCurrent ? (
+                  <button className="ghost small" style={{ width: "100%" }} disabled>Current plan</button>
+                ) : (
+                  <button className="primary" style={{ width: "100%" }}
+                    disabled={!status?.yocoConfigured || checkingOut === planKey}
+                    onClick={() => handleSubscribe(planKey)}>
+                    <CreditCard size={16} />
+                    {checkingOut === planKey ? "Opening Yoco..." : `Subscribe — R ${((planData?.priceCents ?? 0) / 100).toLocaleString("en-ZA")}/mo`}
+                  </button>
+                )}
               </div>
-              <div>
-                <span style={{ fontWeight: 900, fontSize: "1.4rem" }}>{meta.price}</span>
-              </div>
-              <ul
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 6,
-                }}
-              >
-                {meta.features.map((f) => (
-                  <li
-                    key={f}
-                    style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "0.87rem" }}
-                  >
-                    <CheckCircle2 size={14} color="var(--green)" style={{ flexShrink: 0 }} />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-              {isCurrent ? (
-                <button className="ghost small" disabled style={{ opacity: 0.55 }}>
-                  Current plan
-                </button>
-              ) : (
-                <button
-                  className="primary small"
-                  onClick={() => handleSubscribe(planKey)}
-                  disabled={!!checkoutLoading || !stripeConfigured}
-                >
-                  {checkoutLoading === planKey ? "Redirecting…" : "Subscribe"}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Manage billing button (for existing customers without banner) */}
-      {status?.stripeCustomerId && (
-        <div style={{ marginBottom: 20 }}>
-          <button className="ghost" onClick={handlePortal} disabled={portalLoading}>
-            <CreditCard size={16} />
-            {portalLoading ? "Redirecting…" : "Manage billing & invoices"}
-          </button>
+            );
+          })}
         </div>
+      </section>
+
+      {planStatus === "active" && (
+        <section className="tier1-section panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <strong>Manage payments</strong>
+            <p style={{ margin: "4px 0 0", fontSize: "0.87rem", color: "var(--muted)" }}>View history, update card or cancel via the Yoco dashboard.</p>
+          </div>
+          <a href="https://payments.yoco.com/" target="_blank" rel="noreferrer noopener" className="ghost small" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+            <ExternalLink size={14} /> Yoco dashboard
+          </a>
+        </section>
       )}
 
-      {/* Stripe security notice */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 10,
-          color: "var(--muted)",
-          fontSize: "0.83rem",
-          borderTop: "1px solid var(--line)",
-          paddingTop: 16,
-        }}
-      >
-        <Shield size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "14px 18px", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, fontSize: "0.83rem", color: "var(--muted)" }}>
+        <Shield size={16} style={{ color: "var(--green)", flexShrink: 0, marginTop: 1 }} />
         <span>
-          Payments are securely processed by Stripe. LawPath SA never stores card details. Pricing
-          in ZAR including VAT.
+          Payments processed by <strong>Yoco</strong> — South Africa's leading payment gateway. LawPath SA never stores card details.
+          All amounts in ZAR including VAT. Yoco is PCI-DSS compliant and regulated by the SARB.
         </span>
       </div>
-    </div>
+    </>
   );
 }
