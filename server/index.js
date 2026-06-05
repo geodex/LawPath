@@ -1525,8 +1525,8 @@ app.post("/api/popia/dsr", authMiddleware, async (req, res, next) => {
     return res.status(400).json({ error: "Request type, requestor name, email and description are required." });
   try {
     const result = await pool.query(
-      `insert into popia_dsr_requests (tenant_id, request_type, requestor_name, requestor_email, description)
-       values ($1,$2,$3,$4,$5) returning *`,
+      `insert into popia_dsr_requests (tenant_id, request_type, requestor_name, requestor_email, description, due_at)
+       values ($1,$2,$3,$4,$5, now() + interval '30 days') returning *`,
       [req.user.tenantId, requestType, requestorName, requestorEmail.toLowerCase(), description]
     );
     res.status(201).json({ request: popiaDsrFromRow(result.rows[0]) });

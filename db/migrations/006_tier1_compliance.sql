@@ -182,7 +182,7 @@ create table if not exists popia_dsr_requests (
   description         text not null,
   status              text not null default 'Received' check (status in ('Received','In Progress','Completed','Denied','Escalated')),
   received_at         timestamptz not null default now(),
-  due_at              timestamptz generated always as (received_at + interval '30 days') stored,
+  due_at              timestamptz,
   completed_at        timestamptz,
   response_notes      text,
   assigned_to         uuid references users(id),
