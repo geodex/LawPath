@@ -56,6 +56,8 @@ import { LegalResearchDB } from "./LegalResearchDB";
 import { ESignature } from "./ESignature";
 import { AgentNetwork } from "./AgentNetwork";
 import { PracticeAnalytics } from "./PracticeAnalytics";
+import { StaffManagement } from "./StaffManagement";
+import { StripeBilling } from "./StripeBilling";
 
 const nav: NavItem[] = [
   { key: "overview", label: "Overview", icon: Home },
@@ -77,6 +79,8 @@ const nav: NavItem[] = [
   { key: "esignature", label: "e-Signature", icon: LockKeyhole },
   { key: "agents", label: "Agent Network", icon: UsersRound },
   { key: "analytics", label: "Analytics", icon: TrendingUp },
+  { key: "staff", label: "Staff", icon: Users },
+  { key: "billing-portal", label: "Billing", icon: CircleDollarSign },
   { key: "booking", label: "Bookings", icon: CalendarDays },
   { key: "portal", label: "Portal", icon: UsersRound },
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
@@ -103,6 +107,8 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   esignature: "drafting",
   agents: "portal",
   analytics: "billing",
+  staff: "general",
+  "billing-portal": "billing",
   booking: "secretary",
   portal: "portal",
   "training-guide": "research",
@@ -695,6 +701,17 @@ export function App() {
             log={log}
             showToast={showToast}
           />
+        )}
+        {activeView === "staff" && (
+          <StaffManagement
+            tenantId={authUser.tenantId || ""}
+            currentUserId={authUser.id}
+            currentUserRole={authUser.role}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "billing-portal" && (
+          <StripeBilling showToast={showToast} />
         )}
         {activeView === "booking" && <Booking appointments={appointments} setAppointments={setAppointments} log={log} />}
         {activeView === "portal" && <Portal matters={matters} setMatters={setMatters} portalMode={portalMode} setPortalMode={setPortalMode} log={log} />}

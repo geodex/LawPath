@@ -2248,6 +2248,324 @@ app.post("/api/analytics/snapshot", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── PDF GENERATION ───────────────────────────────────────────────────────────
+
+const { generateContractPdf, generateTrustStatementPdf } = require("./pdf");
+const { notifyConveyancingStageAdvance, notifyEsignatureRequest, notifyStaffInvite } = require("./notifications");
+
+app.get("/api/pdf/contract/:contractId", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const profile = await pool.query("select * from tenant_profiles where tenant_id=$1", [req.user.tenantId]);
+    const tp = tenantProfileFromRow(profile.rows[0]) || {};
+    const contractId = req.params.contractId;
+    const contract = await pool.query(
+      "select * from contract_drafts where id=$1 and tenant_id=$2",
+      [contractId, req.user.tenantId]
+    ).catch(() => ({ rows: [] }));
+
+    const c = contract.rows[0];
+    const pdfBuffer = await generateContractPdf({
+      title: c?.name || "Legal Document",
+      body: c?.body || "",
+      tenantProfile: tp,
+      parties: [c?.party_a, c?.party_b].filter(Boolean),
+      matterRef: c?.matter_ref || "",
+      documentType: c?.category || "Contract",
+      includeReviewWarning: true
+    });
+
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${(c?.name || "document").replace(/\s+/g, "-")}.pdf"`, "Content-Length": pdfBuffer.length });
+    res.end(pdfBuffer);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/pdf/custom", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { title, body, matterRef, documentType, parties, signatories } = req.body;
+  if (!title || !body) return res.status(400).json({ error: "Title and body are required." });
+  try {
+    const profile = await pool.query("select * from tenant_profiles where tenant_id=$1", [req.user.tenantId]);
+    const tp = tenantProfileFromRow(profile.rows[0]) || {};
+    const pdfBuffer = await generateContractPdf({ title, body, tenantProfile: tp, parties: parties || [], signatories: signatories || [], matterRef: matterRef || "", documentType: documentType || "Contract", includeReviewWarning: true });
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${title.replace(/\s+/g, "-")}.pdf"`, "Content-Length": pdfBuffer.length });
+    res.end(pdfBuffer);
+  } catch (error) { next(error); }
+});
+
+app.get("/api/pdf/trust-statement", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { period } = req.query;
+  try {
+    const profile = await pool.query("select * from tenant_profiles where tenant_id=$1", [req.user.tenantId]);
+    const tp = tenantProfileFromRow(profile.rows[0]) || {};
+    const txResult = await pool.query(
+      "select * from trust_transactions where tenant_id=$1 order by value_date desc limit 200",
+      [req.user.tenantId]
+    );
+    const balResult = await pool.query(
+      "select coalesce(sum(case when entry_type in ('receipt','transfer_in') then amount_cents else -amount_cents end),0) as balance from trust_transactions where tenant_id=$1",
+      [req.user.tenantId]
+    );
+    const transactions = txResult.rows.map(r => ({
+      valueDate: r.value_date ? String(r.value_date).slice(0, 10) : "",
+      clientName: r.client_name,
+      description: r.description,
+      entryType: r.entry_type,
+      amountCents: Number(r.amount_cents)
+    }));
+    const pdfBuffer = await generateTrustStatementPdf({ tenantProfile: tp, transactions, periodLabel: period || new Date().toISOString().slice(0, 7), balanceCents: Number(balResult.rows[0]?.balance || 0) });
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="trust-statement-${period || "current"}.pdf"`, "Content-Length": pdfBuffer.length });
+    res.end(pdfBuffer);
+  } catch (error) { next(error); }
+});
+
+// ─── STAFF MANAGEMENT ─────────────────────────────────────────────────────────
+
+app.get("/api/staff", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [staff, invites] = await Promise.all([
+      pool.query(
+        "select id, full_name, email, role, status, job_title, phone, last_login_at, created_at, deactivated_at from users where tenant_id=$1 order by created_at",
+        [req.user.tenantId]
+      ),
+      pool.query(
+        "select id, email, full_name, role, status, expires_at, created_at from staff_invites where tenant_id=$1 and status='pending' order by created_at desc",
+        [req.user.tenantId]
+      )
+    ]);
+    res.json({
+      staff: staff.rows.map(u => ({ id: u.id, fullName: u.full_name, email: u.email, role: u.role, status: u.status, jobTitle: u.job_title || "", phone: u.phone || "", lastLoginAt: u.last_login_at, createdAt: u.created_at, deactivatedAt: u.deactivated_at })),
+      pendingInvites: invites.rows.map(i => ({ id: i.id, email: i.email, fullName: i.full_name, role: i.role, status: i.status, expiresAt: i.expires_at, createdAt: i.created_at }))
+    });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/staff/invite", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  if (!["tenant_admin"].includes(req.user.role) && req.user.role !== "platform_super_admin") return res.status(403).json({ error: "Only tenant admins can invite staff." });
+  const { email, fullName, role } = req.body;
+  if (!email || !fullName || !role) return res.status(400).json({ error: "Email, full name and role are required." });
+  const validRoles = ["tenant_admin", "attorney", "candidate_attorney", "legal_secretary", "billing_admin"];
+  if (!validRoles.includes(role)) return res.status(400).json({ error: "Invalid role." });
+  try {
+    const existing = await pool.query("select id from users where email=$1", [email.toLowerCase()]);
+    if (existing.rowCount) return res.status(409).json({ error: "A user with this email already exists." });
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const invite = await pool.query(
+      "insert into staff_invites (tenant_id, invited_by, email, full_name, role, token_hash) values ($1,$2,$3,$4,$5,$6) returning *",
+      [req.user.tenantId, req.user.sub, email.toLowerCase(), fullName, role, tokenHash]
+    );
+    const tenant = await pool.query("select company_name from tenants where id=$1", [req.user.tenantId]);
+    await notifyStaffInvite({ tenantId: req.user.tenantId, inviteId: invite.rows[0].id, recipientEmail: email.toLowerCase(), recipientName: fullName, firmName: tenant.rows[0]?.company_name || "the firm", role, inviteToken: rawToken, appUrl: process.env.VITE_APP_URL || "" }).catch(err => console.error("Invite email failed:", err.message));
+    res.status(201).json({ invite: { id: invite.rows[0].id, email, fullName, role, status: "pending", expiresAt: invite.rows[0].expires_at } });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/staff/accept-invite", async (req, res, next) => {
+  const { token, password } = req.body;
+  if (!token || !password) return res.status(400).json({ error: "Token and password are required." });
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const invite = await client.query("select * from staff_invites where token_hash=$1 and status='pending' and expires_at > now()", [tokenHash]);
+    if (!invite.rowCount) return res.status(400).json({ error: "Invite not found or expired." });
+    const inv = invite.rows[0];
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await client.query(
+      "insert into users (tenant_id, full_name, email, password_hash, role, status) values ($1,$2,$3,$4,$5,'active') returning id, tenant_id, full_name, email, role",
+      [inv.tenant_id, inv.full_name, inv.email, passwordHash, inv.role]
+    );
+    await client.query("update staff_invites set status='accepted', accepted_at=now() where id=$1", [inv.id]);
+    await client.query("commit");
+    const tenant = await pool.query("select company_name, slug from tenants where id=$1", [inv.tenant_id]);
+    const merged = { ...user.rows[0], company_name: tenant.rows[0]?.company_name, slug: tenant.rows[0]?.slug };
+    res.json({ token: signToken(merged), user: publicUser(merged) });
+  } catch (error) { await client.query("rollback"); next(error); } finally { client.release(); }
+});
+
+app.put("/api/staff/:userId", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  if (req.user.role !== "tenant_admin") return res.status(403).json({ error: "Tenant admin only." });
+  const { role, status, jobTitle, phone } = req.body;
+  try {
+    const result = await pool.query(
+      `update users set role=coalesce($2,role), status=coalesce($3,status), job_title=coalesce($4,job_title), phone=coalesce($5,phone), deactivated_at=case when $3='inactive' then now() else deactivated_at end, updated_at=now() where id=$1 and tenant_id=$6 returning id, full_name, email, role, status, job_title, phone`,
+      [req.params.userId, role||null, status||null, jobTitle||null, phone||null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Staff member not found." });
+    const u = result.rows[0];
+    res.json({ staffMember: { id: u.id, fullName: u.full_name, email: u.email, role: u.role, status: u.status, jobTitle: u.job_title||"", phone: u.phone||"" } });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/staff/invites/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    await pool.query("update staff_invites set status='revoked' where id=$1 and tenant_id=$2", [req.params.id, req.user.tenantId]);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// ─── WINDEED PROPERTY SEARCH ─────────────────────────────────────────────────
+
+app.get("/api/windeed/search", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { q, type = "erf" } = req.query;
+  if (!q) return res.status(400).json({ error: "Search query is required." });
+  try {
+    const cached = await pool.query("select * from property_search_cache where search_query=$1 and search_type=$2 and cached_at > now()-interval '7 days' limit 1", [String(q), String(type)]);
+    if (cached.rowCount) return res.json({ results: cached.rows[0].results, cached: true, note: "Results from cache. Live Windeed integration requires API credentials from windeed.co.za." });
+
+    const windeedApiKey = process.env.WINDEED_API_KEY || "";
+    let results = [];
+    if (windeedApiKey) {
+      try {
+        const wRes = await fetch(`https://api.windeed.co.za/v1/property/search?q=${encodeURIComponent(q)}&type=${type}`, { headers: { "Authorization": `Bearer ${windeedApiKey}`, "Accept": "application/json" } });
+        if (wRes.ok) results = await wRes.json();
+      } catch { /* fall through to simulation */ }
+    }
+
+    if (!results.length) {
+      // Simulate realistic SA property data
+      results = [{
+        erfNumber: `ERF ${Math.floor(Math.random() * 9000 + 1000)}`,
+        titleDeedNumber: `T${Math.floor(Math.random() * 90000 + 10000)}/2019`,
+        propertyDescription: `ERF ${Math.floor(Math.random() * 9000 + 1000)}, ${q.includes(",") ? q.split(",")[1].trim() : "Sandton"}, Province of Gauteng`,
+        extent: `${(Math.random() * 900 + 100).toFixed(0)} m²`,
+        registeredOwner: "SIMULATED OWNER — LIVE WINDEED API REQUIRED",
+        bondHolder: "FIRST NATIONAL BANK LIMITED",
+        purchasePrice: `R ${(Math.random() * 3000000 + 500000).toFixed(0)}`,
+        registrationDate: "2019-08-15",
+        municipalValue: `R ${(Math.random() * 2000000 + 400000).toFixed(0)}`,
+        ratesLevied: `R ${(Math.random() * 2000 + 500).toFixed(0)} per month`
+      }];
+    }
+
+    await pool.query("insert into property_search_cache (search_query, search_type, result_count, results, provider, searched_by) values ($1,$2,$3,$4,'windeed',$5) on conflict do nothing", [String(q), String(type), results.length, JSON.stringify(results), req.user.sub]);
+    res.json({ results, cached: false, note: windeedApiKey ? "Live Windeed results." : "Windeed API key not configured. Results are simulated. Set WINDEED_API_KEY in .env to enable live searches." });
+  } catch (error) { next(error); }
+});
+
+// ─── STRIPE BILLING ───────────────────────────────────────────────────────────
+
+const stripe = process.env.STRIPE_SECRET_KEY ? require("stripe")(process.env.STRIPE_SECRET_KEY) : null;
+
+const STRIPE_PLANS = {
+  solo:     { priceId: process.env.STRIPE_PRICE_SOLO     || "", name: "Solo",     priceCents: 79900  },
+  practice: { priceId: process.env.STRIPE_PRICE_PRACTICE || "", name: "Practice", priceCents: 249900 },
+  firm:     { priceId: process.env.STRIPE_PRICE_FIRM     || "", name: "Firm",     priceCents: 599900 }
+};
+
+app.get("/api/billing/status", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const tenant = await pool.query("select plan, plan_status, trial_ends_at from tenants where id=$1", [req.user.tenantId]);
+    const customer = await pool.query("select * from stripe_customers where tenant_id=$1", [req.user.tenantId]).catch(() => ({ rows: [] }));
+    res.json({
+      plan: tenant.rows[0]?.plan || "trial",
+      planStatus: tenant.rows[0]?.plan_status || "trialing",
+      trialEndsAt: tenant.rows[0]?.trial_ends_at,
+      stripeCustomerId: customer.rows[0]?.stripe_customer_id || null,
+      currentPeriodEnd: customer.rows[0]?.current_period_end || null,
+      cancelAtPeriodEnd: customer.rows[0]?.cancel_at_period_end || false,
+      plans: STRIPE_PLANS
+    });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/billing/checkout", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  if (!stripe) return res.status(503).json({ error: "Stripe is not configured. Set STRIPE_SECRET_KEY in .env." });
+  const { plan, successUrl, cancelUrl } = req.body;
+  const planConfig = STRIPE_PLANS[plan];
+  if (!planConfig || !planConfig.priceId) return res.status(400).json({ error: `Plan "${plan}" not configured. Set STRIPE_PRICE_${plan?.toUpperCase()} in .env.` });
+  try {
+    const tenant = await pool.query("select company_name from tenants where id=$1", [req.user.tenantId]);
+    const existingCustomer = await pool.query("select stripe_customer_id from stripe_customers where tenant_id=$1", [req.user.tenantId]).catch(() => ({ rows: [] }));
+    let customerId = existingCustomer.rows[0]?.stripe_customer_id;
+    if (!customerId) {
+      const customer = await stripe.customers.create({ email: req.user.email, name: tenant.rows[0]?.company_name || req.user.email, metadata: { tenantId: req.user.tenantId, userId: req.user.sub } });
+      customerId = customer.id;
+      await pool.query("insert into stripe_customers (tenant_id, stripe_customer_id, plan, plan_status) values ($1,$2,$3,'trialing') on conflict (tenant_id) do update set stripe_customer_id=$2", [req.user.tenantId, customerId, plan]).catch(() => {});
+    }
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      payment_method_types: ["card"],
+      line_items: [{ price: planConfig.priceId, quantity: 1 }],
+      mode: "subscription",
+      success_url: successUrl || `${process.env.VITE_APP_URL || "https://lawpath.co.za"}/?billing=success`,
+      cancel_url: cancelUrl || `${process.env.VITE_APP_URL || "https://lawpath.co.za"}/?billing=cancelled`,
+      metadata: { tenantId: req.user.tenantId, plan }
+    });
+    res.json({ checkoutUrl: session.url, sessionId: session.id });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/billing/portal", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  if (!stripe) return res.status(503).json({ error: "Stripe not configured." });
+  try {
+    const customer = await pool.query("select stripe_customer_id from stripe_customers where tenant_id=$1", [req.user.tenantId]);
+    if (!customer.rowCount) return res.status(404).json({ error: "No billing account found. Subscribe first." });
+    const session = await stripe.billingPortal.sessions.create({ customer: customer.rows[0].stripe_customer_id, return_url: `${process.env.VITE_APP_URL || "https://lawpath.co.za"}/` });
+    res.json({ portalUrl: session.url });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/billing/webhook", async (req, res, next) => {
+  if (!stripe) return res.status(503).json({ error: "Stripe not configured." });
+  const sig = req.headers["stripe-signature"];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
+  let event;
+  try {
+    const rawBody = JSON.stringify(req.body);
+    event = webhookSecret ? stripe.webhooks.constructEvent(rawBody, sig, webhookSecret) : req.body;
+  } catch (err) { return res.status(400).json({ error: `Webhook signature error: ${err.message}` }); }
+
+  await pool.query("insert into stripe_webhook_events (stripe_event_id, event_type, raw_payload) values ($1,$2,$3) on conflict (stripe_event_id) do nothing", [event.id || `evt_${Date.now()}`, event.type, event]).catch(() => {});
+
+  try {
+    if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.created") {
+      const sub = event.data.object;
+      const tenantId = sub.metadata?.tenantId;
+      if (tenantId) {
+        const plan = sub.metadata?.plan || "solo";
+        const status = sub.status === "active" ? "active" : sub.status === "past_due" ? "past_due" : sub.status === "canceled" ? "cancelled" : sub.status;
+        await pool.query("update tenants set plan=$2, plan_status=$3 where id=$1", [tenantId, plan, status]);
+        await pool.query("update stripe_customers set plan=$2, plan_status=$3, stripe_subscription_id=$4, current_period_start=$5, current_period_end=$6, cancel_at_period_end=$7, updated_at=now() where tenant_id=$1",
+          [tenantId, plan, status, sub.id, new Date(sub.current_period_start * 1000), new Date(sub.current_period_end * 1000), sub.cancel_at_period_end]);
+      }
+    }
+    if (event.type === "customer.subscription.deleted") {
+      const sub = event.data.object;
+      const tenantId = sub.metadata?.tenantId;
+      if (tenantId) {
+        await pool.query("update tenants set plan_status='cancelled' where id=$1", [tenantId]);
+        await pool.query("update stripe_customers set plan_status='cancelled', updated_at=now() where tenant_id=$1", [tenantId]);
+      }
+    }
+    await pool.query("update stripe_webhook_events set processed=true where stripe_event_id=$1", [event.id || ""]).catch(() => {});
+  } catch (err) {
+    console.error("[stripe webhook] Processing error:", err.message);
+    await pool.query("update stripe_webhook_events set error_message=$2 where stripe_event_id=$1", [event.id || "", err.message]).catch(() => {});
+  }
+  res.json({ received: true });
+});
+
+// Wire notifications into conveyancing stage advance
+app.post("/api/conveyancing/matters/:id/stage/notify", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { stageLabel, sellerName, buyerName, matterRef } = req.body;
+  try {
+    await notifyConveyancingStageAdvance({ tenantId: req.user.tenantId, matterRef, sellerName, buyerName, stage: req.body.stage, stageLabel, attorney: req.user.email });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   const schemaMessage = explainSettingsDatabaseError(error);

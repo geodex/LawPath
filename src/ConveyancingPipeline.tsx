@@ -69,6 +69,9 @@ export function ConveyancingPipeline({
   const [priceInput, setPriceInput] = useState("");
   const [calcDuty, setCalcDuty] = useState(0);
   const [calcFee, setCalcFee] = useState(0);
+  const [windeedResults, setWindeedResults] = useState<any[]>([]);
+  const [windeedQuery, setWindeedQuery] = useState("");
+  const [windeedLoading, setWindeedLoading] = useState(false);
 
   const selected = matters.find(m => m.id === selectedId) ?? null;
   const totalFees = matters.reduce((s, m) => s + m.conveyancingFeeCents + m.vatOnFeeCents, 0);
@@ -138,6 +141,22 @@ export function ConveyancingPipeline({
     }
     setShowAdvance(false);
     setAdvanceNotes("");
+  }
+
+  async function handleWindeedSearch() {
+    if (!windeedQuery.trim()) return;
+    setWindeedLoading(true);
+    try {
+      const token = localStorage.getItem("lawpath.auth.token") || "";
+      const res = await fetch(`/api/windeed/search?q=${encodeURIComponent(windeedQuery)}&type=erf`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      setWindeedResults(data.results || []);
+      if (data.note) showToast("info", "Windeed", data.note);
+    } catch {
+      showToast("error", "Search failed", "Could not search property register.");
+    } finally {
+      setWindeedLoading(false);
+    }
   }
 
   async function handleClearanceUpdate(field: string, value: string) {
@@ -333,6 +352,23 @@ export function ConveyancingPipeline({
                     </div>
                     <p className="transfer-duty-note">Transfer duty scale per SARS GN R234 (2024/2025). Conveyancing fee is indicative only — prescribed tariff applies. Attorney review required before issuing account to client.</p>
                   </div>
+
+                  {/* Windeed property search */}
+                  <h4 style={{ margin: "20px 0 10px" }}>Property search (Windeed)</h4>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                    <input value={windeedQuery} onChange={e => setWindeedQuery(e.target.value)} placeholder="Erf number, title deed or street address" style={{ flex: 1, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8 }} onKeyDown={e => e.key === "Enter" && handleWindeedSearch()} />
+                    <button className="primary small" onClick={handleWindeedSearch} disabled={windeedLoading}>{windeedLoading ? "Searching..." : "Search"}</button>
+                  </div>
+                  {windeedResults.map((r, i) => (
+                    <div key={i} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "12px 16px", marginBottom: 8, fontSize: "0.87rem" }}>
+                      <strong>{r.propertyDescription}</strong>
+                      <div style={{ color: "var(--muted)", marginTop: 4 }}>
+                        <span>ERF: {r.erfNumber}</span> · <span>Title deed: {r.titleDeedNumber}</span>
+                      </div>
+                      <div style={{ marginTop: 4 }}>Owner: {r.registeredOwner} · Bond: {r.bondHolder}</div>
+                      <div style={{ marginTop: 4 }}>Value: {r.municipalValue} · Rates: {r.ratesLevied}</div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

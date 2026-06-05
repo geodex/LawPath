@@ -467,7 +467,8 @@ export type ViewKey =
   | "booking" | "portal" | "training-guide" | "settings"
   | "trust" | "fica" | "time" | "popia"
   | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting"
-  | "research-db" | "esignature" | "agents" | "analytics";
+  | "research-db" | "esignature" | "agents" | "analytics"
+  | "staff" | "billing-portal";
 
 export type LegalCorpusSource = {
   id: string;

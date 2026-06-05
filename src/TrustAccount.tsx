@@ -38,6 +38,10 @@ export function TrustAccount({
   const [valueDate, setValueDate] = useState(today());
   const [entryLoading, setEntryLoading] = useState(false);
 
+  // CSV import state
+  const [showCsvImport, setShowCsvImport] = useState(false);
+  const [csvPreview, setCsvPreview] = useState<Array<{ valueDate: string; description: string; clientName: string; entryType: "receipt" | "payment"; amountCents: number; reference: string; }>>([]);
+
   // Reconciliation form state
   const [showReconForm, setShowReconForm] = useState(false);
   const [periodMonth, setPeriodMonth] = useState("");
@@ -142,6 +146,85 @@ export function TrustAccount({
     }
   }
 
+  function parseCsvDate(dateStr: string): string {
+    if (!dateStr) return today();
+    const clean = dateStr.trim().replace(/["']/g, "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(clean)) {
+      const [d, m, y] = clean.split("/");
+      return `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+    }
+    if (/^\d{2}-\d{2}-\d{4}$/.test(clean)) {
+      const [d, m, y] = clean.split("-");
+      return `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+    }
+    return today();
+  }
+
+  async function handleCsvImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.split("\n").filter(l => l.trim());
+    if (lines.length < 2) { showToast("error", "Empty file", "CSV has no data rows."); return; }
+
+    // Auto-detect columns from header
+    const header = lines[0].toLowerCase().replace(/["']/g, "").split(",").map(h => h.trim());
+    const dateCol = header.findIndex(h => h.includes("date") || h.includes("datum"));
+    const descCol = header.findIndex(h => h.includes("desc") || h.includes("narrative") || h.includes("details") || h.includes("omskrywing"));
+    const creditCol = header.findIndex(h => h.includes("credit") || h.includes("deposit") || h.includes("inflow"));
+    const debitCol = header.findIndex(h => h.includes("debit") || h.includes("payment") || h.includes("outflow"));
+    const amtCol = header.findIndex(h => h === "amount" || h === "bedrag" || h.includes("amount"));
+    const refCol = header.findIndex(h => h.includes("ref") || h.includes("cheque") || h.includes("number"));
+
+    const parsed: typeof csvPreview = [];
+    for (const line of lines.slice(1)) {
+      const cols = line.split(",").map(c => c.trim().replace(/["']/g, ""));
+      if (cols.length < 2) continue;
+
+      const dateStr = dateCol >= 0 ? cols[dateCol] : cols[0];
+      const desc = descCol >= 0 ? cols[descCol] : cols[1] || "Bank transaction";
+      const ref = refCol >= 0 ? (cols[refCol] || "") : "";
+
+      let amountCents = 0;
+      let entryType: "receipt" | "payment" = "receipt";
+
+      if (creditCol >= 0 && debitCol >= 0) {
+        const credit = parseFloat(cols[creditCol].replace(/[^\d.]/g, "")) || 0;
+        const debit = parseFloat(cols[debitCol].replace(/[^\d.]/g, "")) || 0;
+        if (credit > 0) { amountCents = Math.round(credit * 100); entryType = "receipt"; }
+        else if (debit > 0) { amountCents = Math.round(debit * 100); entryType = "payment"; }
+      } else if (amtCol >= 0) {
+        const raw = parseFloat(cols[amtCol].replace(/[^\d.-]/g, "")) || 0;
+        amountCents = Math.round(Math.abs(raw) * 100);
+        entryType = raw < 0 ? "payment" : "receipt";
+      }
+
+      if (amountCents === 0) continue;
+      parsed.push({ valueDate: parseCsvDate(dateStr), description: desc, clientName: "CSV Import", entryType, amountCents, reference: ref });
+    }
+
+    setCsvPreview(parsed);
+    showToast("info", "CSV parsed", `${parsed.length} transactions ready to import.`);
+  }
+
+  async function importCsvTransactions() {
+    let imported = 0;
+    for (const row of csvPreview) {
+      try {
+        await createTrustTransaction(row);
+        imported++;
+      } catch {
+        setTransactions(prev => [{ id: uid("TT"), clientName: row.clientName, description: row.description, reference: row.reference, entryType: row.entryType, amountCents: row.amountCents, runningBalanceCents: 0, valueDate: row.valueDate, reconciled: false }, ...prev]);
+        imported++;
+      }
+    }
+    showToast("success", "Imported", `${imported} transactions imported.`);
+    log(`Bank CSV import: ${imported} transactions`);
+    setCsvPreview([]);
+    setShowCsvImport(false);
+  }
+
   function reconStatusClass(status: TrustReconciliation["status"]) {
     if (status === "Draft") return "pill recon-status-draft";
     if (status === "Submitted") return "pill recon-status-submitted";
@@ -190,16 +273,56 @@ export function TrustAccount({
             <Scale size={16} />
             Trust Ledger
           </span>
-          <button
-            className="ghost small"
-            onClick={() => setShowEntryForm(v => !v)}
-            style={{ display: "flex", alignItems: "center", gap: 4 }}
-          >
-            <Plus size={14} />
-            Record trust entry
-            {showEntryForm ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              className="ghost small"
+              onClick={() => setShowEntryForm(v => !v)}
+              style={{ display: "flex", alignItems: "center", gap: 4 }}
+            >
+              <Plus size={14} />
+              Record trust entry
+              {showEntryForm ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+            <button
+              className="ghost small"
+              onClick={() => setShowCsvImport(v => !v)}
+              style={{ display: "flex", alignItems: "center", gap: 4 }}
+            >
+              Import bank statement (CSV)
+              {showCsvImport ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          </div>
         </div>
+
+        {showCsvImport && (
+          <div className="inline-form-toggle" style={{ marginTop: 12 }}>
+            <p className="eyebrow">Import bank statement CSV</p>
+            <p style={{ fontSize: "0.87rem", color: "var(--muted)", marginBottom: 12 }}>
+              Supported formats: FNB, ABSA, Standard Bank, Nedbank CSV exports.
+              Columns detected automatically. Dates must be in DD/MM/YYYY or YYYY-MM-DD format.
+            </p>
+            <input type="file" accept=".csv,.txt" onChange={handleCsvImport} style={{ marginBottom: 8 }} />
+            {csvPreview.length > 0 && (
+              <div>
+                <p style={{ fontWeight: 700, marginBottom: 8 }}>{csvPreview.length} transactions detected — preview:</p>
+                <div className="table">
+                  {csvPreview.slice(0, 5).map((row, i) => (
+                    <div key={i} className="row" style={{ gridTemplateColumns: "100px 1fr 1fr 100px" }}>
+                      <span>{row.valueDate}</span>
+                      <span>{row.description}</span>
+                      <span>{row.entryType}</span>
+                      <span style={{ color: row.entryType === "receipt" ? "var(--green)" : "var(--rose)", fontWeight: 700 }}>{(row.amountCents / 100).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  {csvPreview.length > 5 && <p style={{ fontSize: "0.82rem", color: "var(--muted)", padding: "6px 14px" }}>...and {csvPreview.length - 5} more</p>}
+                </div>
+                <button className="primary" style={{ marginTop: 10 }} onClick={importCsvTransactions}>
+                  Import {csvPreview.length} transactions
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {showEntryForm && (
           <div className="inline-form-toggle">

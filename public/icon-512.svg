@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#10241f"/>
+  <rect x="40" y="40" width="432" height="432" rx="56" fill="#1f6f5b"/>
+  <text x="256" y="312" font-family="Georgia, serif" font-size="192" font-weight="bold" fill="#f7c95f" text-anchor="middle">LP</text>
+  <text x="256" y="388" font-family="Arial, sans-serif" font-size="42" fill="rgba(248,251,246,0.7)" text-anchor="middle">SOUTH AFRICA</text>
+</svg>

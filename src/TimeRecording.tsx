@@ -87,6 +87,9 @@ export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log,
   // Tab filter
   const [activeTab, setActiveTab] = useState<"WIP" | "Billed" | "Written off">("WIP");
 
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   function handleStopAndLog() {
     setTimerRunning(false);
     const elapsed = Math.round(timerSeconds / 60);
@@ -411,9 +414,48 @@ export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log,
         ))}
       </div>
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 14px", background: "var(--green-dark)", color: "#f8fbf6", borderRadius: 8, marginBottom: 10 }}>
+          <span style={{ fontWeight: 700 }}>{selectedIds.size} selected — {money([...selectedIds].reduce((s, id) => s + (entries.find(e => e.id === id)?.amountCents || 0), 0))}</span>
+          <button className="small" style={{ background: "rgba(255,255,255,0.15)", color: "#f8fbf6", border: "none" }} onClick={async () => {
+            for (const id of selectedIds) {
+              const entry = entries.find(e => e.id === id);
+              if (entry && entry.status === "WIP") await changeStatus(entry, "Billed");
+            }
+            setSelectedIds(new Set());
+            showToast("success", "Bulk billed", `${selectedIds.size} entries marked as billed.`);
+          }}>Bill all selected</button>
+          <button className="small" style={{ background: "rgba(255,255,255,0.15)", color: "#f8fbf6", border: "none" }} onClick={() => setSelectedIds(new Set())}>Clear</button>
+          <button className="small" style={{ background: "rgba(255,255,255,0.15)", color: "#f8fbf6", border: "none" }} onClick={() => {
+            const fees = [...selectedIds].map(id => entries.find(e => e.id === id)).filter(Boolean);
+            const csv = ["Date,Client,Matter,Fee Earner,Description,Amount,VAT", ...fees.map(e => `${e!.entryDate},${e!.clientName},${e!.matterRef},${e!.feeEarnerName},"${e!.description}",${(e!.amountCents/100).toFixed(2)},${(e!.vatAmountCents/100).toFixed(2)}`)].join("\n");
+            const blob = new Blob([csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a"); a.href = url; a.download = "time-entries.csv"; a.click();
+            URL.revokeObjectURL(url);
+            showToast("success", "Exported", `${fees.length} entries exported to CSV.`);
+          }}>Export CSV</button>
+        </div>
+      )}
+
       {/* Entry table */}
       <div className="wip-table">
         <div className="wip-row" style={{ fontWeight: 600, fontSize: "0.8rem", opacity: 0.7 }}>
+          <span>
+            <input
+              type="checkbox"
+              checked={filteredEntries.length > 0 && filteredEntries.every(e => selectedIds.has(e.id))}
+              onChange={checked => {
+                if (checked.target.checked) {
+                  setSelectedIds(new Set(filteredEntries.map(e => e.id)));
+                } else {
+                  setSelectedIds(new Set());
+                }
+              }}
+              title="Select all"
+            />
+          </span>
           <span>Date</span>
           <span>Client</span>
           <span>Matter</span>
@@ -433,6 +475,20 @@ export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log,
         )}
         {filteredEntries.map(entry => (
           <div className="wip-row" key={entry.id}>
+            <span>
+              <input
+                type="checkbox"
+                checked={selectedIds.has(entry.id)}
+                onChange={e => {
+                  setSelectedIds(prev => {
+                    const next = new Set(prev);
+                    if (e.target.checked) next.add(entry.id);
+                    else next.delete(entry.id);
+                    return next;
+                  });
+                }}
+              />
+            </span>
             <span>{entry.entryDate}</span>
             <span>{entry.clientName}</span>
             <span>{entry.matterRef || "—"}</span>

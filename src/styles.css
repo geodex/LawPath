@@ -3635,3 +3635,100 @@ textarea {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
+
+/* ── DARK MODE ──────────────────────────────────────────────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #e8ede9;
+    --muted: #8fa898;
+    --line: #2a3a32;
+    --paper: #111916;
+    --panel: #182218;
+    --green: #2d9b7a;
+    --green-dark: #f7c95f;
+    --gold: #d4a21a;
+    --blue: #4a7fc1;
+    --rose: #c45f6d;
+    --shadow: 0 18px 45px rgba(0, 0, 0, 0.4);
+  }
+
+  body { background: var(--paper); color: var(--ink); }
+
+  .sidebar { background: #0d1510; }
+  .brand-mark { background: #f7c95f; }
+  .nav button { color: rgba(232, 237, 233, 0.65); }
+  .nav button.active, .nav button:hover { background: rgba(255,255,255,0.08); color: #e8ede9; }
+
+  .auth-card, .panel, .metric, .integration-card, .acct-provider-card,
+  .corpus-source-card, .sig-request-card, .agent-card, .conv-matter-card,
+  .lit-matter-card, .fica-client-card, .analytics-kpi { background: var(--panel); border-color: var(--line); }
+
+  .auth-tabs { background: #1e2e24; }
+  .auth-tabs button.active { background: var(--panel); }
+  .popia-tabs, .popia-tab.active { background: #1e2e24; }
+  .popia-tab.active { background: var(--panel); }
+
+  input, select, textarea { background: #1a2a1e; color: var(--ink); border-color: var(--line); }
+  input::placeholder, textarea::placeholder { color: var(--muted); }
+  input:focus, select:focus, textarea:focus { border-color: var(--green); outline: none; }
+
+  .table .row, .deadline-row, .court-date-row, .cost-order-row,
+  .fee-earner-row, .referral-row, .wip-row, .trust-entry,
+  .acct-export-log-row, .popia-ropa-row, .dsr-row { background: #1a2a1e; }
+
+  .row:nth-child(even), .table .row:nth-child(even) { background: #1e2e24; }
+
+  .section-86-notice { background: #1a2a12; border-color: var(--green); }
+  .fica-notice { background: #2a1218; border-color: var(--rose); }
+  .ecta-notice, .popia-notice, .cipc-notice, .acct-vat-notice { background: #12182a; border-color: var(--blue); }
+  .popia-breach-notice { background: #2a1218; border-color: var(--rose); }
+  .corpus-moat-notice, .doc-notice { background: #0f2018; border-color: var(--green); }
+  .wa-notice { background: #0f2018; border-color: #25d366; }
+  .strike-off-notice, .agent-notice { background: #2a2010; border-color: var(--gold); }
+
+  .ai-panel { background: var(--panel); border-color: var(--line); }
+  .ai-messages { background: #111916; }
+  .ai-message.assistant { background: #1a2a1e; }
+  .ai-message.user { background: #12182a; }
+
+  .public-hero { background: linear-gradient(90deg, rgba(17,25,22,0.97), rgba(17,25,22,0.85)), url("/assets/legal-workspace.png") center / cover; }
+  .public-proof span { background: rgba(24,34,24,0.86); border-color: var(--line); color: var(--green-dark); }
+
+  .draft-bill-panel, .citation-bundle, .pipeline-forecast { background: #0d1510; }
+  .timer-widget { background: #0d1510; }
+  .completion-certificate { background: #0f2018; border-color: var(--green); }
+  .inline-form-toggle { background: #111916; border-color: var(--line); }
+
+  .pill { background: #1e2e24; color: var(--ink); }
+  .recon-status-approved, .fica-status-compliant, .risk-low-pill, .time-status-wip, .lit-status-active { background: #0f3020; color: var(--green); }
+  .recon-status-submitted, .fica-status-in-progress, .time-status-billed, .dsr-type-badge, .lit-status-settled { background: #12182a; color: var(--blue); }
+  .fica-status-expired, .fica-status-rejected, .risk-high-pill, .risk-pep-pill, .time-status-written-off, .lit-status-struck-off { background: #2a1218; color: var(--rose); }
+  .risk-medium-pill, .time-status-on-hold, .lit-status-judgment, .severity-medium { background: #2a2010; color: var(--gold); }
+
+  .sig-canvas-wrapper canvas, .sig-typed-preview { background: #1a2a1e; }
+  .otp-input { background: #1a2a1e; color: var(--ink); border-color: var(--line); }
+
+  .wa-bubble-out { background: #0f3020; }
+  .wa-bubble-in { background: #1a2a1e; }
+  .wa-contact-item.selected { background: #0f3020; border-color: var(--green); }
+  .wa-contact-item:hover { background: #1a2a1e; }
+
+  .research-search-bar input { background: #1a2a1e; }
+  .research-search-bar input:focus { border-color: var(--green); }
+  .ai-research-summary { background: linear-gradient(135deg, #0f2018, #1a2a1e); border-color: var(--green); }
+  .corpus-doc-card:hover { border-color: var(--green); }
+  .corpus-tag-chip { background: #1e2e24; color: var(--green); }
+
+  .acct-provider-card.connected { border-color: var(--green); }
+  .acct-provider-icon { background: #1e2e24; }
+
+  .commission-note-box { background: #1a2a1e; border-color: var(--line); }
+  .performance-bar-track { background: var(--line); }
+
+  .topbar { border-bottom: 1px solid var(--line); }
+  .toast-success { background: #0f2018; }
+  .toast-error { background: #2a1218; }
+  .toast-info { background: #12182a; }
+}
