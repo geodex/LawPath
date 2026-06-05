@@ -32,6 +32,7 @@ import {
   Timer,
   UserCheck,
   UserPlus,
+  TrendingUp,
   Users,
   UsersRound,
   Vault,
@@ -40,7 +41,7 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
-import type { AccountingConnection, AccountingExportRecord, AiAgentKey, AiChatMessage, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, FicaClient, Invoice, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 import { FicaKyc } from "./FicaKyc";
 import { PopiaCompliance } from "./PopiaCompliance";
 import { TimeRecording } from "./TimeRecording";
@@ -51,6 +52,10 @@ import { WhatsAppComms } from "./WhatsAppComms";
 import { CipcSearch } from "./CipcSearch";
 import { DocumentIntelligence } from "./DocumentIntelligence";
 import { AccountingSync } from "./AccountingSync";
+import { LegalResearchDB } from "./LegalResearchDB";
+import { ESignature } from "./ESignature";
+import { AgentNetwork } from "./AgentNetwork";
+import { PracticeAnalytics } from "./PracticeAnalytics";
 
 const nav: NavItem[] = [
   { key: "overview", label: "Overview", icon: Home },
@@ -68,6 +73,10 @@ const nav: NavItem[] = [
   { key: "cipc", label: "CIPC Search", icon: Search },
   { key: "documents", label: "Doc Intelligence", icon: BadgeCheck },
   { key: "accounting", label: "Accounting", icon: CircleDollarSign },
+  { key: "research-db", label: "SA Case Law", icon: LibraryBig },
+  { key: "esignature", label: "e-Signature", icon: LockKeyhole },
+  { key: "agents", label: "Agent Network", icon: UsersRound },
+  { key: "analytics", label: "Analytics", icon: TrendingUp },
   { key: "booking", label: "Bookings", icon: CalendarDays },
   { key: "portal", label: "Portal", icon: UsersRound },
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
@@ -90,6 +99,10 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   cipc: "general",
   documents: "drafting",
   accounting: "billing",
+  "research-db": "research",
+  esignature: "drafting",
+  agents: "portal",
+  analytics: "billing",
   booking: "secretary",
   portal: "portal",
   "training-guide": "research",
@@ -236,6 +249,50 @@ export function App() {
     { id: "AC-004", provider: "csv_export", connected: true, lastSyncAt: "", syncStatus: "idle", errorMessage: "" }
   ]);
   const [accountingExportLog, setAccountingExportLog] = useState<AccountingExportRecord[]>([]);
+
+  // ─── Tier 3 state ──────────────────────────────────────────────────────────
+  const [corpusSources, setCorpusSources] = useState<LegalCorpusSource[]>([
+    { id: "CS-001", sourceName: "SAFLII — Southern African Legal Information Institute", sourceType: "case_law", courtOrBody: "All SA Courts", indexStatus: "indexed", documentCount: 184220, lastIndexedAt: "2026-06-04T02:00:00Z", isPlatformCorpus: true },
+    { id: "CS-002", sourceName: "South African Constitution, 1996", sourceType: "constitution", courtOrBody: "Parliament", indexStatus: "indexed", documentCount: 1, lastIndexedAt: "2026-01-01T00:00:00Z", isPlatformCorpus: true },
+    { id: "CS-003", sourceName: "Government Gazette — Acts of Parliament", sourceType: "legislation", courtOrBody: "Government Printer", indexStatus: "indexed", documentCount: 4812, lastIndexedAt: "2026-06-01T03:00:00Z", isPlatformCorpus: true },
+    { id: "CS-004", sourceName: "Legal Practice Council Rules & Directives", sourceType: "lpc_rules", courtOrBody: "Legal Practice Council", indexStatus: "indexed", documentCount: 48, lastIndexedAt: "2026-05-15T08:00:00Z", isPlatformCorpus: true },
+    { id: "CS-005", sourceName: "Tenant Firm Precedents", sourceType: "legislation", courtOrBody: "", indexStatus: "pending", documentCount: 0, lastIndexedAt: "", isPlatformCorpus: false }
+  ]);
+  const [corpusDocuments, setCorpusDocuments] = useState<LegalCorpusDocument[]>([
+    { id: "CD-001", sourceId: "CS-001", title: "Barkhuizen v Napier 2007 (5) SA 323 (CC)", citation: "[2007] ZACC 5", court: "Constitutional Court", decisionDate: "2007-04-04", summary: "The Constitutional Court held that contractual clauses that oust the jurisdiction of courts or limit access to courts must be tested against the Constitution.", sourceUrl: "http://www.saflii.org/za/cases/ZACC/2007/5.html", tags: ["contract law", "constitutional", "access to courts"], year: 2007 },
+    { id: "CD-002", sourceId: "CS-001", title: "Everfresh Market Virginia (Pty) Ltd v Shoprite Checkers (Pty) Ltd 2012 (1) SA 256 (CC)", citation: "[2011] ZACC 30", court: "Constitutional Court", decisionDate: "2011-11-17", summary: "The duty to negotiate in good faith in the context of lease renewals, and the interface between constitutional values and the law of contract.", sourceUrl: "http://www.saflii.org/za/cases/ZACC/2011/30.html", tags: ["contract law", "good faith", "lease"], year: 2011 },
+    { id: "CD-003", sourceId: "CS-001", title: "National Credit Regulator v Opperman 2013 (2) SA 1 (CC)", citation: "[2012] ZACC 29", court: "Constitutional Court", decisionDate: "2012-12-03", summary: "The National Credit Act and the right to equality — whether prescription runs during a credit agreement dispute.", sourceUrl: "http://www.saflii.org/za/cases/ZACC/2012/29.html", tags: ["NCA", "credit agreement", "prescription"], year: 2012 }
+  ]);
+  const [researchQueries, setResearchQueries] = useState<ResearchQuery[]>([]);
+  const [signatureRequests, setSignatureRequests] = useState<SignatureRequest[]>([
+    { id: "SR-001", documentTitle: "Offer to Purchase — Erf 1204 Sandton", documentType: "contract", matterRef: "M-1048/T", documentBody: "", status: "partially_signed", expiresAt: "2026-07-05T00:00:00Z", completedAt: "", signatories: [{ id: "SS-001", signatoryName: "Thabo Dlamini", signatoryEmail: "thabo@example.co.za", signatoryIdNumber: "8201015009087", role: "Seller", orderPosition: 1, status: "signed", signedAt: "2026-06-03T10:22:00Z", signatureMethod: "drawn" }, { id: "SS-002", signatoryName: "Nomsa Sithole", signatoryEmail: "nomsa@example.co.za", signatoryIdNumber: "8505125009083", role: "Buyer", orderPosition: 2, status: "pending", signedAt: "", signatureMethod: "" }], auditEvents: [{ id: "AE-001", eventType: "request_created", description: "Signature request created", ipAddress: "102.0.0.1", createdAt: "2026-06-03T09:00:00Z" }, { id: "AE-002", eventType: "otp_sent", description: "OTP sent to thabo@example.co.za", ipAddress: "102.0.0.1", createdAt: "2026-06-03T10:00:00Z" }, { id: "AE-003", eventType: "signed", description: "Thabo Dlamini signed using drawn signature", ipAddress: "102.0.0.1", createdAt: "2026-06-03T10:22:00Z" }] }
+  ]);
+  const [estateAgents, setEstateAgents] = useState<EstateAgent[]>([
+    { id: "EA-001", agentName: "Sandra Meyer", agencyName: "Pam Golding Properties", email: "sandra.meyer@pamgolding.co.za", phone: "+27824567890", ffcNumber: "FFC-123456", ppraRegistration: "PPRA-987654", areaOfOperation: "Sandton, Fourways, Midrand", status: "active", commissionRate: 0.05, portalAccess: true, portalToken: "LP-AGENT-7721", totalReferrals: 14, totalCommissionCents: 42500000 },
+    { id: "EA-002", agentName: "Johan van der Berg", agencyName: "RE/MAX Coastal", email: "johan@remax.co.za", phone: "+27836543210", ffcNumber: "FFC-654321", ppraRegistration: "PPRA-123789", areaOfOperation: "Cape Town Atlantic Seaboard, Sea Point", status: "active", commissionRate: 0.05, portalAccess: false, portalToken: "", totalReferrals: 7, totalCommissionCents: 18750000 }
+  ]);
+  const [agentReferrals, setAgentReferrals] = useState<AgentReferral[]>([
+    { id: "AR-001", agentId: "EA-001", agentName: "Sandra Meyer", matterRef: "M-1048/T", propertyDescription: "Erf 1204, Sandton", buyerName: "Nomsa Sithole", sellerName: "Thabo Dlamini", purchasePriceCents: 250000000, commissionCents: 12500000, commissionStatus: "pending", referralDate: "2026-05-20", paidDate: "" },
+    { id: "AR-002", agentId: "EA-001", agentName: "Sandra Meyer", matterRef: "M-2201", propertyDescription: "Unit 3B, Somerset West", buyerName: "Zanele Khumalo", sellerName: "Pierre du Toit", purchasePriceCents: 185000000, commissionCents: 9250000, commissionStatus: "approved", referralDate: "2026-04-15", paidDate: "" }
+  ]);
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsSnapshot | null>({
+    id: "AN-001", periodMonth: "2026-06",
+    totalMattersActive: 12, totalMattersClosed: 4,
+    wipTotalCents: 184500000, billedTotalCents: 92300000, collectedTotalCents: 78600000, writtenOffCents: 3200000,
+    trustBalanceCents: 295000000,
+    debtors30Cents: 38500000, debtors60Cents: 18200000, debtors90Cents: 9100000, debtors120PlusCents: 4800000,
+    realisationRate: 0.82, collectionRate: 0.91,
+    feeEarnerStats: [
+      { name: "T. Mokoena", wipCents: 95000000, billedCents: 48000000, collectedCents: 42000000, realisationRate: 0.84, collectionRate: 0.89, matterCount: 7 },
+      { name: "A. Sithole", wipCents: 56000000, billedCents: 29000000, collectedCents: 24000000, realisationRate: 0.79, collectionRate: 0.93, matterCount: 4 },
+      { name: "N. Khumalo", wipCents: 33500000, billedCents: 15300000, collectedCents: 12600000, realisationRate: 0.76, collectionRate: 0.87, matterCount: 1 }
+    ],
+    matterTypeStats: [
+      { matterType: "Conveyancing", count: 8, avgCycleTimeDays: 62, totalFeeCents: 95000000 },
+      { matterType: "Litigation", count: 3, avgCycleTimeDays: 180, totalFeeCents: 48000000 },
+      { matterType: "Commercial", count: 1, avgCycleTimeDays: 45, totalFeeCents: 18500000 }
+    ]
+  });
 
   // ─── Tier 1 state ──────────────────────────────────────────────────────────
   const [trustTransactions, setTrustTransactions] = useState<TrustTransaction[]>([
@@ -597,6 +654,44 @@ export function App() {
             setDsrRequests={setPopiaDsrRequests}
             breachIncidents={popiaBreachIncidents}
             setBreachIncidents={setPopiaBreachIncidents}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "research-db" && (
+          <LegalResearchDB
+            sources={corpusSources}
+            setSources={setCorpusSources}
+            documents={corpusDocuments}
+            setDocuments={setCorpusDocuments}
+            queries={researchQueries}
+            setQueries={setResearchQueries}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "esignature" && (
+          <ESignature
+            requests={signatureRequests}
+            setRequests={setSignatureRequests}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "agents" && (
+          <AgentNetwork
+            agents={estateAgents}
+            setAgents={setEstateAgents}
+            referrals={agentReferrals}
+            setReferrals={setAgentReferrals}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "analytics" && (
+          <PracticeAnalytics
+            snapshot={analyticsData}
+            setSnapshot={setAnalyticsData}
             log={log}
             showToast={showToast}
           />

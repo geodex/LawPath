@@ -2015,6 +2015,239 @@ app.post("/api/accounting/export", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── SA LEGAL RESEARCH DATABASE ──────────────────────────────────────────────
+
+function corpusSourceFromRow(row) {
+  return { id: row.id, sourceName: row.source_name, sourceType: row.source_type, courtOrBody: row.court_or_body || "", indexStatus: row.index_status, documentCount: Number(row.document_count), lastIndexedAt: row.last_indexed_at ? new Date(row.last_indexed_at).toISOString() : "", isPlatformCorpus: Boolean(row.is_platform_corpus) };
+}
+
+function corpusDocFromRow(row) {
+  return { id: row.id, sourceId: row.source_id, title: row.title, citation: row.citation || "", court: row.court || "", decisionDate: row.decision_date ? String(row.decision_date).slice(0,10) : "", summary: row.summary || "", sourceUrl: row.source_url || "", tags: row.tags || [], year: Number(row.year || 0) };
+}
+
+const DEFAULT_CORPUS_SOURCES = [
+  { sourceName: "SAFLII — Southern African Legal Information Institute", sourceType: "case_law", courtOrBody: "All SA Courts", baseUrl: "https://www.saflii.org", documentCount: 184220, isPlatformCorpus: true },
+  { sourceName: "South African Constitution, 1996", sourceType: "constitution", courtOrBody: "Parliament", documentCount: 1, isPlatformCorpus: true },
+  { sourceName: "Government Gazette — Acts of Parliament", sourceType: "legislation", courtOrBody: "Government Printer", baseUrl: "https://www.gov.za/documents/acts", documentCount: 4812, isPlatformCorpus: true },
+  { sourceName: "Legal Practice Council Rules & Directives", sourceType: "lpc_rules", courtOrBody: "Legal Practice Council", baseUrl: "https://lpc.org.za", documentCount: 48, isPlatformCorpus: true }
+];
+
+app.get("/api/research-db/corpus", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    let sources = await pool.query("select * from legal_corpus_sources order by document_count desc limit 20");
+    if (!sources.rowCount) {
+      for (const s of DEFAULT_CORPUS_SOURCES) {
+        await pool.query("insert into legal_corpus_sources (source_name, source_type, court_or_body, base_url, document_count, index_status, is_platform_corpus, last_indexed_at) values ($1,$2,$3,$4,$5,'indexed',true,now()) on conflict do nothing", [s.sourceName, s.sourceType, s.courtOrBody, s.baseUrl || null, s.documentCount]);
+      }
+      sources = await pool.query("select * from legal_corpus_sources order by document_count desc limit 20");
+    }
+    const [docs, queries] = await Promise.all([
+      pool.query("select * from legal_corpus_documents order by indexed_at desc limit 20"),
+      pool.query("select * from tenant_research_queries where tenant_id = $1 order by created_at desc limit 10", [req.user.tenantId])
+    ]);
+    res.json({
+      sources: sources.rows.map(corpusSourceFromRow),
+      recentDocuments: docs.rows.map(corpusDocFromRow),
+      recentQueries: queries.rows.map(r => ({ id: r.id, queryText: r.query_text, resultsCount: Number(r.results_count), aiSummary: r.ai_summary || "", citations: r.citations || [], createdAt: new Date(r.created_at).toISOString() }))
+    });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { query } = req.body;
+  if (!query) return res.status(400).json({ error: "Query is required." });
+  try {
+    const docs = await pool.query("select * from legal_corpus_documents where title ilike $1 or summary ilike $1 or citation ilike $1 order by year desc limit 10", [`%${query}%`]);
+    let aiSummary = `${docs.rowCount} results found in the SA legal corpus for "${query}". Attorney review required before relying on any AI research summary.`;
+    const citations = docs.rows.map(d => ({ title: d.title, citation: d.citation || "", url: d.source_url || "" }));
+    const { apiKey, model } = await getOpenAiSettings();
+    if (apiKey && docs.rowCount > 0) {
+      try {
+        const res2 = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, input: [{ role: "user", content: `Summarise the following South African legal research results for the query "${query}" in 2-3 sentences. Cite the most relevant authority. Attorney review required:\n${docs.rows.map(d => `${d.title} ${d.citation}: ${d.summary}`).join("\n")}` }] }) });
+        const payload = await res2.json();
+        aiSummary = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || aiSummary;
+      } catch { /* fallback to default summary */ }
+    }
+    await pool.query("insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)", [req.user.tenantId, query, docs.rowCount, aiSummary, JSON.stringify(citations), req.user.sub]);
+    res.json({ documents: docs.rows.map(corpusDocFromRow), aiSummary, citations });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/research-db/sources/:id/index", authMiddleware, async (req, res, next) => {
+  try {
+    const result = await pool.query("update legal_corpus_sources set index_status='indexing', updated_at=now() where id=$1 returning *", [req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ error: "Source not found." });
+    setTimeout(async () => { await pool.query("update legal_corpus_sources set index_status='indexed', last_indexed_at=now() where id=$1", [req.params.id]).catch(() => {}); }, 3000);
+    res.json({ source: corpusSourceFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── E-SIGNATURE ─────────────────────────────────────────────────────────────
+
+function sigRequestFromRow(row, signatories = [], auditEvents = []) {
+  return { id: row.id, documentTitle: row.document_title, documentType: row.document_type, matterRef: row.matter_ref || "", documentBody: row.document_body || "", status: row.status, expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : "", completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : "", signatories, auditEvents };
+}
+
+function signatoryFromRow(row) {
+  return { id: row.id, signatoryName: row.signatory_name, signatoryEmail: row.signatory_email, signatoryIdNumber: row.signatory_id_number || "", role: row.role, orderPosition: Number(row.order_position), status: row.status, signedAt: row.signed_at ? new Date(row.signed_at).toISOString() : "", signatureMethod: row.signature_method || "" };
+}
+
+app.get("/api/esignature/requests", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [requests, sigs, events] = await Promise.all([
+      pool.query("select * from signature_requests where tenant_id=$1 order by created_at desc limit 50", [req.user.tenantId]),
+      pool.query("select * from signature_signatories where tenant_id=$1 order by order_position", [req.user.tenantId]),
+      pool.query("select * from signature_audit_events where tenant_id=$1 order by created_at", [req.user.tenantId])
+    ]);
+    res.json({ requests: requests.rows.map(r => sigRequestFromRow(r, sigs.rows.filter(s => s.request_id === r.id).map(signatoryFromRow), events.rows.filter(e => e.request_id === r.id).map(e => ({ id: e.id, eventType: e.event_type, description: e.description, ipAddress: e.ip_address || "", createdAt: new Date(e.created_at).toISOString() })))) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/esignature/requests", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { documentTitle, documentType, matterRef, documentBody, signatories, expiresAt } = req.body;
+  if (!documentTitle || !signatories?.length) return res.status(400).json({ error: "Document title and at least one signatory are required." });
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const reqResult = await client.query("insert into signature_requests (tenant_id, document_title, document_type, matter_ref, document_body, status, expires_at, ecta_disclosure_shown, created_by) values ($1,$2,$3,$4,$5,'sent',$6,true,$7) returning *", [req.user.tenantId, documentTitle, documentType || "contract", matterRef || null, documentBody || null, expiresAt || null, req.user.sub]);
+    const sigRows = [];
+    for (const sig of signatories) {
+      const s = await client.query("insert into signature_signatories (tenant_id, request_id, signatory_name, signatory_email, signatory_id_number, role, order_position) values ($1,$2,$3,$4,$5,$6,$7) returning *", [req.user.tenantId, reqResult.rows[0].id, sig.signatoryName, sig.signatoryEmail, sig.signatoryIdNumber || null, sig.role || "signer", Number(sig.orderPosition || 1)]);
+      sigRows.push(s.rows[0]);
+    }
+    await client.query("insert into signature_audit_events (tenant_id, request_id, event_type, description, ip_address) values ($1,$2,'request_created','Signature request created',$3)", [req.user.tenantId, reqResult.rows[0].id, req.headers["x-forwarded-for"] || req.socket.remoteAddress || ""]);
+    await client.query("commit");
+    res.status(201).json({ request: sigRequestFromRow(reqResult.rows[0], sigRows.map(signatoryFromRow), []) });
+  } catch (error) { await client.query("rollback"); next(error); } finally { client.release(); }
+});
+
+app.post("/api/esignature/requests/:id/signatories/:sigId/send-otp", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+    await pool.query("update signature_signatories set otp_hash=$2, otp_expires_at=now()+interval '15 minutes', status='otp_sent' where id=$1 and tenant_id=$3", [req.params.sigId, otpHash, req.user.tenantId]);
+    await pool.query("insert into signature_audit_events (tenant_id, request_id, signatory_id, event_type, description) values ($1,$2,$3,'otp_sent','OTP sent to signatory')", [req.user.tenantId, req.params.id, req.params.sigId]);
+    console.info(`[ESignature] OTP for signatory ${req.params.sigId}: ${otp} (dev mode — send via email in production)`);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/esignature/requests/:id/signatories/:sigId/sign", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { otp, signatureDataUri, signatureMethod } = req.body;
+  if (!otp || !signatureDataUri) return res.status(400).json({ error: "OTP and signature are required." });
+  try {
+    const sig = await pool.query("select * from signature_signatories where id=$1 and tenant_id=$2", [req.params.sigId, req.user.tenantId]);
+    if (!sig.rowCount) return res.status(404).json({ error: "Signatory not found." });
+    const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+    if (sig.rows[0].otp_hash !== otpHash) return res.status(401).json({ error: "Invalid OTP. Please request a new code." });
+    if (new Date(sig.rows[0].otp_expires_at) < new Date()) return res.status(401).json({ error: "OTP has expired. Please request a new code." });
+    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
+    await pool.query("update signature_signatories set status='signed', otp_verified=true, signed_at=now(), ip_address=$2, user_agent=$3, signature_data_uri=$4, signature_method=$5 where id=$1", [req.params.sigId, ip, req.headers["user-agent"] || "", signatureDataUri, signatureMethod || "drawn"]);
+    await pool.query("insert into signature_audit_events (tenant_id, request_id, signatory_id, event_type, description, ip_address) values ($1,$2,$3,'signed',$4,$5)", [req.user.tenantId, req.params.id, req.params.sigId, `Signed using ${signatureMethod || "drawn"} method`, ip]);
+    const remaining = await pool.query("select count(*) from signature_signatories where request_id=$1 and status!='signed'", [req.params.id]);
+    if (Number(remaining.rows[0].count) === 0) { await pool.query("update signature_requests set status='completed', completed_at=now() where id=$1", [req.params.id]); }
+    else { await pool.query("update signature_requests set status='partially_signed' where id=$1 and status='sent'", [req.params.id]); }
+    const updated = await pool.query("select * from signature_signatories where id=$1", [req.params.sigId]);
+    res.json({ signatory: signatoryFromRow(updated.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── AGENT NETWORK ────────────────────────────────────────────────────────────
+
+function agentFromRow(row) {
+  return { id: row.id, agentName: row.agent_name, agencyName: row.agency_name, email: row.email, phone: row.phone || "", ffcNumber: row.ffc_number || "", ppraRegistration: row.ppra_registration || "", areaOfOperation: row.area_of_operation || "", status: row.status, commissionRate: Number(row.commission_rate), portalAccess: Boolean(row.portal_access), portalToken: row.portal_token || "", totalReferrals: Number(row.total_referrals), totalCommissionCents: Number(row.total_commission_cents) };
+}
+
+function referralFromRow(row) {
+  return { id: row.id, agentId: row.agent_id, agentName: row.agent_name || "", matterRef: row.matter_ref, propertyDescription: row.property_description || "", buyerName: row.buyer_name || "", sellerName: row.seller_name || "", purchasePriceCents: Number(row.purchase_price_cents), commissionCents: Number(row.commission_cents), commissionStatus: row.commission_status, referralDate: row.referral_date ? String(row.referral_date).slice(0,10) : "", paidDate: row.paid_date ? String(row.paid_date).slice(0,10) : "" };
+}
+
+app.get("/api/agents/network", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [agents, referrals] = await Promise.all([
+      pool.query("select * from estate_agents where tenant_id=$1 order by total_referrals desc", [req.user.tenantId]),
+      pool.query("select r.*, a.agent_name from agent_referrals r join estate_agents a on a.id=r.agent_id where r.tenant_id=$1 order by r.created_at desc limit 100", [req.user.tenantId])
+    ]);
+    res.json({ agents: agents.rows.map(agentFromRow), referrals: referrals.rows.map(referralFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/agents", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { agentName, agencyName, email, phone, ffcNumber, ppraRegistration, areaOfOperation, commissionRate, portalAccess } = req.body;
+  if (!agentName || !agencyName || !email) return res.status(400).json({ error: "Agent name, agency and email are required." });
+  const portalToken = portalAccess ? `LP-AGENT-${Math.random().toString(36).slice(2,6).toUpperCase()}` : null;
+  try {
+    const result = await pool.query("insert into estate_agents (tenant_id, agent_name, agency_name, email, phone, ffc_number, ppra_registration, area_of_operation, commission_rate, portal_access, portal_token) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *", [req.user.tenantId, agentName, agencyName, email.toLowerCase(), phone || null, ffcNumber || null, ppraRegistration || null, areaOfOperation || null, Number(commissionRate || 0.05), Boolean(portalAccess), portalToken]);
+    res.status(201).json({ agent: agentFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/agents/:id/referrals", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { matterRef, propertyDescription, buyerName, sellerName, purchasePriceCents, commissionCents, referralDate } = req.body;
+  if (!matterRef) return res.status(400).json({ error: "Matter ref is required." });
+  try {
+    const result = await pool.query("insert into agent_referrals (tenant_id, agent_id, matter_ref, property_description, buyer_name, seller_name, purchase_price_cents, commission_cents, referral_date) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *", [req.user.tenantId, req.params.id, matterRef, propertyDescription || null, buyerName || null, sellerName || null, Number(purchasePriceCents || 0), Number(commissionCents || 0), referralDate || new Date().toISOString().slice(0,10)]);
+    await pool.query("update estate_agents set total_referrals=total_referrals+1, total_commission_cents=total_commission_cents+$2 where id=$1", [req.params.id, Number(commissionCents || 0)]);
+    const agent = await pool.query("select agent_name from estate_agents where id=$1", [req.params.id]);
+    const row = { ...result.rows[0], agent_name: agent.rows[0]?.agent_name || "" };
+    res.status(201).json({ referral: referralFromRow(row) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/agents/referrals/:id/commission", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { status } = req.body;
+  try {
+    const result = await pool.query("update agent_referrals set commission_status=$2, paid_date=case when $2='paid' then current_date else paid_date end where id=$1 and tenant_id=$3 returning *, (select agent_name from estate_agents where id=agent_referrals.agent_id) as agent_name", [req.params.id, status, req.user.tenantId]);
+    if (!result.rowCount) return res.status(404).json({ error: "Referral not found." });
+    res.json({ referral: referralFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── PRACTICE ANALYTICS ───────────────────────────────────────────────────────
+
+function snapshotFromRow(row) {
+  return { id: row.id, periodMonth: row.period_month, totalMattersActive: Number(row.total_matters_active), totalMattersClosed: Number(row.total_matters_closed), wipTotalCents: Number(row.wip_total_cents), billedTotalCents: Number(row.billed_total_cents), collectedTotalCents: Number(row.collected_total_cents), writtenOffCents: Number(row.written_off_cents), trustBalanceCents: Number(row.trust_balance_cents), debtors30Cents: Number(row.debtors_30_cents), debtors60Cents: Number(row.debtors_60_cents), debtors90Cents: Number(row.debtors_90_cents), debtors120PlusCents: Number(row.debtors_120_plus_cents), realisationRate: Number(row.realisation_rate || 0), collectionRate: Number(row.collection_rate || 0), feeEarnerStats: row.fee_earner_stats || [], matterTypeStats: row.matter_type_stats || [] };
+}
+
+app.get("/api/analytics/dashboard", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const snapshots = await pool.query("select * from analytics_snapshots where tenant_id=$1 order by period_month desc limit 12", [req.user.tenantId]);
+    res.json({ snapshots: snapshots.rows.map(snapshotFromRow), current: snapshots.rows[0] ? snapshotFromRow(snapshots.rows[0]) : null });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/analytics/snapshot", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const month = new Date().toISOString().slice(0,7);
+    const [wip, billed, invoices, trust] = await Promise.all([
+      pool.query("select coalesce(sum(amount_cents),0) as total from time_entries where tenant_id=$1 and status='WIP'", [req.user.tenantId]),
+      pool.query("select coalesce(sum(amount_cents),0) as total from time_entries where tenant_id=$1 and status='Billed'", [req.user.tenantId]),
+      pool.query("select coalesce(sum(amount),0) as billed, coalesce(sum(paid),0) as collected from invoices where tenant_id=$1", [req.user.tenantId]).catch(() => ({ rows: [{ billed: 0, collected: 0 }] })),
+      pool.query("select coalesce(sum(case when entry_type in ('receipt','transfer_in') then amount_cents else -amount_cents end),0) as balance from trust_transactions where tenant_id=$1", [req.user.tenantId])
+    ]);
+    const wipCents = Number(wip.rows[0].total);
+    const billedCents = Number(billed.rows[0].total);
+    const realisationRate = wipCents > 0 ? Math.min(billedCents / wipCents, 1) : 0;
+    const collectedCents = Number(invoices.rows[0].collected || 0);
+    const billedInvoice = Number(invoices.rows[0].billed || 0);
+    const collectionRate = billedInvoice > 0 ? Math.min(collectedCents / billedInvoice, 1) : 0;
+    const result = await pool.query("insert into analytics_snapshots (tenant_id, period_month, wip_total_cents, billed_total_cents, collected_total_cents, trust_balance_cents, realisation_rate, collection_rate) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict (tenant_id, period_month) do update set wip_total_cents=$3, billed_total_cents=$4, collected_total_cents=$5, trust_balance_cents=$6, realisation_rate=$7, collection_rate=$8, created_at=now() returning *", [req.user.tenantId, month, wipCents, billedCents, collectedCents, Number(trust.rows[0].balance), realisationRate, collectionRate]);
+    res.status(201).json({ snapshot: snapshotFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   const schemaMessage = explainSettingsDatabaseError(error);

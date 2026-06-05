@@ -1,0 +1,27 @@
+{
+  "name": "LawPath SA — Legal Practice Platform",
+  "short_name": "LawPath SA",
+  "description": "AI-native legal practice management for South African law firms",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fbfcf8",
+  "theme_color": "#10241f",
+  "orientation": "any",
+  "icons": [
+    { "src": "/assets/favicon.ico", "sizes": "48x48", "type": "image/x-icon" },
+    { "src": "/assets/favicon.ico", "sizes": "72x72", "type": "image/x-icon" },
+    { "src": "/assets/favicon.ico", "sizes": "96x96", "type": "image/x-icon" },
+    { "src": "/assets/favicon.ico", "sizes": "144x144", "type": "image/x-icon" },
+    { "src": "/assets/favicon.ico", "sizes": "192x192", "type": "image/x-icon", "purpose": "any maskable" },
+    { "src": "/assets/favicon.ico", "sizes": "512x512", "type": "image/x-icon", "purpose": "any maskable" }
+  ],
+  "categories": ["business", "productivity", "legal"],
+  "lang": "en-ZA",
+  "dir": "ltr",
+  "screenshots": [],
+  "shortcuts": [
+    { "name": "Conveyancing", "short_name": "Conveyancing", "description": "Open conveyancing pipeline", "url": "/?view=conveyancing", "icons": [{ "src": "/assets/favicon.ico", "sizes": "192x192" }] },
+    { "name": "Trust Account", "short_name": "Trust", "description": "Open trust account ledger", "url": "/?view=trust", "icons": [{ "src": "/assets/favicon.ico", "sizes": "192x192" }] },
+    { "name": "Analytics", "short_name": "Analytics", "description": "Open practice analytics", "url": "/?view=analytics", "icons": [{ "src": "/assets/favicon.ico", "sizes": "192x192" }] }
+  ]
+}

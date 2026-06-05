@@ -1,10 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 
-export type ViewKey =
-  | "overview" | "drafting" | "research" | "secretary" | "billing"
-  | "booking" | "portal" | "training-guide" | "settings"
-  | "trust" | "fica" | "time" | "popia"
-  | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting";
+
 
 export type Matter = {
   id: string;
@@ -462,4 +458,154 @@ export type AccountingExportRecord = {
   recordCount: number;
   status: "exported" | "failed" | "partial";
   exportedAt: string;
+};
+
+// ─── TIER 3: SA LEGAL RESEARCH DATABASE ──────────────────────────────────────
+
+export type ViewKey =
+  | "overview" | "drafting" | "research" | "secretary" | "billing"
+  | "booking" | "portal" | "training-guide" | "settings"
+  | "trust" | "fica" | "time" | "popia"
+  | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting"
+  | "research-db" | "esignature" | "agents" | "analytics";
+
+export type LegalCorpusSource = {
+  id: string;
+  sourceName: string;
+  sourceType: "case_law" | "legislation" | "gazette" | "lpc_rules" | "practice_directive" | "regulation" | "constitution";
+  courtOrBody: string;
+  indexStatus: "pending" | "indexing" | "indexed" | "failed" | "update_available";
+  documentCount: number;
+  lastIndexedAt: string;
+  isPlatformCorpus: boolean;
+};
+
+export type LegalCorpusDocument = {
+  id: string;
+  sourceId: string;
+  title: string;
+  citation: string;
+  court: string;
+  decisionDate: string;
+  summary: string;
+  sourceUrl: string;
+  tags: string[];
+  year: number;
+};
+
+export type ResearchQuery = {
+  id: string;
+  queryText: string;
+  resultsCount: number;
+  aiSummary: string;
+  citations: { title: string; citation: string; url: string }[];
+  createdAt: string;
+};
+
+// ─── TIER 3: E-SIGNATURE ─────────────────────────────────────────────────────
+
+export type SignatureRequest = {
+  id: string;
+  documentTitle: string;
+  documentType: string;
+  matterRef: string;
+  documentBody: string;
+  status: "draft" | "sent" | "partially_signed" | "completed" | "expired" | "cancelled";
+  expiresAt: string;
+  completedAt: string;
+  signatories: SignatureSignatory[];
+  auditEvents: SignatureAuditEvent[];
+};
+
+export type SignatureSignatory = {
+  id: string;
+  signatoryName: string;
+  signatoryEmail: string;
+  signatoryIdNumber: string;
+  role: string;
+  orderPosition: number;
+  status: "pending" | "otp_sent" | "signed" | "declined";
+  signedAt: string;
+  signatureMethod: "drawn" | "typed" | "uploaded" | "";
+};
+
+export type SignatureAuditEvent = {
+  id: string;
+  eventType: string;
+  description: string;
+  ipAddress: string;
+  createdAt: string;
+};
+
+// ─── TIER 3: AGENT NETWORK ───────────────────────────────────────────────────
+
+export type EstateAgent = {
+  id: string;
+  agentName: string;
+  agencyName: string;
+  email: string;
+  phone: string;
+  ffcNumber: string;
+  ppraRegistration: string;
+  areaOfOperation: string;
+  status: "active" | "inactive" | "blacklisted";
+  commissionRate: number;
+  portalAccess: boolean;
+  portalToken: string;
+  totalReferrals: number;
+  totalCommissionCents: number;
+};
+
+export type AgentReferral = {
+  id: string;
+  agentId: string;
+  agentName: string;
+  matterRef: string;
+  propertyDescription: string;
+  buyerName: string;
+  sellerName: string;
+  purchasePriceCents: number;
+  commissionCents: number;
+  commissionStatus: "pending" | "approved" | "paid" | "disputed";
+  referralDate: string;
+  paidDate: string;
+};
+
+// ─── TIER 3: PRACTICE ANALYTICS ──────────────────────────────────────────────
+
+export type FeeEarnerStat = {
+  name: string;
+  wipCents: number;
+  billedCents: number;
+  collectedCents: number;
+  realisationRate: number;
+  collectionRate: number;
+  matterCount: number;
+};
+
+export type MatterTypeStat = {
+  matterType: string;
+  count: number;
+  avgCycleTimeDays: number;
+  totalFeeCents: number;
+};
+
+export type AnalyticsSnapshot = {
+  id: string;
+  periodMonth: string;
+  totalMattersActive: number;
+  totalMattersClosed: number;
+  wipTotalCents: number;
+  billedTotalCents: number;
+  collectedTotalCents: number;
+  writtenOffCents: number;
+  trustBalanceCents: number;
+  debtors30Cents: number;
+  debtors60Cents: number;
+  debtors90Cents: number;
+  debtors120PlusCents: number;
+  realisationRate: number;
+  collectionRate: number;
+  feeEarnerStats: FeeEarnerStat[];
+  matterTypeStats: MatterTypeStat[];
 };

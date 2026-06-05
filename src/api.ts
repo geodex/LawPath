@@ -1,4 +1,4 @@
-import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AiAgentKey, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, FicaClient, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AgentReferral, AiAgentKey, AnalyticsSnapshot, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, EstateAgent, FicaClient, LegalCorpusDocument, LegalCorpusSource, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchQuery, SignatureRequest, SignatureSignatory, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -364,4 +364,64 @@ export async function saveAccountingConnection(input: { provider: AccountingProv
 
 export async function triggerAccountingExport(provider: AccountingProvider, exportType: AccountingExportRecord["exportType"]) {
   return request<{ exportRecord: AccountingExportRecord }>("/api/accounting/export", { method: "POST", body: JSON.stringify({ provider, exportType }) });
+}
+
+// ─── LEGAL RESEARCH DATABASE ──────────────────────────────────────────────────
+
+export async function getLegalCorpus() {
+  return request<{ sources: LegalCorpusSource[]; recentDocuments: LegalCorpusDocument[]; recentQueries: ResearchQuery[] }>("/api/research-db/corpus");
+}
+
+export async function searchLegalCorpus(query: string) {
+  return request<{ documents: LegalCorpusDocument[]; aiSummary: string; citations: ResearchQuery["citations"] }>("/api/research-db/search", { method: "POST", body: JSON.stringify({ query }) });
+}
+
+export async function indexCorpusSource(sourceId: string) {
+  return request<{ source: LegalCorpusSource }>(`/api/research-db/sources/${sourceId}/index`, { method: "POST" });
+}
+
+// ─── E-SIGNATURE ─────────────────────────────────────────────────────────────
+
+export async function getSignatureRequests() {
+  return request<{ requests: SignatureRequest[] }>("/api/esignature/requests");
+}
+
+export async function createSignatureRequest(input: { documentTitle: string; documentType: string; matterRef?: string; documentBody?: string; signatories: Omit<SignatureSignatory, "id" | "status" | "signedAt" | "signatureMethod">[] }) {
+  return request<{ request: SignatureRequest }>("/api/esignature/requests", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function sendSignatureOtp(requestId: string, signatoryId: string) {
+  return request<{ ok: boolean }>(`/api/esignature/requests/${requestId}/signatories/${signatoryId}/send-otp`, { method: "POST" });
+}
+
+export async function submitSignature(requestId: string, signatoryId: string, input: { otp: string; signatureDataUri: string; signatureMethod: "drawn" | "typed" | "uploaded" }) {
+  return request<{ signatory: SignatureSignatory }>(`/api/esignature/requests/${requestId}/signatories/${signatoryId}/sign`, { method: "POST", body: JSON.stringify(input) });
+}
+
+// ─── AGENT NETWORK ────────────────────────────────────────────────────────────
+
+export async function getAgentNetwork() {
+  return request<{ agents: EstateAgent[]; referrals: AgentReferral[] }>("/api/agents/network");
+}
+
+export async function createEstateAgent(input: Omit<EstateAgent, "id" | "portalToken" | "totalReferrals" | "totalCommissionCents">) {
+  return request<{ agent: EstateAgent }>("/api/agents", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function createAgentReferral(agentId: string, input: Omit<AgentReferral, "id" | "agentId" | "agentName">) {
+  return request<{ referral: AgentReferral }>(`/api/agents/${agentId}/referrals`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateReferralCommission(referralId: string, status: AgentReferral["commissionStatus"]) {
+  return request<{ referral: AgentReferral }>(`/api/agents/referrals/${referralId}/commission`, { method: "PUT", body: JSON.stringify({ status }) });
+}
+
+// ─── PRACTICE ANALYTICS ───────────────────────────────────────────────────────
+
+export async function getAnalytics() {
+  return request<{ snapshots: AnalyticsSnapshot[]; current: AnalyticsSnapshot | null }>("/api/analytics/dashboard");
+}
+
+export async function generateAnalyticsSnapshot() {
+  return request<{ snapshot: AnalyticsSnapshot }>("/api/analytics/snapshot", { method: "POST" });
 }
