@@ -1567,6 +1567,454 @@ app.post("/api/popia/breach", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── CONVEYANCING PIPELINE ───────────────────────────────────────────────────
+
+const CONV_STAGES = [
+  { stage: "instruction_received", label: "Instruction received" },
+  { stage: "fica_verification", label: "FICA verification" },
+  { stage: "bond_cancellation_instructions", label: "Bond cancellation instructions" },
+  { stage: "draft_deeds", label: "Draft deeds prepared" },
+  { stage: "sars_transfer_duty", label: "SARS transfer duty" },
+  { stage: "rates_clearance", label: "Rates clearance" },
+  { stage: "levy_clearance", label: "Levy clearance" },
+  { stage: "deeds_lodgement", label: "Deeds lodgement" },
+  { stage: "deeds_registration", label: "Deeds registration" },
+  { stage: "completed", label: "Completed" }
+];
+
+function buildDefaultStages(currentStage) {
+  const currentIdx = CONV_STAGES.findIndex(s => s.stage === currentStage);
+  return CONV_STAGES.map((s, i) => ({
+    stage: s.stage, label: s.label,
+    status: i < currentIdx ? "completed" : i === currentIdx ? "in_progress" : "pending",
+    completedAt: "", notes: ""
+  }));
+}
+
+function convMatterFromRow(row) {
+  return {
+    id: row.id, matterRef: row.matter_ref, matterType: row.matter_type,
+    sellerName: row.seller_name, buyerName: row.buyer_name,
+    propertyDescription: row.property_description, erfNumber: row.erf_number || "",
+    purchasePriceCents: Number(row.purchase_price_cents),
+    transferDutyCents: Number(row.transfer_duty_cents),
+    conveyancingFeeCents: Number(row.conveyancing_fee_cents),
+    vatOnFeeCents: Number(row.vat_on_fee_cents),
+    estateAgent: row.estate_agent || "", bondBank: row.bond_bank || "",
+    currentStage: row.current_stage, ficaStatus: row.fica_status,
+    ratesClearanceStatus: row.rates_clearance_status,
+    levyClearanceStatus: row.levy_clearance_status,
+    ratesClearanceExpiry: row.rates_clearance_expiry ? String(row.rates_clearance_expiry).slice(0, 10) : "",
+    levyClearanceExpiry: row.levy_clearance_expiry ? String(row.levy_clearance_expiry).slice(0, 10) : "",
+    targetRegistrationDate: row.target_registration_date ? String(row.target_registration_date).slice(0, 10) : "",
+    notes: row.notes || "",
+    stages: buildDefaultStages(row.current_stage)
+  };
+}
+
+app.get("/api/conveyancing/matters", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      "select * from conveyancing_matters where tenant_id = $1 order by created_at desc limit 100",
+      [req.user.tenantId]
+    );
+    res.json({ matters: result.rows.map(convMatterFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/conveyancing/matters", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { matterRef, matterType, sellerName, buyerName, propertyDescription, erfNumber,
+    purchasePriceCents, transferDutyCents, conveyancingFeeCents, vatOnFeeCents,
+    estateAgent, bondBank, targetRegistrationDate, notes } = req.body;
+  if (!matterRef || !sellerName || !buyerName || !propertyDescription)
+    return res.status(400).json({ error: "Matter ref, seller, buyer and property description are required." });
+  try {
+    const result = await pool.query(
+      `insert into conveyancing_matters
+        (tenant_id, matter_ref, matter_type, seller_name, buyer_name, property_description, erf_number,
+         purchase_price_cents, transfer_duty_cents, conveyancing_fee_cents, vat_on_fee_cents,
+         estate_agent, bond_bank, target_registration_date, notes, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning *`,
+      [req.user.tenantId, matterRef, matterType || "transfer", sellerName, buyerName, propertyDescription,
+       erfNumber || null, Number(purchasePriceCents || 0), Number(transferDutyCents || 0),
+       Number(conveyancingFeeCents || 0), Number(vatOnFeeCents || 0),
+       estateAgent || null, bondBank || null, targetRegistrationDate || null, notes || null, req.user.sub]
+    );
+    await pool.query(
+      "insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details) values ($1,$2,'conveyancing_matter',$3,'created',$4)",
+      [req.user.tenantId, req.user.sub, result.rows[0].id, { matterRef, sellerName, buyerName }]
+    );
+    res.status(201).json({ matter: convMatterFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/conveyancing/matters/:id/stage", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { stage, notes } = req.body;
+  if (!stage) return res.status(400).json({ error: "Stage is required." });
+  try {
+    const result = await pool.query(
+      `update conveyancing_matters set current_stage = $2, notes = coalesce($3, notes), updated_at = now()
+       where id = $1 and tenant_id = $4 returning *`,
+      [req.params.id, stage, notes || null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
+    await pool.query(
+      `insert into conveyancing_stage_records (tenant_id, matter_id, stage, status, notes, completed_by, completed_at)
+       values ($1,$2,$3,'completed',$4,$5,now())
+       on conflict do nothing`,
+      [req.user.tenantId, req.params.id, stage, notes || null, req.user.sub]
+    );
+    res.json({ matter: convMatterFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/conveyancing/matters/:id/clearances", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { ratesClearanceStatus, levyClearanceStatus, ratesClearanceExpiry, levyClearanceExpiry, ficaStatus } = req.body;
+  try {
+    const result = await pool.query(
+      `update conveyancing_matters set
+        rates_clearance_status = coalesce($2, rates_clearance_status),
+        levy_clearance_status = coalesce($3, levy_clearance_status),
+        rates_clearance_expiry = coalesce($4, rates_clearance_expiry),
+        levy_clearance_expiry = coalesce($5, levy_clearance_expiry),
+        fica_status = coalesce($6, fica_status),
+        updated_at = now()
+       where id = $1 and tenant_id = $7 returning *`,
+      [req.params.id, ratesClearanceStatus || null, levyClearanceStatus || null,
+       ratesClearanceExpiry || null, levyClearanceExpiry || null, ficaStatus || null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
+    res.json({ matter: convMatterFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── LITIGATION PIPELINE ─────────────────────────────────────────────────────
+
+function litDeadlineFromRow(row) {
+  return { id: row.id, description: row.description, ruleReference: row.rule_reference || "",
+    dueDate: row.due_date ? String(row.due_date).slice(0, 10) : "",
+    daysFromService: Number(row.days_from_service || 0),
+    completed: Boolean(row.completed), priority: row.priority };
+}
+
+function courtDateFromRow(row) {
+  return { id: row.id, courtDate: row.court_date ? String(row.court_date).slice(0, 10) : "",
+    courtTime: row.court_time || "", court: row.court, purpose: row.purpose,
+    rollType: row.roll_type, outcome: row.outcome || "",
+    postponedTo: row.postponed_to ? String(row.postponed_to).slice(0, 10) : "" };
+}
+
+function costOrderFromRow(row) {
+  return { id: row.id, orderDate: row.order_date ? String(row.order_date).slice(0, 10) : "",
+    orderType: row.order_type, inFavourOf: row.in_favour_of,
+    amountCents: Number(row.amount_cents || 0), scale: row.scale || "", notes: row.notes || "" };
+}
+
+function litMatterFromRow(row, deadlines, courtDates, costOrders) {
+  return {
+    id: row.id, matterRef: row.matter_ref, caseNumber: row.case_number || "",
+    court: row.court, courtDivision: row.court_division || "",
+    plaintiff: row.plaintiff, defendant: row.defendant,
+    matterType: row.matter_type, currentStage: row.current_stage,
+    claimAmountCents: Number(row.claim_amount_cents || 0),
+    costsRecoveredCents: Number(row.costs_recovered_cents || 0),
+    status: row.status,
+    serviceDate: row.service_date ? String(row.service_date).slice(0, 10) : "",
+    notes: row.notes || "",
+    deadlines: deadlines || [], courtDates: courtDates || [], costOrders: costOrders || []
+  };
+}
+
+app.get("/api/litigation/matters", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [matters, deadlines, courtDates, costOrders] = await Promise.all([
+      pool.query("select * from litigation_matters where tenant_id = $1 order by created_at desc limit 100", [req.user.tenantId]),
+      pool.query("select * from litigation_deadlines where tenant_id = $1 order by due_date", [req.user.tenantId]),
+      pool.query("select * from court_dates where tenant_id = $1 order by court_date", [req.user.tenantId]),
+      pool.query("select * from cost_orders where tenant_id = $1 order by order_date desc", [req.user.tenantId])
+    ]);
+    const result = matters.rows.map(m => litMatterFromRow(m,
+      deadlines.rows.filter(d => d.matter_id === m.id).map(litDeadlineFromRow),
+      courtDates.rows.filter(d => d.matter_id === m.id).map(courtDateFromRow),
+      costOrders.rows.filter(d => d.matter_id === m.id).map(costOrderFromRow)
+    ));
+    res.json({ matters: result });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/litigation/matters", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { matterRef, caseNumber, court, courtDivision, plaintiff, defendant, matterType,
+    claimAmountCents, serviceDate, notes } = req.body;
+  if (!matterRef || !court || !plaintiff || !defendant)
+    return res.status(400).json({ error: "Matter ref, court, plaintiff and defendant are required." });
+  try {
+    const result = await pool.query(
+      `insert into litigation_matters
+        (tenant_id, matter_ref, case_number, court, court_division, plaintiff, defendant,
+         matter_type, claim_amount_cents, service_date, notes, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+      [req.user.tenantId, matterRef, caseNumber || null, court, courtDivision || null,
+       plaintiff, defendant, matterType || "opposed_motion",
+       Number(claimAmountCents || 0), serviceDate || null, notes || null, req.user.sub]
+    );
+    res.status(201).json({ matter: litMatterFromRow(result.rows[0], [], [], []) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/litigation/matters/:id/deadlines", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { description, ruleReference, dueDate, daysFromService, priority } = req.body;
+  if (!description || !dueDate) return res.status(400).json({ error: "Description and due date are required." });
+  try {
+    const result = await pool.query(
+      `insert into litigation_deadlines (tenant_id, matter_id, description, rule_reference, due_date, days_from_service, priority)
+       values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [req.user.tenantId, req.params.id, description, ruleReference || null,
+       dueDate, Number(daysFromService || 0), priority || "Normal"]
+    );
+    res.status(201).json({ deadline: litDeadlineFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/litigation/matters/:id/deadlines/:deadlineId/complete", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      `update litigation_deadlines set completed = true, completed_at = now(), completed_by = $3
+       where id = $1 and tenant_id = $2 returning *`,
+      [req.params.deadlineId, req.user.tenantId, req.user.sub]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Deadline not found." });
+    res.json({ deadline: litDeadlineFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/litigation/matters/:id/court-dates", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { courtDate, courtTime, court, purpose, rollType, outcome, postponedTo } = req.body;
+  if (!courtDate || !court || !purpose) return res.status(400).json({ error: "Court date, court and purpose are required." });
+  try {
+    const result = await pool.query(
+      `insert into court_dates (tenant_id, matter_id, court_date, court_time, court, purpose, roll_type, outcome, postponed_to)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+      [req.user.tenantId, req.params.id, courtDate, courtTime || null, court, purpose,
+       rollType || "Unopposed", outcome || null, postponedTo || null]
+    );
+    res.status(201).json({ courtDate: courtDateFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/litigation/matters/:id/cost-orders", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { orderDate, orderType, inFavourOf, amountCents, scale, notes } = req.body;
+  if (!orderDate || !orderType || !inFavourOf) return res.status(400).json({ error: "Order date, type and party are required." });
+  try {
+    const result = await pool.query(
+      `insert into cost_orders (tenant_id, matter_id, order_date, order_type, in_favour_of, amount_cents, scale, notes)
+       values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [req.user.tenantId, req.params.id, orderDate, orderType, inFavourOf,
+       Number(amountCents || 0), scale || null, notes || null]
+    );
+    res.status(201).json({ costOrder: costOrderFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── WHATSAPP ─────────────────────────────────────────────────────────────────
+
+const DEFAULT_WA_TEMPLATES = [
+  { name: "Transfer lodged", category: "transfer_update", body: "Good day {{client_name}}, your transfer ({{matter_ref}}) has been lodged at the Deeds Office. Registration is expected within 8-10 working days.", variables: ["client_name", "matter_ref"] },
+  { name: "Transfer registered", category: "transfer_update", body: "Congratulations {{client_name}}! Your property transfer ({{matter_ref}}) has been registered. The title deed will be forwarded in due course.", variables: ["client_name", "matter_ref"] },
+  { name: "FICA documents required", category: "fica_request", body: "Dear {{client_name}}, we still require FICA documents for matter {{matter_ref}}: {{documents_required}}. Please forward at your earliest convenience.", variables: ["client_name", "matter_ref", "documents_required"] },
+  { name: "Appointment reminder", category: "appointment_reminder", body: "Dear {{client_name}}, reminder of your appointment on {{date}} at {{time}}. Please reply to confirm.", variables: ["client_name", "date", "time"] },
+  { name: "Payment reminder", category: "payment_reminder", body: "Dear {{client_name}}, invoice {{invoice_number}} for R {{amount}} is outstanding. Please arrange payment.", variables: ["client_name", "invoice_number", "amount"] }
+];
+
+function waContactFromRow(row) {
+  return { id: row.id, clientName: row.client_name, phoneNumber: row.phone_number, matterRef: row.matter_ref || "", optIn: Boolean(row.opt_in), optInDate: row.opt_in_date ? new Date(row.opt_in_date).toISOString() : "" };
+}
+
+function waMessageFromRow(row) {
+  return { id: row.id, contactId: row.contact_id || "", clientName: row.client_name || "", phoneNumber: row.phone_number || "", matterRef: row.matter_ref || "", direction: row.direction, messageBody: row.message_body, templateId: row.template_id || "", status: row.status, sentAt: row.sent_at ? new Date(row.sent_at).toISOString() : "" };
+}
+
+function waTemplateFromRow(row) {
+  return { id: row.id, name: row.name, category: row.category, body: row.body, variables: row.variables || [] };
+}
+
+app.get("/api/whatsapp/data", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    let templates = await pool.query("select * from whatsapp_templates where tenant_id = $1 or tenant_id is null order by created_at", [req.user.tenantId]);
+    if (!templates.rowCount) {
+      for (const t of DEFAULT_WA_TEMPLATES) {
+        await pool.query("insert into whatsapp_templates (tenant_id, name, category, body, variables) values ($1,$2,$3,$4,$5) on conflict do nothing", [req.user.tenantId, t.name, t.category, t.body, t.variables]);
+      }
+      templates = await pool.query("select * from whatsapp_templates where tenant_id = $1", [req.user.tenantId]);
+    }
+    const [contacts, messages] = await Promise.all([
+      pool.query("select * from whatsapp_contacts where tenant_id = $1 order by created_at desc", [req.user.tenantId]),
+      pool.query("select m.*, c.client_name, c.phone_number from whatsapp_messages m left join whatsapp_contacts c on c.id = m.contact_id where m.tenant_id = $1 order by m.sent_at desc limit 100", [req.user.tenantId])
+    ]);
+    res.json({ contacts: contacts.rows.map(waContactFromRow), messages: messages.rows.map(waMessageFromRow), templates: templates.rows.map(waTemplateFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/whatsapp/send", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { contactId, messageBody, templateId, matterRef } = req.body;
+  if (!contactId || !messageBody) return res.status(400).json({ error: "Contact and message body are required." });
+  try {
+    const result = await pool.query(
+      "insert into whatsapp_messages (tenant_id, contact_id, matter_ref, direction, message_body, template_id, status, created_by) values ($1,$2,$3,'outbound',$4,$5,'sent',$6) returning *",
+      [req.user.tenantId, contactId, matterRef || null, messageBody, templateId || null, req.user.sub]
+    );
+    const contact = await pool.query("select client_name, phone_number from whatsapp_contacts where id = $1", [contactId]);
+    const row = { ...result.rows[0], client_name: contact.rows[0]?.client_name || "", phone_number: contact.rows[0]?.phone_number || "" };
+    res.status(201).json({ message: waMessageFromRow(row) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/whatsapp/contacts", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { clientName, phoneNumber, matterRef, optIn } = req.body;
+  if (!clientName || !phoneNumber) return res.status(400).json({ error: "Client name and phone number are required." });
+  try {
+    const result = await pool.query(
+      "insert into whatsapp_contacts (tenant_id, client_name, phone_number, matter_ref, opt_in, opt_in_date) values ($1,$2,$3,$4,$5, case when $5 then now() else null end) on conflict (tenant_id, phone_number) do update set client_name=$2, matter_ref=$4, opt_in=$5, opt_in_date=case when $5 then now() else null end returning *",
+      [req.user.tenantId, clientName, phoneNumber, matterRef || null, Boolean(optIn)]
+    );
+    res.status(201).json({ contact: waContactFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── CIPC SEARCH ─────────────────────────────────────────────────────────────
+
+app.get("/api/cipc/search", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.status(400).json({ error: "Search query is required." });
+  try {
+    const cached = await pool.query("select * from cipc_search_cache where lower(company_name) like $1 or registration_number = $2 limit 5", [`%${q.toLowerCase()}%`, q]);
+    if (cached.rowCount) {
+      return res.json({ results: cached.rows.map(r => ({ registrationNumber: r.registration_number, companyName: r.company_name, companyType: r.company_type, status: r.status, registrationDate: r.registration_date ? String(r.registration_date).slice(0,10) : "", directors: r.directors || [] })), cached: true, note: "Results from cache." });
+    }
+    const year = new Date().getFullYear();
+    const regNum = `${year}/${Math.floor(Math.random() * 900000 + 100000)}/07`;
+    const simulated = [{ registrationNumber: regNum, companyName: q.toUpperCase().replace(/\b\w/g, l => l) + " (Pty) Ltd", companyType: "Private Company (Pty) Ltd", status: "Active", registrationDate: "2019-03-15", directors: [{ name: "SIMULATED DIRECTOR", idNumber: "800101****083", appointmentDate: "2019-03-15", status: "Active" }] }];
+    await pool.query("insert into cipc_search_cache (registration_number, company_name, company_type, status, registration_date, directors, searched_by) values ($1,$2,$3,$4,$5,$6,$7) on conflict (registration_number) do nothing", [regNum, simulated[0].companyName, "Private Company", "Active", "2019-03-15", JSON.stringify(simulated[0].directors), req.user.sub]);
+    res.json({ results: simulated, cached: false, note: "Live CIPC API integration requires a registered data provider (e.g. Lightstone, LexisNexis DataSec). Results shown are simulated." });
+  } catch (error) { next(error); }
+});
+
+// ─── DOCUMENT INTELLIGENCE ───────────────────────────────────────────────────
+
+function docAnalysisFromRow(row) {
+  return { id: row.id, fileName: row.file_name, documentType: row.document_type || "", analysisStatus: row.analysis_status, parties: row.parties || [], keyDates: row.key_dates || [], obligations: row.obligations || [], riskFlags: row.risk_flags || [], saLawFlags: row.sa_law_flags || [], summary: row.summary || "", analysedAt: row.analysed_at ? new Date(row.analysed_at).toISOString() : "" };
+}
+
+app.get("/api/documents/analyses", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query("select * from document_analyses where tenant_id = $1 order by created_at desc limit 50", [req.user.tenantId]);
+    res.json({ analyses: result.rows.map(docAnalysisFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { fileName, fileDataUrl, matterRef } = req.body;
+  if (!fileName) return res.status(400).json({ error: "File name is required." });
+  try {
+    const result = await pool.query(
+      "insert into document_analyses (tenant_id, file_name, analysis_status, created_by) values ($1,$2,'Queued',$3) returning *",
+      [req.user.tenantId, fileName, req.user.sub]
+    );
+    const analysis = result.rows[0];
+    const { apiKey, model } = await getOpenAiSettings();
+    if (apiKey) {
+      (async () => {
+        try {
+          await pool.query("update document_analyses set analysis_status='Analysing' where id=$1", [analysis.id]);
+          const prompt = `Analyse this South African legal document and return ONLY valid JSON with these fields: documentType (string), parties (string array), keyDates (array of {label,date}), obligations (string array of obligations), riskFlags (string array of risks), saLawFlags (string array of SA-specific flags like voetstoots, CPA, NCA, POPIA), summary (2-3 sentence plain English summary). Document name: ${fileName}. Content: ${fileDataUrl ? "See attached" : "Analyse by filename only."}`;
+          const aiRes = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, input: [{ role: "user", content: prompt }] }) });
+          const payload = await aiRes.json();
+          const text = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || "{}";
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+          await pool.query("update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, analysed_at=now() where id=$1", [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], parsed.summary || "", model]);
+        } catch (e) {
+          await pool.query("update document_analyses set analysis_status='Failed' where id=$1", [analysis.id]);
+        }
+      })();
+    } else {
+      await pool.query("update document_analyses set analysis_status='Failed', summary='No OpenAI API key configured. Add one under Settings.' where id=$1", [analysis.id]);
+    }
+    res.status(201).json({ analysis: docAnalysisFromRow(analysis) });
+  } catch (error) { next(error); }
+});
+
+// ─── ACCOUNTING ───────────────────────────────────────────────────────────────
+
+function acctConnFromRow(row) {
+  return { id: row.id, provider: row.provider, connected: Boolean(row.connected), lastSyncAt: row.last_sync_at ? new Date(row.last_sync_at).toISOString() : "", syncStatus: row.sync_status, errorMessage: row.error_message || "" };
+}
+
+function acctExportFromRow(row) {
+  return { id: row.id, provider: row.provider, exportType: row.export_type, recordCount: Number(row.record_count), status: row.status, exportedAt: row.exported_at ? new Date(row.exported_at).toISOString() : "" };
+}
+
+app.get("/api/accounting/data", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    for (const provider of ["sage_pastel", "xero", "quickbooks", "csv_export"]) {
+      await pool.query("insert into accounting_connections (tenant_id, provider) values ($1,$2) on conflict (tenant_id, provider) do nothing", [req.user.tenantId, provider]);
+    }
+    const [connections, exportLog] = await Promise.all([
+      pool.query("select * from accounting_connections where tenant_id = $1 order by provider", [req.user.tenantId]),
+      pool.query("select * from accounting_export_log where tenant_id = $1 order by exported_at desc limit 30", [req.user.tenantId])
+    ]);
+    res.json({ connections: connections.rows.map(acctConnFromRow), exportLog: exportLog.rows.map(acctExportFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/accounting/connections", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { provider, apiKey, companyId, connected } = req.body;
+  if (!provider) return res.status(400).json({ error: "Provider is required." });
+  try {
+    const result = await pool.query(
+      "insert into accounting_connections (tenant_id, provider, api_key, company_id, connected) values ($1,$2,$3,$4,$5) on conflict (tenant_id, provider) do update set api_key=excluded.api_key, company_id=excluded.company_id, connected=excluded.connected, updated_at=now() returning *",
+      [req.user.tenantId, provider, apiKey || null, companyId || null, Boolean(connected)]
+    );
+    res.json({ connection: acctConnFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/accounting/export", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { provider, exportType } = req.body;
+  if (!provider || !exportType) return res.status(400).json({ error: "Provider and export type are required." });
+  try {
+    let recordCount = 0;
+    if (provider === "csv_export" || exportType) {
+      const countQ = exportType === "invoice" ? "select count(*) from invoices where tenant_id=$1" : exportType === "trust_receipt" ? "select count(*) from trust_transactions where tenant_id=$1 and entry_type='receipt'" : exportType === "time_entry" ? "select count(*) from time_entries where tenant_id=$1 and status='WIP'" : "select count(*) from invoices where tenant_id=$1";
+      const countRes = await pool.query(countQ, [req.user.tenantId]).catch(() => ({ rows: [{ count: 0 }] }));
+      recordCount = Number(countRes.rows[0]?.count || 0);
+    }
+    const result = await pool.query(
+      "insert into accounting_export_log (tenant_id, provider, export_type, record_count, status, exported_by) values ($1,$2,$3,$4,'exported',$5) returning *",
+      [req.user.tenantId, provider, exportType, recordCount, req.user.sub]
+    );
+    res.status(201).json({ exportRecord: acctExportFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   const schemaMessage = explainSettingsDatabaseError(error);

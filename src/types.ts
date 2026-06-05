@@ -3,7 +3,8 @@ import type { LucideIcon } from "lucide-react";
 export type ViewKey =
   | "overview" | "drafting" | "research" | "secretary" | "billing"
   | "booking" | "portal" | "training-guide" | "settings"
-  | "trust" | "fica" | "time" | "popia";
+  | "trust" | "fica" | "time" | "popia"
+  | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting";
 
 export type Matter = {
   id: string;
@@ -275,4 +276,190 @@ export type PopiaBreachIncident = {
   status: "Open" | "Under investigation" | "Regulator notified" | "Closed";
   regulatorNotified: boolean;
   remediationSteps: string;
+};
+
+// ─── TIER 2: CONVEYANCING PIPELINE ───────────────────────────────────────────
+
+export type ConveyancingStage =
+  | "instruction_received" | "fica_verification" | "bond_cancellation_instructions"
+  | "draft_deeds" | "sars_transfer_duty" | "rates_clearance" | "levy_clearance"
+  | "deeds_lodgement" | "deeds_registration" | "completed";
+
+export type ConveyancingStageRecord = {
+  stage: ConveyancingStage;
+  label: string;
+  status: "pending" | "in_progress" | "completed" | "blocked";
+  completedAt: string;
+  notes: string;
+};
+
+export type ConveyancingMatter = {
+  id: string;
+  matterRef: string;
+  matterType: "transfer" | "bond_registration" | "bond_cancellation" | "sectional_title" | "notarial_bond";
+  sellerName: string;
+  buyerName: string;
+  propertyDescription: string;
+  erfNumber: string;
+  purchasePriceCents: number;
+  transferDutyCents: number;
+  conveyancingFeeCents: number;
+  vatOnFeeCents: number;
+  estateAgent: string;
+  bondBank: string;
+  currentStage: ConveyancingStage;
+  ficaStatus: "Pending" | "In Progress" | "Compliant";
+  ratesClearanceStatus: "Not requested" | "Requested" | "Received" | "Expired";
+  levyClearanceStatus: "Not requested" | "Requested" | "Received" | "Expired";
+  ratesClearanceExpiry: string;
+  levyClearanceExpiry: string;
+  stages: ConveyancingStageRecord[];
+  targetRegistrationDate: string;
+  notes: string;
+};
+
+// ─── TIER 2: LITIGATION PIPELINE ─────────────────────────────────────────────
+
+export type LitigationMatter = {
+  id: string;
+  matterRef: string;
+  caseNumber: string;
+  court: string;
+  courtDivision: string;
+  plaintiff: string;
+  defendant: string;
+  matterType: "opposed_motion" | "unopposed_motion" | "trial" | "urgent_application" | "section_65" | "section_69" | "rule_43" | "default_judgment" | "appeal" | "review";
+  currentStage: string;
+  claimAmountCents: number;
+  costsRecoveredCents: number;
+  status: "Active" | "Settled" | "Abandoned" | "Judgment" | "Struck off";
+  serviceDate: string;
+  deadlines: LitigationDeadline[];
+  courtDates: CourtDate[];
+  costOrders: CostOrder[];
+  notes: string;
+};
+
+export type LitigationDeadline = {
+  id: string;
+  description: string;
+  ruleReference: string;
+  dueDate: string;
+  daysFromService: number;
+  completed: boolean;
+  priority: "Normal" | "Urgent" | "Critical";
+};
+
+export type CourtDate = {
+  id: string;
+  courtDate: string;
+  courtTime: string;
+  court: string;
+  purpose: string;
+  rollType: "Unopposed" | "Opposed" | "Trial" | "Urgent" | "Appeal";
+  outcome: string;
+  postponedTo: string;
+};
+
+export type CostOrder = {
+  id: string;
+  orderDate: string;
+  orderType: "costs" | "costs_in_cause" | "no_order" | "reserved" | "punitive_costs";
+  inFavourOf: string;
+  amountCents: number;
+  scale: string;
+  notes: string;
+};
+
+// ─── TIER 2: WHATSAPP ─────────────────────────────────────────────────────────
+
+export type WhatsAppContact = {
+  id: string;
+  clientName: string;
+  phoneNumber: string;
+  matterRef: string;
+  optIn: boolean;
+  optInDate: string;
+};
+
+export type WhatsAppMessage = {
+  id: string;
+  contactId: string;
+  clientName: string;
+  phoneNumber: string;
+  matterRef: string;
+  direction: "inbound" | "outbound";
+  messageBody: string;
+  templateId: string;
+  status: "queued" | "sent" | "delivered" | "read" | "failed";
+  sentAt: string;
+};
+
+export type WhatsAppTemplate = {
+  id: string;
+  name: string;
+  category: "transfer_update" | "bond_update" | "appointment_reminder" | "payment_reminder" | "fica_request" | "general";
+  body: string;
+  variables: string[];
+};
+
+// ─── TIER 2: CIPC ─────────────────────────────────────────────────────────────
+
+export type CipcDirector = {
+  name: string;
+  idNumber: string;
+  appointmentDate: string;
+  status: "Active" | "Resigned";
+};
+
+export type CipcSearchResult = {
+  registrationNumber: string;
+  companyName: string;
+  companyType: string;
+  status: "Active" | "Deregistered" | "In liquidation" | "Final deregistration";
+  registrationDate: string;
+  directors: CipcDirector[];
+};
+
+// ─── TIER 2: DOCUMENT INTELLIGENCE ───────────────────────────────────────────
+
+export type DocumentKeyDate = {
+  label: string;
+  date: string;
+};
+
+export type DocumentAnalysis = {
+  id: string;
+  fileName: string;
+  documentType: string;
+  analysisStatus: "Queued" | "Analysing" | "Complete" | "Failed";
+  parties: string[];
+  keyDates: DocumentKeyDate[];
+  obligations: string[];
+  riskFlags: string[];
+  saLawFlags: string[];
+  summary: string;
+  analysedAt: string;
+};
+
+// ─── TIER 2: ACCOUNTING ───────────────────────────────────────────────────────
+
+export type AccountingProvider = "sage_pastel" | "xero" | "quickbooks" | "csv_export";
+
+export type AccountingConnection = {
+  id: string;
+  provider: AccountingProvider;
+  connected: boolean;
+  lastSyncAt: string;
+  syncStatus: "idle" | "syncing" | "error";
+  errorMessage: string;
+};
+
+export type AccountingExportRecord = {
+  id: string;
+  provider: AccountingProvider;
+  exportType: "invoice" | "trust_receipt" | "disbursement" | "time_entry" | "full_sync";
+  recordCount: number;
+  status: "exported" | "failed" | "partial";
+  exportedAt: string;
 };

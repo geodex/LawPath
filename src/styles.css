@@ -1500,6 +1500,743 @@ textarea {
   color: #6c4c0d;
 }
 
+/* ─── Conveyancing Pipeline ─────────────────────────────────────────────── */
+
+.conv-stage-track {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 24px;
+  overflow-x: auto;
+}
+
+.conv-stage-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.conv-stage-dot.completed {
+  background: var(--green);
+  color: white;
+}
+
+.conv-stage-dot.in-progress {
+  background: var(--green);
+  color: white;
+  box-shadow: 0 0 0 4px rgba(31, 111, 91, 0.25);
+}
+
+.conv-stage-dot.pending {
+  background: #e8ede9;
+  color: var(--muted);
+  border: 2px solid var(--line);
+}
+
+.conv-stage-dot.blocked {
+  background: var(--rose);
+  color: white;
+}
+
+.conv-stage-line {
+  flex: 1;
+  height: 3px;
+  background: var(--line);
+  min-width: 18px;
+}
+
+.conv-stage-line.completed {
+  background: var(--green);
+}
+
+.conv-stage-label {
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 5px;
+  max-width: 60px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conv-stage-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 60px;
+}
+
+.conv-matter-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.conv-matter-card:hover,
+.conv-matter-card.selected {
+  border-color: var(--green);
+}
+
+.conv-clearance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.conv-clearance-row:last-child {
+  border-bottom: none;
+}
+
+.conv-fee-summary {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.conv-fee-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 0.9rem;
+}
+
+.conv-fee-total {
+  font-weight: 900;
+  font-size: 1.1rem;
+  border-top: 2px solid var(--ink);
+  margin-top: 8px;
+  padding-top: 10px;
+}
+
+.transfer-duty-note {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* ─── Litigation Pipeline ───────────────────────────────────────────────── */
+
+.lit-matter-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.lit-matter-card.selected {
+  border-color: var(--green);
+}
+
+.deadline-row {
+  display: grid;
+  grid-template-columns: 1fr 140px 100px 100px auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #f8faf8;
+  margin-bottom: 4px;
+}
+
+.deadline-row.overdue {
+  background: #fdf0f2;
+}
+
+.deadline-row.completed {
+  opacity: 0.55;
+}
+
+.deadline-row.critical {
+  border-left: 3px solid var(--rose);
+}
+
+.deadline-row.urgent {
+  border-left: 3px solid var(--gold);
+}
+
+.court-date-row {
+  display: grid;
+  grid-template-columns: 100px 80px 1fr 1fr 120px 1fr;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #f8faf8;
+  margin-bottom: 4px;
+  font-size: 0.87rem;
+  align-items: center;
+}
+
+.cost-order-row {
+  display: grid;
+  grid-template-columns: 100px 1fr 1fr 120px 80px;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #f8faf8;
+  margin-bottom: 4px;
+  font-size: 0.87rem;
+  align-items: center;
+}
+
+.strike-off-notice {
+  border-left: 4px solid var(--gold);
+  background: #fdf9ec;
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 18px;
+}
+
+.roll-type-unopposed {
+  background: #eaf1ed;
+  color: var(--green-dark);
+}
+
+.roll-type-opposed {
+  background: #fdf0f2;
+  color: var(--rose);
+}
+
+.roll-type-trial {
+  background: #eef3fb;
+  color: var(--blue);
+}
+
+.roll-type-urgent {
+  background: #fdf3dc;
+  color: var(--gold);
+}
+
+.priority-normal {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.priority-urgent {
+  color: var(--gold);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.priority-critical {
+  color: var(--rose);
+  font-weight: 900;
+  font-size: 0.8rem;
+}
+
+.lit-status-active {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #e8f4ee;
+  color: var(--green);
+}
+
+.lit-status-settled {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #eef3fb;
+  color: var(--blue);
+}
+
+.lit-status-struck-off,
+.lit-status-abandoned {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #fdf0f2;
+  color: var(--rose);
+}
+
+.lit-status-judgment {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #fdf3dc;
+  color: var(--gold);
+}
+
+/* ─── WhatsApp Communications ───────────────────────────────────────────── */
+
+.wa-notice {
+  border-left: 4px solid #25d366;
+  background: #f0fdf4;
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 18px;
+}
+
+.wa-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 420px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+
+.wa-bubble-out {
+  background: #dcf8c6;
+  align-self: flex-end;
+  border-radius: 12px 12px 4px 12px;
+  padding: 10px 14px;
+  max-width: 72%;
+  font-size: 0.9rem;
+}
+
+.wa-bubble-in {
+  background: #f0f0f0;
+  align-self: flex-start;
+  border-radius: 12px 12px 12px 4px;
+  padding: 10px 14px;
+  max-width: 72%;
+  font-size: 0.9rem;
+}
+
+.wa-bubble-time {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 4px;
+  text-align: right;
+}
+
+.wa-status-sent {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.wa-status-delivered {
+  color: var(--blue);
+  font-size: 0.72rem;
+}
+
+.wa-status-read {
+  color: var(--green);
+  font-size: 0.72rem;
+}
+
+.wa-status-failed {
+  color: var(--rose);
+  font-size: 0.72rem;
+}
+
+.wa-contact-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.wa-contact-item.selected {
+  border-color: var(--green);
+  background: #eaf1ed;
+}
+
+.wa-contact-item:hover {
+  background: #f5f8f5;
+}
+
+.wa-optin-badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.wa-optin-yes {
+  background: #dcfce7;
+  color: var(--green-dark);
+}
+
+.wa-optin-no {
+  background: #f3f4f6;
+  color: var(--muted);
+}
+
+.wa-template-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 0.87rem;
+}
+
+.wa-template-category {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eaf1ed;
+  color: var(--green-dark);
+}
+
+/* ─── CIPC Search ───────────────────────────────────────────────────────── */
+
+.cipc-notice {
+  border-left: 4px solid var(--blue);
+  background: #eef3fb;
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 18px;
+}
+
+.cipc-result-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.cipc-result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.cipc-status-active {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #e8f4ee;
+  color: var(--green);
+}
+
+.cipc-status-deregistered,
+.cipc-status-final {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #fdf0f2;
+  color: var(--rose);
+}
+
+.cipc-status-liquidation {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #fdf3dc;
+  color: var(--gold);
+}
+
+.cipc-directors-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.87rem;
+}
+
+.cipc-directors-table th {
+  text-align: left;
+  padding: 8px;
+  background: #f8faf8;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.cipc-directors-table td {
+  padding: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.cipc-suffix-guide {
+  background: #f8faf8;
+  border-radius: 8px;
+  padding: 14px;
+  font-size: 0.85rem;
+}
+
+.cipc-suffix-guide dt {
+  font-weight: 800;
+  color: var(--green-dark);
+  display: inline;
+}
+
+.cipc-suffix-guide dd {
+  display: inline;
+  margin-left: 4px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* ─── Document Intelligence ─────────────────────────────────────────────── */
+
+.doc-notice {
+  border-left: 4px solid var(--green);
+  background: #f0fdf4;
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 18px;
+}
+
+.doc-analysis-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+.doc-analysis-row.expanded {
+  border-color: var(--green);
+}
+
+.doc-analysis-status-queued,
+.doc-analysis-status-analysing {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.doc-analysis-status-complete {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.doc-analysis-status-failed {
+  color: var(--rose);
+  font-weight: 700;
+}
+
+.doc-detail {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+  margin-top: -1px;
+  background: var(--paper);
+}
+
+.doc-party-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eaf1ed;
+  color: var(--green-dark);
+  font-size: 0.83rem;
+  margin: 2px;
+}
+
+.doc-key-dates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.doc-key-date {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.doc-key-date strong {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.doc-obligation-list {
+  list-style: none;
+  padding: 0;
+  counter-reset: obligation-counter;
+}
+
+.doc-obligation-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 0.9rem;
+  counter-increment: obligation-counter;
+}
+
+.doc-obligation-list li::before {
+  content: counter(obligation-counter) ".";
+  font-weight: 800;
+  color: var(--green);
+  min-width: 20px;
+}
+
+.doc-risk-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 12px;
+  background: #fdf0f2;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 0.88rem;
+}
+
+.doc-sa-law-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 12px;
+  background: #fdf9ec;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 0.88rem;
+}
+
+.doc-attorney-review {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-style: italic;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+}
+
+/* ─── Accounting Sync ───────────────────────────────────────────────────── */
+
+.acct-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.acct-provider-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--panel);
+}
+
+.acct-provider-card.connected {
+  border-color: var(--green);
+}
+
+.acct-provider-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.acct-provider-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  background: #eaf1ed;
+  display: grid;
+  place-items: center;
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.acct-connected-badge {
+  font-size: 0.78rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: var(--green-dark);
+  font-weight: 700;
+}
+
+.acct-export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.acct-export-log-row {
+  display: grid;
+  grid-template-columns: 160px 120px 1fr 80px 100px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #f8faf8;
+  font-size: 0.87rem;
+  margin-bottom: 4px;
+}
+
+.acct-status-exported {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.acct-status-failed {
+  color: var(--rose);
+  font-weight: 700;
+}
+
+.acct-status-partial {
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.acct-sync-idle {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.acct-sync-syncing {
+  color: var(--blue);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.acct-sync-error {
+  color: var(--rose);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.acct-vat-notice {
+  border-left: 4px solid var(--blue);
+  background: #eef3fb;
+  padding: 14px 18px;
+  border-radius: 8px;
+  font-size: 0.87rem;
+}
+
 .rag-needs-review {
   background: #f8e9ec;
   color: var(--rose);

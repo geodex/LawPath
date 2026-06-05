@@ -40,11 +40,17 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
-import type { AiAgentKey, AiChatMessage, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, FicaClient, Invoice, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WorkTask } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AiAgentKey, AiChatMessage, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, FicaClient, Invoice, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 import { FicaKyc } from "./FicaKyc";
 import { PopiaCompliance } from "./PopiaCompliance";
 import { TimeRecording } from "./TimeRecording";
 import { TrustAccount } from "./TrustAccount";
+import { ConveyancingPipeline } from "./ConveyancingPipeline";
+import { LitigationPipeline } from "./LitigationPipeline";
+import { WhatsAppComms } from "./WhatsAppComms";
+import { CipcSearch } from "./CipcSearch";
+import { DocumentIntelligence } from "./DocumentIntelligence";
+import { AccountingSync } from "./AccountingSync";
 
 const nav: NavItem[] = [
   { key: "overview", label: "Overview", icon: Home },
@@ -52,10 +58,16 @@ const nav: NavItem[] = [
   { key: "research", label: "Research", icon: Search },
   { key: "secretary", label: "Secretary", icon: Archive },
   { key: "billing", label: "Billing", icon: CircleDollarSign },
+  { key: "conveyancing", label: "Conveyancing", icon: Home },
+  { key: "litigation", label: "Litigation", icon: Scale },
   { key: "trust", label: "Trust Account", icon: Vault },
   { key: "time", label: "Time & WIP", icon: Timer },
   { key: "fica", label: "FICA / KYC", icon: UserCheck },
   { key: "popia", label: "POPIA", icon: ShieldAlert },
+  { key: "whatsapp", label: "WhatsApp", icon: Users },
+  { key: "cipc", label: "CIPC Search", icon: Search },
+  { key: "documents", label: "Doc Intelligence", icon: BadgeCheck },
+  { key: "accounting", label: "Accounting", icon: CircleDollarSign },
   { key: "booking", label: "Bookings", icon: CalendarDays },
   { key: "portal", label: "Portal", icon: UsersRound },
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
@@ -72,6 +84,12 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   time: "billing",
   fica: "general",
   popia: "general",
+  conveyancing: "drafting",
+  litigation: "research",
+  whatsapp: "secretary",
+  cipc: "general",
+  documents: "drafting",
+  accounting: "billing",
   booking: "secretary",
   portal: "portal",
   "training-guide": "research",
@@ -191,6 +209,34 @@ export function App() {
     allowTenantPrivateSources: true,
     systemInstructions: "Use South African legal context, cite retrieved sources, flag uncertainty, and require attorney review before client-facing legal advice is sent."
   });
+  // ─── Tier 2 state ──────────────────────────────────────────────────────────
+  const [conveyancingMatters, setConveyancingMatters] = useState<ConveyancingMatter[]>([
+    { id: "CM-001", matterRef: "M-1048/T", matterType: "transfer", sellerName: "Thabo Dlamini", buyerName: "Nomsa Sithole", propertyDescription: "Erf 1204, Sandton, Gauteng", erfNumber: "Erf 1204", purchasePriceCents: 250000000, transferDutyCents: 16155000, conveyancingFeeCents: 3750000, vatOnFeeCents: 562500, estateAgent: "Pam Golding Properties", bondBank: "FNB", currentStage: "sars_transfer_duty", ficaStatus: "Compliant", ratesClearanceStatus: "Requested", levyClearanceStatus: "Not requested", ratesClearanceExpiry: "", levyClearanceExpiry: "", targetRegistrationDate: "2026-07-15", notes: "Linked sale — buyer must sell Midrand property.", stages: [] }
+  ]);
+  const [litigationMatters, setLitigationMatters] = useState<LitigationMatter[]>([
+    { id: "LM-001", matterRef: "LIT-2026-001", caseNumber: "12345/2026", court: "Gauteng High Court, Johannesburg", courtDivision: "Commercial", plaintiff: "ABC Construction (Pty) Ltd", defendant: "XYZ Developers CC", matterType: "opposed_motion", currentStage: "pleadings", claimAmountCents: 85000000, costsRecoveredCents: 0, status: "Active", serviceDate: "2026-05-01", notes: "Opposed motion for payment of outstanding construction contract amount.", deadlines: [{ id: "DL-001", description: "Deliver answering affidavit", ruleReference: "Rule 6(5)(d)", dueDate: "2026-06-18", daysFromService: 48, completed: false, priority: "Urgent" }, { id: "DL-002", description: "Deliver replying affidavit", ruleReference: "Rule 6(5)(e)", dueDate: "2026-07-02", daysFromService: 62, completed: false, priority: "Normal" }], courtDates: [{ id: "CD-001", courtDate: "2026-08-14", courtTime: "10:00", court: "Gauteng High Court, Johannesburg", purpose: "Hearing of opposed application", rollType: "Opposed", outcome: "", postponedTo: "" }], costOrders: [] }
+  ]);
+  const [waContacts, setWaContacts] = useState<WhatsAppContact[]>([
+    { id: "WC-001", clientName: "Thabo Dlamini", phoneNumber: "+27821234567", matterRef: "M-1048/T", optIn: true, optInDate: "2026-05-10T09:00:00Z" }
+  ]);
+  const [waMessages, setWaMessages] = useState<WhatsAppMessage[]>([
+    { id: "WM-001", contactId: "WC-001", clientName: "Thabo Dlamini", phoneNumber: "+27821234567", matterRef: "M-1048/T", direction: "outbound", messageBody: "Good day Thabo, your transfer (M-1048/T) has been lodged at the Deeds Office. Registration is expected within 8-10 working days.", templateId: "transfer_lodged", status: "read", sentAt: "2026-06-04T11:30:00Z" },
+    { id: "WM-002", contactId: "WC-001", clientName: "Thabo Dlamini", phoneNumber: "+27821234567", matterRef: "M-1048/T", direction: "inbound", messageBody: "Thank you! Appreciate the update.", templateId: "", status: "read", sentAt: "2026-06-04T11:45:00Z" }
+  ]);
+  const [waTemplates, setWaTemplates] = useState<WhatsAppTemplate[]>([
+    { id: "WT-001", name: "Transfer lodged", category: "transfer_update", body: "Good day {{client_name}}, your transfer ({{matter_ref}}) has been lodged at the Deeds Office. Registration is expected within 8-10 working days.", variables: ["client_name", "matter_ref"] },
+    { id: "WT-002", name: "FICA documents required", category: "fica_request", body: "Dear {{client_name}}, we still require FICA documents for matter {{matter_ref}}: {{documents_required}}.", variables: ["client_name", "matter_ref", "documents_required"] },
+    { id: "WT-003", name: "Appointment reminder", category: "appointment_reminder", body: "Dear {{client_name}}, reminder of your appointment on {{date}} at {{time}}. Please reply to confirm.", variables: ["client_name", "date", "time"] }
+  ]);
+  const [documentAnalyses, setDocumentAnalyses] = useState<DocumentAnalysis[]>([]);
+  const [accountingConnections, setAccountingConnections] = useState<AccountingConnection[]>([
+    { id: "AC-001", provider: "sage_pastel", connected: false, lastSyncAt: "", syncStatus: "idle", errorMessage: "" },
+    { id: "AC-002", provider: "xero", connected: false, lastSyncAt: "", syncStatus: "idle", errorMessage: "" },
+    { id: "AC-003", provider: "quickbooks", connected: false, lastSyncAt: "", syncStatus: "idle", errorMessage: "" },
+    { id: "AC-004", provider: "csv_export", connected: true, lastSyncAt: "", syncStatus: "idle", errorMessage: "" }
+  ]);
+  const [accountingExportLog, setAccountingExportLog] = useState<AccountingExportRecord[]>([]);
+
   // ─── Tier 1 state ──────────────────────────────────────────────────────────
   const [trustTransactions, setTrustTransactions] = useState<TrustTransaction[]>([
     { id: "TT-001", clientName: "Dlamini, T", description: "Transfer deposit received – Erf 1204 Sandton", reference: "M-1048/DEP", entryType: "receipt", amountCents: 25000000, runningBalanceCents: 25000000, valueDate: "2026-06-02", reconciled: false },
@@ -465,6 +511,54 @@ export function App() {
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
         {activeView === "secretary" && <Secretary tasks={tasks} setTasks={setTasks} log={log} />}
         {activeView === "billing" && <Billing invoices={invoices} setInvoices={setInvoices} log={log} />}
+        {activeView === "conveyancing" && (
+          <ConveyancingPipeline
+            matters={conveyancingMatters}
+            setMatters={setConveyancingMatters}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "litigation" && (
+          <LitigationPipeline
+            matters={litigationMatters}
+            setMatters={setLitigationMatters}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "whatsapp" && (
+          <WhatsAppComms
+            contacts={waContacts}
+            setContacts={setWaContacts}
+            messages={waMessages}
+            setMessages={setWaMessages}
+            templates={waTemplates}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "cipc" && (
+          <CipcSearch log={log} showToast={showToast} />
+        )}
+        {activeView === "documents" && (
+          <DocumentIntelligence
+            analyses={documentAnalyses}
+            setAnalyses={setDocumentAnalyses}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "accounting" && (
+          <AccountingSync
+            connections={accountingConnections}
+            setConnections={setAccountingConnections}
+            exportLog={accountingExportLog}
+            setExportLog={setAccountingExportLog}
+            log={log}
+            showToast={showToast}
+          />
+        )}
         {activeView === "trust" && (
           <TrustAccount
             transactions={trustTransactions}

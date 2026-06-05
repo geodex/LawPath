@@ -1,4 +1,4 @@
-import type { AiAgentKey, ApiProviderSettings, AssistantTrainingSettings, AuthUser, FicaClient, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AiAgentKey, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, FicaClient, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -276,4 +276,92 @@ export async function createPopiaBreachIncident(input: Omit<PopiaBreachIncident,
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+// ─── CONVEYANCING PIPELINE ───────────────────────────────────────────────────
+
+export async function getConveyancingMatters() {
+  return request<{ matters: ConveyancingMatter[] }>("/api/conveyancing/matters");
+}
+
+export async function createConveyancingMatter(input: Omit<ConveyancingMatter, "id" | "stages">) {
+  return request<{ matter: ConveyancingMatter }>("/api/conveyancing/matters", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function advanceConveyancingStage(id: string, stage: ConveyancingStage, notes?: string) {
+  return request<{ matter: ConveyancingMatter }>(`/api/conveyancing/matters/${id}/stage`, { method: "PUT", body: JSON.stringify({ stage, notes }) });
+}
+
+export async function updateConveyancingClearances(id: string, input: Partial<ConveyancingMatter>) {
+  return request<{ matter: ConveyancingMatter }>(`/api/conveyancing/matters/${id}/clearances`, { method: "PUT", body: JSON.stringify(input) });
+}
+
+// ─── LITIGATION PIPELINE ─────────────────────────────────────────────────────
+
+export async function getLitigationMatters() {
+  return request<{ matters: LitigationMatter[] }>("/api/litigation/matters");
+}
+
+export async function createLitigationMatter(input: Omit<LitigationMatter, "id" | "deadlines" | "courtDates" | "costOrders">) {
+  return request<{ matter: LitigationMatter }>("/api/litigation/matters", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function createLitigationDeadline(matterId: string, input: Omit<LitigationDeadline, "id">) {
+  return request<{ deadline: LitigationDeadline }>(`/api/litigation/matters/${matterId}/deadlines`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function completeLitigationDeadline(matterId: string, deadlineId: string) {
+  return request<{ deadline: LitigationDeadline }>(`/api/litigation/matters/${matterId}/deadlines/${deadlineId}/complete`, { method: "PUT" });
+}
+
+export async function createCourtDate(matterId: string, input: Omit<CourtDate, "id">) {
+  return request<{ courtDate: CourtDate }>(`/api/litigation/matters/${matterId}/court-dates`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function createCostOrder(matterId: string, input: Omit<CostOrder, "id">) {
+  return request<{ costOrder: CostOrder }>(`/api/litigation/matters/${matterId}/cost-orders`, { method: "POST", body: JSON.stringify(input) });
+}
+
+// ─── WHATSAPP ─────────────────────────────────────────────────────────────────
+
+export async function getWhatsAppData() {
+  return request<{ contacts: WhatsAppContact[]; messages: WhatsAppMessage[]; templates: WhatsAppTemplate[] }>("/api/whatsapp/data");
+}
+
+export async function sendWhatsAppMessage(input: { contactId: string; messageBody: string; templateId?: string; matterRef?: string }) {
+  return request<{ message: WhatsAppMessage }>("/api/whatsapp/send", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function createWhatsAppContact(input: Omit<WhatsAppContact, "id">) {
+  return request<{ contact: WhatsAppContact }>("/api/whatsapp/contacts", { method: "POST", body: JSON.stringify(input) });
+}
+
+// ─── CIPC ─────────────────────────────────────────────────────────────────────
+
+export async function searchCipc(query: string) {
+  return request<{ results: CipcSearchResult[]; cached?: boolean; note?: string }>(`/api/cipc/search?q=${encodeURIComponent(query)}`);
+}
+
+// ─── DOCUMENT INTELLIGENCE ───────────────────────────────────────────────────
+
+export async function getDocumentAnalyses() {
+  return request<{ analyses: DocumentAnalysis[] }>("/api/documents/analyses");
+}
+
+export async function submitDocumentForAnalysis(input: { fileName: string; fileDataUrl: string; matterRef?: string }) {
+  return request<{ analysis: DocumentAnalysis }>("/api/documents/analyse", { method: "POST", body: JSON.stringify(input) });
+}
+
+// ─── ACCOUNTING ───────────────────────────────────────────────────────────────
+
+export async function getAccountingData() {
+  return request<{ connections: AccountingConnection[]; exportLog: AccountingExportRecord[] }>("/api/accounting/data");
+}
+
+export async function saveAccountingConnection(input: { provider: AccountingProvider; connected?: boolean; apiKey?: string; companyId?: string }) {
+  return request<{ connection: AccountingConnection }>("/api/accounting/connections", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function triggerAccountingExport(provider: AccountingProvider, exportType: AccountingExportRecord["exportType"]) {
+  return request<{ exportRecord: AccountingExportRecord }>("/api/accounting/export", { method: "POST", body: JSON.stringify({ provider, exportType }) });
 }
