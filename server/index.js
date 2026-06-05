@@ -1835,6 +1835,49 @@ const DEFAULT_WA_TEMPLATES = [
   { name: "Payment reminder", category: "payment_reminder", body: "Dear {{client_name}}, invoice {{invoice_number}} for R {{amount}} is outstanding. Please arrange payment.", variables: ["client_name", "invoice_number", "amount"] }
 ];
 
+// ── WhatsApp Meta Cloud API helpers ──────────────────────────────────────────
+
+async function getWhatsAppSettings() {
+  const result = await pool.query(
+    "select * from platform_whatsapp_settings where active = true order by updated_at desc limit 1"
+  ).catch(() => ({ rows: [] }));
+  const row = result.rows[0];
+  return {
+    provider: row?.provider || null,
+    apiKey: row?.api_key || process.env.WHATSAPP_API_KEY || "",
+    phoneNumberId: row?.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID || "",
+    webhookVerifyToken: row?.webhook_verify_token || process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "lawpath-whatsapp-verify",
+    configured: Boolean(row?.api_key || process.env.WHATSAPP_API_KEY)
+  };
+}
+
+// Normalise SA phone numbers to E.164 format (+27...)
+function normaliseSAPhone(phone) {
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.startsWith("27") && digits.length >= 11) return `+${digits}`;
+  if (digits.startsWith("0") && digits.length === 10) return `+27${digits.slice(1)}`;
+  if (digits.length >= 9 && !digits.startsWith("27")) return `+27${digits}`;
+  return `+${digits}`;
+}
+
+async function sendMetaCloudMessage({ apiKey, phoneNumberId, to, messageBody }) {
+  const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: normaliseSAPhone(to),
+      type: "text",
+      text: { preview_url: false, body: messageBody }
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || `Meta API error ${response.status}`);
+  return payload;
+}
+
 function waContactFromRow(row) {
   return { id: row.id, clientName: row.client_name, phoneNumber: row.phone_number, matterRef: row.matter_ref || "", optIn: Boolean(row.opt_in), optInDate: row.opt_in_date ? new Date(row.opt_in_date).toISOString() : "" };
 }
@@ -1865,18 +1908,163 @@ app.get("/api/whatsapp/data", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ── WhatsApp webhook verification (Meta Cloud API challenge-response) ─────────
+// Meta sends a GET to verify the webhook. Respond with hub.challenge.
+app.get("/api/webhooks/whatsapp", async (req, res) => {
+  const { "hub.mode": mode, "hub.verify_token": token, "hub.challenge": challenge } = req.query;
+  const waSettings = await getWhatsAppSettings().catch(() => ({ webhookVerifyToken: "" }));
+  const verifyToken = waSettings.webhookVerifyToken || process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "lawpath-whatsapp-verify";
+  if (mode === "subscribe" && token === verifyToken) {
+    console.info("[whatsapp webhook] Verification successful");
+    return res.status(200).send(challenge);
+  }
+  console.error("[whatsapp webhook] Verification failed — token mismatch");
+  res.status(403).json({ error: "Webhook verification failed." });
+});
+
+// ── WhatsApp incoming message webhook (Meta Cloud API) ────────────────────────
+app.post("/api/webhooks/whatsapp", async (req, res) => {
+  // Always ACK within 20 seconds or Meta will retry and disable the webhook
+  res.status(200).json({ status: "ok" });
+
+  try {
+    const body = req.body;
+    if (body.object !== "whatsapp_business_account") return;
+
+    for (const entry of (body.entry || [])) {
+      for (const change of (entry.changes || [])) {
+        if (change.field !== "messages") continue;
+        const value = change.value || {};
+        const messages = value.messages || [];
+        const contacts = value.contacts || [];
+
+        for (const msg of messages) {
+          if (msg.type !== "text" || !msg.text?.body) continue;
+          const from = msg.from; // E.164 without +
+          const phoneNumber = `+${from}`;
+          const messageBody = msg.text.body;
+          const providerMsgId = msg.id;
+          const contactName = contacts.find(c => c.wa_id === from)?.profile?.name || "WhatsApp contact";
+
+          // Find or create contact across all tenants that have this phone number
+          const existing = await pool.query(
+            "select * from whatsapp_contacts where phone_number = $1 limit 1",
+            [phoneNumber]
+          ).catch(() => ({ rows: [] }));
+
+          let contactId = existing.rows[0]?.id;
+          const tenantId = existing.rows[0]?.tenant_id || null;
+
+          if (!contactId && tenantId) {
+            const newContact = await pool.query(
+              "insert into whatsapp_contacts (tenant_id, client_name, phone_number, opt_in, opt_in_date) values ($1,$2,$3,true,now()) on conflict (tenant_id, phone_number) do update set opt_in=true, opt_in_date=now() returning id",
+              [tenantId, contactName, phoneNumber]
+            ).catch(() => ({ rows: [] }));
+            contactId = newContact.rows[0]?.id;
+          }
+
+          if (tenantId) {
+            await pool.query(
+              "insert into whatsapp_messages (tenant_id, contact_id, direction, message_body, status, provider_msg_id) values ($1,$2,'inbound',$3,'read',$4) on conflict do nothing",
+              [tenantId, contactId || null, messageBody, providerMsgId]
+            ).catch(err => console.error("[whatsapp inbound] DB error:", err.message));
+            console.info(`[whatsapp inbound] ${phoneNumber}: ${messageBody.slice(0, 60)}`);
+          }
+        }
+
+        // Handle message status updates (delivered, read, failed)
+        for (const status of (value.statuses || [])) {
+          const newStatus = status.status === "delivered" ? "delivered" : status.status === "read" ? "read" : status.status === "failed" ? "failed" : null;
+          if (newStatus && status.id) {
+            await pool.query(
+              "update whatsapp_messages set status=$2 where provider_msg_id=$1",
+              [status.id, newStatus]
+            ).catch(() => {});
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[whatsapp webhook] Processing error:", err.message);
+  }
+});
+
+// ── GET/PUT platform WhatsApp settings ────────────────────────────────────────
+app.get("/api/platform/whatsapp-settings", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  try {
+    const result = await pool.query("select * from platform_whatsapp_settings where active = true order by updated_at desc limit 1");
+    const row = result.rows[0];
+    res.json({
+      provider: row?.provider || "meta_cloud_api",
+      apiKey: row?.api_key || "",
+      phoneNumberId: row?.phone_number_id || "",
+      businessAccountId: row?.business_account_id || "",
+      webhookVerifyToken: row?.webhook_verify_token || "lawpath-whatsapp-verify",
+      active: Boolean(row?.active),
+      configured: Boolean(row?.api_key)
+    });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/platform/whatsapp-settings", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  const { provider, apiKey, phoneNumberId, businessAccountId, webhookVerifyToken } = req.body;
+  try {
+    await pool.query("update platform_whatsapp_settings set active = false");
+    const result = await pool.query(
+      `insert into platform_whatsapp_settings (provider, api_key, phone_number_id, business_account_id, webhook_verify_token, active)
+       values ($1,$2,$3,$4,$5,true)
+       returning *`,
+      [provider || "meta_cloud_api", apiKey || null, phoneNumberId || null, businessAccountId || null, webhookVerifyToken || "lawpath-whatsapp-verify"]
+    );
+    const row = result.rows[0];
+    res.json({ configured: Boolean(row.api_key), provider: row.provider, active: true });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/whatsapp/send", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const { contactId, messageBody, templateId, matterRef } = req.body;
   if (!contactId || !messageBody) return res.status(400).json({ error: "Contact and message body are required." });
   try {
-    const result = await pool.query(
-      "insert into whatsapp_messages (tenant_id, contact_id, matter_ref, direction, message_body, template_id, status, created_by) values ($1,$2,$3,'outbound',$4,$5,'sent',$6) returning *",
-      [req.user.tenantId, contactId, matterRef || null, messageBody, templateId || null, req.user.sub]
-    );
     const contact = await pool.query("select client_name, phone_number from whatsapp_contacts where id = $1", [contactId]);
-    const row = { ...result.rows[0], client_name: contact.rows[0]?.client_name || "", phone_number: contact.rows[0]?.phone_number || "" };
-    res.status(201).json({ message: waMessageFromRow(row) });
+    const phoneNumber = contact.rows[0]?.phone_number;
+
+    let providerMsgId = null;
+    let status = "sent";
+    let simulated = false;
+
+    const waSettings = await getWhatsAppSettings();
+
+    if (waSettings.configured && waSettings.apiKey && waSettings.phoneNumberId && phoneNumber) {
+      try {
+        const metaResult = await sendMetaCloudMessage({
+          apiKey: waSettings.apiKey,
+          phoneNumberId: waSettings.phoneNumberId,
+          to: phoneNumber,
+          messageBody
+        });
+        providerMsgId = metaResult.messages?.[0]?.id || null;
+        status = "sent";
+        console.info(`[whatsapp send] Sent via Meta Cloud API to ${phoneNumber}, msgId: ${providerMsgId}`);
+      } catch (apiErr) {
+        console.error("[whatsapp send] Meta Cloud API error:", apiErr.message);
+        status = "failed";
+        simulated = false;
+      }
+    } else {
+      // Simulation mode — no API key configured
+      simulated = true;
+      console.info(`[whatsapp send] SIMULATED (no API key) → ${phoneNumber}: ${messageBody.slice(0, 60)}`);
+    }
+
+    const result = await pool.query(
+      "insert into whatsapp_messages (tenant_id, contact_id, matter_ref, direction, message_body, template_id, status, provider_msg_id, created_by) values ($1,$2,$3,'outbound',$4,$5,$6,$7,$8) returning *",
+      [req.user.tenantId, contactId, matterRef || null, messageBody, templateId || null, status, providerMsgId, req.user.sub]
+    );
+    const row = { ...result.rows[0], client_name: contact.rows[0]?.client_name || "", phone_number: phoneNumber || "" };
+    res.status(201).json({ message: waMessageFromRow(row), simulated, configured: waSettings.configured });
   } catch (error) { next(error); }
 });
 
@@ -2429,24 +2617,71 @@ app.get("/api/windeed/search", authMiddleware, async (req, res, next) => {
       } catch { /* fall through to simulation */ }
     }
 
+    // Try Lightstone as secondary provider
+    const lightstoneApiKey = process.env.LIGHTSTONE_API_KEY || "";
+    if (!results.length && lightstoneApiKey) {
+      try {
+        const lRes = await fetch(
+          `https://api.lightstone.co.za/property/search?q=${encodeURIComponent(q)}&type=${type}`,
+          { headers: { "X-API-Key": lightstoneApiKey, "Accept": "application/json" }, signal: AbortSignal.timeout(8000) }
+        );
+        if (lRes.ok) {
+          const data = await lRes.json();
+          results = (data.properties || data.results || []).map(p => ({
+            erfNumber: p.erf || p.erfNumber || "",
+            titleDeedNumber: p.titleDeed || p.deed_number || "",
+            propertyDescription: p.description || p.address || "",
+            extent: p.size ? `${p.size} m²` : "",
+            registeredOwner: p.owner || "",
+            bondHolder: p.bond?.holder || "",
+            purchasePrice: p.lastSaleAmount ? `R ${Number(p.lastSaleAmount).toLocaleString("en-ZA")}` : "",
+            registrationDate: p.registrationDate || "",
+            municipalValue: p.municipalValue ? `R ${Number(p.municipalValue).toLocaleString("en-ZA")}` : "",
+            ratesLevied: p.monthlyRates ? `R ${Number(p.monthlyRates).toLocaleString("en-ZA")} per month` : ""
+          }));
+          console.info(`[lightstone] ${results.length} results for "${q}"`);
+        }
+      } catch (err) { console.error("[lightstone] API error:", err.message); }
+    }
+
+    // Realistic simulation fallback — plausible SA property structure
     if (!results.length) {
-      // Simulate realistic SA property data
+      const erfNum = /^\d+$/.test(String(q).trim()) ? String(q).trim() : `${Math.floor(Math.random() * 9000 + 1000)}`;
+      const suburb = String(q).includes(",") ? q.split(",")[1].trim() : q;
+      const provinces = [
+        { name: "Gauteng", cities: ["Sandton", "Randburg", "Midrand", "Centurion"] },
+        { name: "Western Cape", cities: ["Cape Town", "Stellenbosch", "Somerset West"] },
+        { name: "KwaZulu-Natal", cities: ["Umhlanga", "Ballito", "Durban North"] }
+      ];
+      const prov = provinces[Math.floor(Math.random() * provinces.length)];
+      const city = prov.cities[Math.floor(Math.random() * prov.cities.length)];
+      const yr = 2015 + Math.floor(Math.random() * 9);
+      const price = Math.floor(Math.random() * 3500000 + 800000);
+      const munVal = Math.floor(price * 0.75);
+      const banks = ["FIRST NATIONAL BANK LIMITED", "ABSA BANK LIMITED", "STANDARD BANK OF SOUTH AFRICA LIMITED", "NEDBANK LIMITED"];
       results = [{
-        erfNumber: `ERF ${Math.floor(Math.random() * 9000 + 1000)}`,
-        titleDeedNumber: `T${Math.floor(Math.random() * 90000 + 10000)}/2019`,
-        propertyDescription: `ERF ${Math.floor(Math.random() * 9000 + 1000)}, ${q.includes(",") ? q.split(",")[1].trim() : "Sandton"}, Province of Gauteng`,
-        extent: `${(Math.random() * 900 + 100).toFixed(0)} m²`,
-        registeredOwner: "SIMULATED OWNER — LIVE WINDEED API REQUIRED",
-        bondHolder: "FIRST NATIONAL BANK LIMITED",
-        purchasePrice: `R ${(Math.random() * 3000000 + 500000).toFixed(0)}`,
-        registrationDate: "2019-08-15",
-        municipalValue: `R ${(Math.random() * 2000000 + 400000).toFixed(0)}`,
-        ratesLevied: `R ${(Math.random() * 2000 + 500).toFixed(0)} per month`
+        erfNumber: `ERF ${erfNum}`,
+        titleDeedNumber: `T${Math.floor(Math.random() * 90000 + 10000)}/${yr}`,
+        propertyDescription: `ERF ${erfNum}, ${suburb || city}, Province of ${prov.name}`,
+        extent: `${Math.floor(Math.random() * 900 + 150)} m²`,
+        registeredOwner: "[Live owner data — set WINDEED_API_KEY or LIGHTSTONE_API_KEY in .env]",
+        bondHolder: banks[Math.floor(Math.random() * banks.length)],
+        purchasePrice: `R ${price.toLocaleString("en-ZA")}`,
+        registrationDate: `${yr}-${String(Math.floor(Math.random() * 12 + 1)).padStart(2, "0")}-15`,
+        municipalValue: `R ${munVal.toLocaleString("en-ZA")}`,
+        ratesLevied: `R ${Math.floor(munVal * 0.0075 / 12).toLocaleString("en-ZA")} per month`
       }];
     }
 
-    await pool.query("insert into property_search_cache (search_query, search_type, result_count, results, provider, searched_by) values ($1,$2,$3,$4,'windeed',$5) on conflict do nothing", [String(q), String(type), results.length, JSON.stringify(results), req.user.sub]);
-    res.json({ results, cached: false, note: windeedApiKey ? "Live Windeed results." : "Windeed API key not configured. Results are simulated. Set WINDEED_API_KEY in .env to enable live searches." });
+    const provider = windeedApiKey ? "windeed" : lightstoneApiKey ? "lightstone" : "simulation";
+    await pool.query(
+      "insert into property_search_cache (search_query, search_type, result_count, results, provider, searched_by) values ($1,$2,$3,$4,$5,$6) on conflict do nothing",
+      [String(q), String(type), results.length, JSON.stringify(results), provider, req.user.sub]
+    );
+    const note = provider === "windeed" ? "Live data from Windeed (Deeds Office)." :
+      provider === "lightstone" ? "Live data from Lightstone." :
+      "Simulation mode. Set WINDEED_API_KEY (windeed.co.za) or LIGHTSTONE_API_KEY (lightstone.co.za) in .env for live Deeds Office data.";
+    res.json({ results, cached: false, provider, note });
   } catch (error) { next(error); }
 });
 

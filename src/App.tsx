@@ -3155,6 +3155,51 @@ function AdminSettings({
         </form>
       </section>
 
+      {/* WhatsApp Business API settings */}
+      <section className="settings-grid">
+        <Panel title="WhatsApp Business (Meta Cloud API)" badge="Super admin only">
+          <form className="form" onSubmit={async (e) => {
+            e.preventDefault();
+            const f = new FormData(e.currentTarget);
+            try {
+              await fetch("/api/platform/whatsapp-settings", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("lawpath.auth.token")}` },
+                body: JSON.stringify({ provider: "meta_cloud_api", apiKey: f.get("waApiKey"), phoneNumberId: f.get("waPhoneNumberId"), webhookVerifyToken: f.get("waVerifyToken") })
+              });
+              showToast("success", "WhatsApp settings saved", "Meta Cloud API credentials saved.");
+              log("WhatsApp API credentials updated");
+            } catch { showToast("error", "Save failed", "Could not save WhatsApp settings."); }
+          }}>
+            <p style={{ fontSize: "0.87rem", color: "var(--muted)", margin: 0 }}>
+              Setup: Meta Business App → WhatsApp product → System User token.
+              Register webhook: <code>/api/webhooks/whatsapp</code> (events: messages, message_status_updates).
+            </p>
+            <label>System User Access Token<input name="waApiKey" type="password" placeholder="EAA..." /></label>
+            <label>Phone Number ID<input name="waPhoneNumberId" placeholder="From WhatsApp → Getting Started" /></label>
+            <label>Webhook verify token<input name="waVerifyToken" defaultValue="lawpath-whatsapp-verify" /></label>
+            <button className="primary" type="submit"><Send size={18} /> Save WhatsApp settings</button>
+          </form>
+        </Panel>
+
+        <Panel title="Property search providers" badge="Super admin only">
+          <div className="form">
+            <p style={{ fontSize: "0.87rem", color: "var(--muted)", margin: "0 0 12px" }}>
+              Configure API keys for live Deeds Office property data. Without keys, searches return realistic simulation data.
+            </p>
+            <div style={{ padding: "12px 14px", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 10 }}>
+              <strong style={{ fontSize: "0.9rem" }}>Windeed</strong>
+              <p style={{ margin: "4px 0 0", fontSize: "0.83rem", color: "var(--muted)" }}>windeed.co.za — Primary SA Deeds Office data. Set <code>WINDEED_API_KEY</code> in .env.</p>
+            </div>
+            <div style={{ padding: "12px 14px", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8 }}>
+              <strong style={{ fontSize: "0.9rem" }}>Lightstone</strong>
+              <p style={{ margin: "4px 0 0", fontSize: "0.83rem", color: "var(--muted)" }}>lightstone.co.za — Alternative property intelligence. Set <code>LIGHTSTONE_API_KEY</code> in .env.</p>
+            </div>
+            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: 12 }}>Both providers require a commercial subscription. API credentials are set in <code>.env</code> and take effect on API restart.</p>
+          </div>
+        </Panel>
+      </section>
+
       <section className="rag-shell">
         <div className="panel-head">
           <div>
