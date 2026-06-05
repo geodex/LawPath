@@ -3,6 +3,7 @@ require("dotenv").config();
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
+const waSession = require("./whatsapp-session");
 const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
 const { authMiddleware, signToken } = require("./auth");
@@ -2037,7 +2038,21 @@ app.post("/api/whatsapp/send", authMiddleware, async (req, res, next) => {
 
     const waSettings = await getWhatsAppSettings();
 
-    if (waSettings.configured && waSettings.apiKey && waSettings.phoneNumberId && phoneNumber) {
+    // Priority: 1) QR session (whatsapp-web.js)  2) Meta Cloud API  3) Simulation
+    const qrStatus = waSession.getSessionStatus(req.user.tenantId);
+
+    if (qrStatus.status === "ready" && phoneNumber) {
+      // ── QR session — use connected WhatsApp account ──────────────────────
+      try {
+        providerMsgId = await waSession.sendMessage(req.user.tenantId, phoneNumber, messageBody);
+        status = "sent";
+        console.info(`[whatsapp send] QR session → ${phoneNumber}: ${messageBody.slice(0, 60)}`);
+      } catch (qrErr) {
+        console.error("[whatsapp send] QR session error:", qrErr.message);
+        status = "failed";
+      }
+    } else if (waSettings.configured && waSettings.apiKey && waSettings.phoneNumberId && phoneNumber) {
+      // ── Meta Cloud API fallback ───────────────────────────────────────────
       try {
         const metaResult = await sendMetaCloudMessage({
           apiKey: waSettings.apiKey,
@@ -2047,16 +2062,15 @@ app.post("/api/whatsapp/send", authMiddleware, async (req, res, next) => {
         });
         providerMsgId = metaResult.messages?.[0]?.id || null;
         status = "sent";
-        console.info(`[whatsapp send] Sent via Meta Cloud API to ${phoneNumber}, msgId: ${providerMsgId}`);
+        console.info(`[whatsapp send] Meta Cloud API → ${phoneNumber}, msgId: ${providerMsgId}`);
       } catch (apiErr) {
         console.error("[whatsapp send] Meta Cloud API error:", apiErr.message);
         status = "failed";
-        simulated = false;
       }
     } else {
-      // Simulation mode — no API key configured
+      // ── Simulation mode — no connection active ────────────────────────────
       simulated = true;
-      console.info(`[whatsapp send] SIMULATED (no API key) → ${phoneNumber}: ${messageBody.slice(0, 60)}`);
+      console.info(`[whatsapp send] SIMULATED → ${phoneNumber}: ${messageBody.slice(0, 60)}`);
     }
 
     const result = await pool.query(
@@ -2078,6 +2092,42 @@ app.post("/api/whatsapp/contacts", authMiddleware, async (req, res, next) => {
       [req.user.tenantId, clientName, phoneNumber, matterRef || null, Boolean(optIn)]
     );
     res.status(201).json({ contact: waContactFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── WHATSAPP QR SESSION (whatsapp-web.js) ────────────────────────────────────
+
+app.get("/api/whatsapp/qr-status", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const status = waSession.getSessionStatus(req.user.tenantId);
+    res.json(status);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/whatsapp/connect", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const allowedRoles = ["platform_super_admin", "tenant_admin"];
+  if (!allowedRoles.includes(req.user.role)) {
+    return res.status(403).json({ error: "Only tenant admins can connect WhatsApp." });
+  }
+  try {
+    await waSession.initSession(req.user.tenantId);
+    res.json({ ok: true, message: "WhatsApp session initialising. Scan the QR code when it appears." });
+  } catch (error) {
+    res.status(503).json({ error: error.message });
+  }
+});
+
+app.post("/api/whatsapp/disconnect", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const allowedRoles = ["platform_super_admin", "tenant_admin"];
+  if (!allowedRoles.includes(req.user.role)) {
+    return res.status(403).json({ error: "Only tenant admins can disconnect WhatsApp." });
+  }
+  try {
+    await waSession.disconnectSession(req.user.tenantId);
+    res.json({ ok: true });
   } catch (error) { next(error); }
 });
 

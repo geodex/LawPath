@@ -1,5 +1,5 @@
-import { CheckCheck, MessageSquare, Phone, Plus, Send, UserCheck, X } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { CheckCheck, Link2, MessageSquare, Phone, Plus, QrCode, RefreshCw, Send, UserCheck, X } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { createWhatsAppContact, sendWhatsAppMessage } from "./api";
 import type { WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
 
@@ -39,10 +39,58 @@ const StatusIcon = ({ status }: { status: WhatsAppMessage["status"] }) => {
   return <span title="Queued" style={{ fontSize: "11px", color: "#9ca3af" }}>⏱</span>;
 };
 
+type QrStatus = { status: string; qrDataUrl: string | null; phoneNumber: string | null; displayName: string | null; connectedAt: string | null };
+
+const TOKEN_KEY = "lawpath.auth.token";
+async function apiFetch(path: string, options: RequestInit = {}) {
+  const token = localStorage.getItem(TOKEN_KEY) || "";
+  const res = await fetch(path, { ...options, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...(options.headers || {}) } });
+  return res.json();
+}
+
 export function WhatsAppComms({ contacts, setContacts, messages, setMessages, templates, log, showToast }: Props) {
+  const [mainTab, setMainTab] = useState<"messages" | "connect">("messages");
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [sendTab, setSendTab] = useState<"template" | "custom">("template");
+
+  // QR connection state
+  const [qrStatus, setQrStatus] = useState<QrStatus>({ status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null });
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll QR status every 3 seconds when on the connect tab or when status is qr/initializing
+  useEffect(() => {
+    const shouldPoll = mainTab === "connect" || ["qr", "initializing", "authenticated"].includes(qrStatus.status);
+    if (!shouldPoll) { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } return; }
+    if (pollRef.current) return;
+    const fetchStatus = () => apiFetch("/api/whatsapp/qr-status").then(s => setQrStatus(s)).catch(() => {});
+    fetchStatus();
+    pollRef.current = setInterval(fetchStatus, 3000);
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [mainTab, qrStatus.status]);
+
+  async function handleConnect() {
+    setConnecting(true);
+    try {
+      await apiFetch("/api/whatsapp/connect", { method: "POST" });
+      setQrStatus(prev => ({ ...prev, status: "initializing" }));
+      showToast("info", "Starting WhatsApp", "Open WhatsApp on your phone and scan the QR code when it appears.");
+    } catch { showToast("error", "Connect failed", "Could not start WhatsApp session."); }
+    finally { setConnecting(false); }
+  }
+
+  async function handleDisconnect() {
+    setDisconnecting(true);
+    try {
+      await apiFetch("/api/whatsapp/disconnect", { method: "POST" });
+      setQrStatus({ status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null });
+      showToast("info", "Disconnected", "WhatsApp session ended.");
+      log("WhatsApp disconnected");
+    } catch { showToast("error", "Disconnect failed", "Could not end session."); }
+    finally { setDisconnecting(false); }
+  }
 
   // Add contact form state
   const [newClientName, setNewClientName] = useState("");
@@ -187,8 +235,115 @@ export function WhatsAppComms({ contacts, setContacts, messages, setMessages, te
     }
   };
 
+  const isConnected = qrStatus.status === "ready";
+  const isConnecting = ["initializing", "qr", "authenticated"].includes(qrStatus.status);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+
+      {/* Main tab switcher */}
+      <div className="popia-tabs">
+        <button className={`popia-tab${mainTab === "messages" ? " active" : ""}`} onClick={() => setMainTab("messages")}>
+          <MessageSquare size={15} /> Messages
+        </button>
+        <button className={`popia-tab${mainTab === "connect" ? " active" : ""}`} onClick={() => setMainTab("connect")}>
+          {isConnected ? <Link2 size={15} style={{ color: "var(--green)" }} /> : <QrCode size={15} />}
+          {isConnected ? `Connected · ${qrStatus.phoneNumber || "WhatsApp"}` : "Connect WhatsApp"}
+        </button>
+      </div>
+
+      {/* ── CONNECT TAB ─────────────────────────────────────────────────────── */}
+      {mainTab === "connect" && (
+        <div>
+          <div style={{ border: "1px solid var(--line)", borderRadius: 12, overflow: "hidden" }}>
+            {/* Header */}
+            <div style={{ background: "#075e54", color: "#fff", padding: "20px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h3 style={{ margin: 0, color: "#fff" }}>WhatsApp Web Connection</h3>
+                <p style={{ margin: "4px 0 0", fontSize: "0.87rem", color: "rgba(255,255,255,0.75)" }}>
+                  Scan the QR code with your existing WhatsApp to connect it to LawPath SA.
+                  Used for notifications only — sensitive documents stay on email.
+                </p>
+              </div>
+              <div style={{ background: "#25d366", borderRadius: 8, padding: "6px 14px", fontSize: "0.85rem", fontWeight: 700 }}>
+                {isConnected ? "● Connected" : isConnecting ? "● Connecting..." : "○ Disconnected"}
+              </div>
+            </div>
+
+            <div style={{ padding: 24 }}>
+              {/* Connected state */}
+              {isConnected && (
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 56, marginBottom: 12 }}>✅</div>
+                  <h3 style={{ color: "var(--green)" }}>WhatsApp connected</h3>
+                  {qrStatus.displayName && <p style={{ margin: "0 0 4px", fontWeight: 700 }}>{qrStatus.displayName}</p>}
+                  {qrStatus.phoneNumber && <p style={{ margin: "0 0 4px", color: "var(--muted)" }}>{qrStatus.phoneNumber}</p>}
+                  {qrStatus.connectedAt && <p style={{ margin: "0 0 20px", fontSize: "0.83rem", color: "var(--muted)" }}>Connected {new Date(qrStatus.connectedAt).toLocaleString("en-ZA")}</p>}
+                  <div style={{ padding: "12px 16px", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, marginBottom: 20, fontSize: "0.87rem", textAlign: "left" }}>
+                    <strong>✓ Ready to send</strong> — All messages in the Messages tab will be sent from this WhatsApp account.
+                    Incoming replies are automatically stored against the contact record.
+                  </div>
+                  <button className="ghost" style={{ color: "var(--rose)", borderColor: "var(--rose)" }} disabled={disconnecting} onClick={handleDisconnect}>
+                    <X size={16} /> {disconnecting ? "Disconnecting..." : "Disconnect WhatsApp"}
+                  </button>
+                </div>
+              )}
+
+              {/* QR code */}
+              {qrStatus.status === "qr" && qrStatus.qrDataUrl && (
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ marginBottom: 16, color: "var(--muted)", fontSize: "0.9rem" }}>
+                    Open <strong>WhatsApp</strong> on your phone → <strong>⋮ Menu → Linked Devices → Link a Device</strong> and scan:
+                  </p>
+                  <img src={qrStatus.qrDataUrl} alt="WhatsApp QR code" style={{ width: 280, height: 280, border: "4px solid #075e54", borderRadius: 12 }} />
+                  <p style={{ marginTop: 12, fontSize: "0.82rem", color: "var(--muted)" }}>
+                    QR code refreshes automatically. Keep this tab open while scanning.
+                  </p>
+                </div>
+              )}
+
+              {/* Initialising */}
+              {(qrStatus.status === "initializing" || qrStatus.status === "authenticated") && (
+                <div style={{ textAlign: "center", padding: 24 }}>
+                  <RefreshCw size={36} style={{ color: "#25d366", animation: "spin 1s linear infinite" }} />
+                  <p style={{ marginTop: 16, color: "var(--muted)" }}>
+                    {qrStatus.status === "authenticated" ? "Authenticated — loading session..." : "Starting WhatsApp — QR code loading..."}
+                  </p>
+                  <p style={{ fontSize: "0.83rem", color: "var(--muted)" }}>This takes 10–30 seconds on first connect.</p>
+                </div>
+              )}
+
+              {/* Disconnected */}
+              {(qrStatus.status === "disconnected" || qrStatus.status === "error" || qrStatus.status === "auth_failure") && (
+                <div style={{ textAlign: "center", padding: 24 }}>
+                  <QrCode size={48} style={{ color: "var(--muted)", marginBottom: 16 }} />
+                  {qrStatus.status === "auth_failure" && (
+                    <p style={{ color: "var(--rose)", marginBottom: 12 }}>Authentication failed. Please try connecting again.</p>
+                  )}
+                  <p style={{ color: "var(--muted)", marginBottom: 20, maxWidth: 400, margin: "0 auto 20px" }}>
+                    Connect your WhatsApp account to send notifications directly from LawPath SA.
+                    No app installation required — uses WhatsApp Web protocol.
+                  </p>
+                  <button className="primary" style={{ background: "#25d366", borderColor: "#25d366" }} disabled={connecting} onClick={handleConnect}>
+                    <QrCode size={18} /> {connecting ? "Starting..." : "Connect WhatsApp"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Footer notice */}
+            <div style={{ background: "var(--paper)", borderTop: "1px solid var(--line)", padding: "12px 24px", fontSize: "0.8rem", color: "var(--muted)" }}>
+              ⚠ This uses the WhatsApp Web protocol (unofficial). Use for message notifications only.
+              Legal documents, contracts, and confidential matter correspondence must remain on email.
+              Requires Chrome/Chromium on the server: <code>sudo apt-get install -y chromium-browser</code>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MESSAGES TAB ─────────────────────────────────────────────────────── */}
+      {mainTab === "messages" && <>
+
       {/* 1. Notice banner */}
       <div style={{
         background: "#f0fdf4",
@@ -548,6 +703,8 @@ export function WhatsAppComms({ contacts, setContacts, messages, setMessages, te
           </div>
         )}
       </div>
+
+      </> /* end messages tab */}
     </div>
   );
 }
