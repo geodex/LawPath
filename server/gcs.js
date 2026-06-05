@@ -3,6 +3,13 @@ const { Storage } = require("@google-cloud/storage");
 
 let storageClient;
 
+function exposeConfigError(message, statusCode = 503) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.expose = true;
+  return error;
+}
+
 function configuredBucketName() {
   return process.env.GCS_BUCKET_NAME || process.env.GEMINI_GCS_BUCKET_NAME || process.env.GOOGLE_CLOUD_STORAGE_BUCKET || "";
 }
@@ -18,7 +25,11 @@ function createStorageClient() {
   }
 
   if (credentialsJson) {
-    options.credentials = JSON.parse(credentialsJson);
+    try {
+      options.credentials = JSON.parse(credentialsJson);
+    } catch (_error) {
+      throw exposeConfigError("Google Cloud credentials JSON is invalid. Check GCS_CREDENTIALS_JSON or GOOGLE_CREDENTIALS_JSON in .env.");
+    }
   }
 
   storageClient = new Storage(options);
@@ -28,7 +39,7 @@ function createStorageClient() {
 function requireBucketName() {
   const bucketName = configuredBucketName();
   if (!bucketName) {
-    throw new Error("Google Cloud Storage bucket is not configured. Set GCS_BUCKET_NAME in .env.");
+    throw exposeConfigError("Google Cloud Storage bucket is not configured. Set GCS_BUCKET_NAME in .env.");
   }
   return bucketName;
 }

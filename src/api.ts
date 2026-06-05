@@ -1,4 +1,4 @@
-import type { AiAgentKey, ApiProviderSettings, AssistantTrainingSettings, AuthUser, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile } from "./types";
+import type { AiAgentKey, ApiProviderSettings, AssistantTrainingSettings, AuthUser, FicaClient, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -171,6 +171,108 @@ export async function sendAiChat(input: { message: string; agentKey: AiAgentKey;
     model: string;
     provider: string;
   }>("/api/ai/chat", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+// ─── TRUST ACCOUNT ───────────────────────────────────────────────────────────
+
+export async function getTrustLedger() {
+  return request<{ transactions: TrustTransaction[]; balanceCents: number }>("/api/trust/ledger");
+}
+
+export async function createTrustTransaction(input: Omit<TrustTransaction, "id" | "runningBalanceCents" | "reconciled">) {
+  return request<{ transaction: TrustTransaction }>("/api/trust/transactions", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function getTrustReconciliations() {
+  return request<{ reconciliations: TrustReconciliation[] }>("/api/trust/reconciliations");
+}
+
+export async function saveTrustReconciliation(input: Omit<TrustReconciliation, "id">) {
+  return request<{ reconciliation: TrustReconciliation }>("/api/trust/reconciliations", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+// ─── FICA / KYC ──────────────────────────────────────────────────────────────
+
+export async function getFicaClients() {
+  return request<{ clients: FicaClient[] }>("/api/fica/clients");
+}
+
+export async function createFicaClient(input: Omit<FicaClient, "id" | "documents">) {
+  return request<{ client: FicaClient }>("/api/fica/clients", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateFicaClient(id: string, input: Partial<FicaClient>) {
+  return request<{ client: FicaClient }>(`/api/fica/clients/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input)
+  });
+}
+
+// ─── TIME RECORDING ───────────────────────────────────────────────────────────
+
+export async function getTimeEntries() {
+  return request<{ entries: TimeEntry[]; wipCents: number }>("/api/time/entries");
+}
+
+export async function createTimeEntry(input: Omit<TimeEntry, "id">) {
+  return request<{ entry: TimeEntry }>("/api/time/entries", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateTimeEntryStatus(id: string, status: TimeEntry["status"]) {
+  return request<{ entry: TimeEntry }>(`/api/time/entries/${id}/status`, {
+    method: "PUT",
+    body: JSON.stringify({ status })
+  });
+}
+
+// ─── POPIA ────────────────────────────────────────────────────────────────────
+
+export async function getPopiaRecords() {
+  return request<{
+    processingRecords: PopiaProcessingRecord[];
+    dsrRequests: PopiaDsrRequest[];
+    breachIncidents: PopiaBreachIncident[];
+  }>("/api/popia/records");
+}
+
+export async function createPopiaProcessingRecord(input: Omit<PopiaProcessingRecord, "id">) {
+  return request<{ record: PopiaProcessingRecord }>("/api/popia/processing", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function createPopiaDsrRequest(input: Omit<PopiaDsrRequest, "id" | "dueAt" | "completedAt">) {
+  return request<{ request: PopiaDsrRequest }>("/api/popia/dsr", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updatePopiaDsrStatus(id: string, status: PopiaDsrRequest["status"], responseNotes?: string) {
+  return request<{ request: PopiaDsrRequest }>(`/api/popia/dsr/${id}/status`, {
+    method: "PUT",
+    body: JSON.stringify({ status, responseNotes })
+  });
+}
+
+export async function createPopiaBreachIncident(input: Omit<PopiaBreachIncident, "id">) {
+  return request<{ incident: PopiaBreachIncident }>("/api/popia/breach", {
     method: "POST",
     body: JSON.stringify(input)
   });

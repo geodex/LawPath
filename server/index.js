@@ -69,6 +69,22 @@ function requirePlatformSuperAdmin(req, res) {
   return true;
 }
 
+function exposeError(error, statusCode = 500, message = "") {
+  if (message) error.message = message;
+  error.statusCode = statusCode;
+  error.expose = true;
+  return error;
+}
+
+function isMissingDatabaseObject(error) {
+  return error?.code === "42703" || error?.code === "42P01";
+}
+
+function explainSettingsDatabaseError(error) {
+  if (!isMissingDatabaseObject(error)) return null;
+  return "Database schema is missing a LawPath settings table or column. Pull the latest code and run migrations, including db/migrations/005_google_cloud_storage.sql.";
+}
+
 function tenantProfileFromRow(row) {
   if (!row) return null;
   return {
@@ -438,6 +454,8 @@ app.post("/api/auth/login", async (req, res, next) => {
     await pool.query("update users set last_login_at = now() where id = $1", [user.id]);
     res.json({ token: signToken(user), user: publicUser(user) });
   } catch (error) {
+    const message = explainSettingsDatabaseError(error);
+    if (message) return next(exposeError(error, 500, message));
     next(error);
   }
 });
@@ -1118,9 +1136,443 @@ app.post("/api/email/test", authMiddleware, async (req, res, next) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TIER 1: TRUST ACCOUNT
+// ─────────────────────────────────────────────────────────────────────────────
+
+function trustTransactionFromRow(row) {
+  return {
+    id: row.id,
+    clientName: row.client_name,
+    description: row.description,
+    reference: row.reference || "",
+    entryType: row.entry_type,
+    amountCents: Number(row.amount_cents),
+    runningBalanceCents: Number(row.running_balance_cents || 0),
+    valueDate: row.value_date ? String(row.value_date).slice(0, 10) : "",
+    reconciled: Boolean(row.reconciled)
+  };
+}
+
+function trustReconFromRow(row) {
+  return {
+    id: row.id,
+    periodMonth: row.period_month,
+    bankStatementBalanceCents: Number(row.bank_statement_balance_cents),
+    ledgerBalanceCents: Number(row.ledger_balance_cents),
+    clientCreditTotalCents: Number(row.client_credit_total_cents),
+    status: row.status
+  };
+}
+
+app.get("/api/trust/ledger", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [txResult, acctResult] = await Promise.all([
+      pool.query(
+        `select * from trust_transactions where tenant_id = $1 order by value_date desc, created_at desc limit 80`,
+        [req.user.tenantId]
+      ),
+      pool.query(
+        `select coalesce(sum(case when entry_type in ('receipt','transfer_in') then amount_cents else -amount_cents end), 0) as balance
+         from trust_transactions where tenant_id = $1`,
+        [req.user.tenantId]
+      )
+    ]);
+    res.json({
+      transactions: txResult.rows.map(trustTransactionFromRow),
+      balanceCents: Number(acctResult.rows[0]?.balance || 0)
+    });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/trust/transactions", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { clientName, description, reference, entryType, amountCents, valueDate } = req.body;
+  if (!clientName || !description || !entryType || !amountCents)
+    return res.status(400).json({ error: "Client name, description, entry type and amount are required." });
+  try {
+    const acct = await pool.query(
+      `select id from trust_accounts where tenant_id = $1 and active = true limit 1`,
+      [req.user.tenantId]
+    );
+    const accountId = acct.rows[0]?.id;
+    if (!accountId) return res.status(400).json({ error: "No active trust account found. Configure one in settings." });
+
+    const result = await pool.query(
+      `insert into trust_transactions
+        (tenant_id, trust_account_id, client_name, description, reference, entry_type, amount_cents, value_date, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       returning *`,
+      [req.user.tenantId, accountId, clientName, description, reference || null, entryType, Number(amountCents), valueDate || new Date().toISOString().slice(0, 10), req.user.sub]
+    );
+    await pool.query(
+      `insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details)
+       values ($1,$2,'trust_transaction',$3,$4,$5)`,
+      [req.user.tenantId, req.user.sub, result.rows[0].id, entryType, { clientName, amountCents }]
+    );
+    res.status(201).json({ transaction: trustTransactionFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/trust/reconciliations", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      `select r.* from trust_reconciliations r
+       join trust_accounts a on a.id = r.trust_account_id
+       where a.tenant_id = $1 order by r.period_month desc limit 24`,
+      [req.user.tenantId]
+    );
+    res.json({ reconciliations: result.rows.map(trustReconFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/trust/reconciliations", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { periodMonth, bankStatementBalanceCents, ledgerBalanceCents, clientCreditTotalCents, status, notes } = req.body;
+  if (!periodMonth) return res.status(400).json({ error: "Period month is required." });
+  try {
+    const acct = await pool.query(
+      `select id from trust_accounts where tenant_id = $1 and active = true limit 1`,
+      [req.user.tenantId]
+    );
+    const accountId = acct.rows[0]?.id;
+    if (!accountId) return res.status(400).json({ error: "No active trust account found." });
+    const result = await pool.query(
+      `insert into trust_reconciliations
+        (tenant_id, trust_account_id, period_month, bank_statement_balance_cents, ledger_balance_cents, client_credit_total_cents, status, notes, reconciled_by, reconciled_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+       on conflict (trust_account_id, period_month) do update set
+        bank_statement_balance_cents = excluded.bank_statement_balance_cents,
+        ledger_balance_cents = excluded.ledger_balance_cents,
+        client_credit_total_cents = excluded.client_credit_total_cents,
+        status = excluded.status,
+        notes = excluded.notes,
+        reconciled_by = excluded.reconciled_by,
+        reconciled_at = now()
+       returning *`,
+      [req.user.tenantId, accountId, periodMonth, Number(bankStatementBalanceCents || 0), Number(ledgerBalanceCents || 0), Number(clientCreditTotalCents || 0), status || "Draft", notes || null, req.user.sub]
+    );
+    res.status(201).json({ reconciliation: trustReconFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIER 1: FICA / KYC
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ficaClientFromRow(row, docs = []) {
+  return {
+    id: row.id,
+    clientName: row.client_name,
+    clientType: row.client_type,
+    idNumber: row.id_number || "",
+    riskRating: row.risk_rating,
+    ficaStatus: row.fica_status,
+    ficaExpiryDate: row.fica_expiry_date ? String(row.fica_expiry_date).slice(0, 10) : "",
+    sourceOfFunds: row.source_of_funds || "",
+    sanctionsChecked: Boolean(row.sanctions_checked),
+    documents: docs
+  };
+}
+
+function ficaDocFromRow(row) {
+  return {
+    id: row.id,
+    documentType: row.document_type,
+    documentName: row.document_name,
+    status: row.status,
+    expiryDate: row.expiry_date ? String(row.expiry_date).slice(0, 10) : ""
+  };
+}
+
+app.get("/api/fica/clients", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [clients, docs] = await Promise.all([
+      pool.query(`select * from fica_clients where tenant_id = $1 order by created_at desc limit 100`, [req.user.tenantId]),
+      pool.query(`select * from fica_documents where tenant_id = $1`, [req.user.tenantId])
+    ]);
+    const docsByClient = {};
+    docs.rows.forEach((doc) => {
+      if (!docsByClient[doc.fica_client_id]) docsByClient[doc.fica_client_id] = [];
+      docsByClient[doc.fica_client_id].push(ficaDocFromRow(doc));
+    });
+    res.json({ clients: clients.rows.map((row) => ficaClientFromRow(row, docsByClient[row.id] || [])) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/fica/clients", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { clientName, clientType, idNumber, riskRating, ficaStatus, sourceOfFunds } = req.body;
+  if (!clientName) return res.status(400).json({ error: "Client name is required." });
+  try {
+    const result = await pool.query(
+      `insert into fica_clients (tenant_id, client_name, client_type, id_number, risk_rating, fica_status, source_of_funds, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [req.user.tenantId, clientName, clientType || "natural_person", idNumber || null, riskRating || "Low", ficaStatus || "Pending", sourceOfFunds || null, req.user.sub]
+    );
+    const requiredDocs = buildRequiredFicaDocs(clientType || "natural_person");
+    for (const doc of requiredDocs) {
+      await pool.query(
+        `insert into fica_documents (tenant_id, fica_client_id, document_type, document_name, status) values ($1,$2,$3,$4,'Required')`,
+        [req.user.tenantId, result.rows[0].id, doc.type, doc.name]
+      );
+    }
+    const docs = await pool.query(`select * from fica_documents where fica_client_id = $1`, [result.rows[0].id]);
+    res.status(201).json({ client: ficaClientFromRow(result.rows[0], docs.rows.map(ficaDocFromRow)) });
+  } catch (error) { next(error); }
+});
+
+function buildRequiredFicaDocs(clientType) {
+  const natural = [
+    { type: "identity", name: "Certified ID / Passport copy" },
+    { type: "proof_of_address", name: "Proof of residence (not older than 3 months)" },
+    { type: "source_of_funds", name: "Source of funds declaration" }
+  ];
+  const entity = [
+    { type: "cipc_cert", name: "CIPC registration certificate" },
+    { type: "moi", name: "Memorandum of Incorporation" },
+    { type: "directors", name: "Certified ID copies of all directors/members" },
+    { type: "proof_of_address", name: "Proof of business address" },
+    { type: "source_of_funds", name: "Source of funds declaration" }
+  ];
+  const trust = [
+    { type: "trust_deed", name: "Certified trust deed" },
+    { type: "letter_of_authority", name: "Letter of authority (Masters Office)" },
+    { type: "trustees_id", name: "Certified ID copies of all trustees" },
+    { type: "proof_of_address", name: "Proof of principal address" }
+  ];
+  return clientType === "legal_entity" ? entity : clientType === "trust" ? trust : natural;
+}
+
+app.put("/api/fica/clients/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { riskRating, ficaStatus, sourceOfFunds, sanctionsChecked } = req.body;
+  try {
+    const result = await pool.query(
+      `update fica_clients set
+        risk_rating = coalesce($2, risk_rating),
+        fica_status = coalesce($3, fica_status),
+        source_of_funds = coalesce($4, source_of_funds),
+        sanctions_checked = coalesce($5, sanctions_checked),
+        sanctions_checked_at = case when $5 = true then now() else sanctions_checked_at end,
+        updated_at = now()
+       where id = $1 and tenant_id = $6 returning *`,
+      [req.params.id, riskRating || null, ficaStatus || null, sourceOfFunds || null, sanctionsChecked !== undefined ? Boolean(sanctionsChecked) : null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "FICA client not found." });
+    const docs = await pool.query(`select * from fica_documents where fica_client_id = $1`, [req.params.id]);
+    res.json({ client: ficaClientFromRow(result.rows[0], docs.rows.map(ficaDocFromRow)) });
+  } catch (error) { next(error); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIER 1: TIME RECORDING
+// ─────────────────────────────────────────────────────────────────────────────
+
+function timeEntryFromRow(row) {
+  return {
+    id: row.id,
+    clientName: row.client_name,
+    matterRef: row.matter_ref || "",
+    feeEarnerName: row.fee_earner_name,
+    entryDate: row.entry_date ? String(row.entry_date).slice(0, 10) : "",
+    activityType: row.activity_type,
+    description: row.description,
+    durationMinutes: Number(row.duration_minutes),
+    rateCents: Number(row.rate_cents),
+    amountCents: Number(row.amount_cents),
+    vatAmountCents: Number(row.vat_amount_cents),
+    status: row.status,
+    isDisbursement: Boolean(row.is_disbursement)
+  };
+}
+
+app.get("/api/time/entries", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [entries, wip] = await Promise.all([
+      pool.query(`select * from time_entries where tenant_id = $1 order by entry_date desc, created_at desc limit 200`, [req.user.tenantId]),
+      pool.query(`select coalesce(sum(amount_cents),0) as wip from time_entries where tenant_id = $1 and status = 'WIP'`, [req.user.tenantId])
+    ]);
+    res.json({ entries: entries.rows.map(timeEntryFromRow), wipCents: Number(wip.rows[0]?.wip || 0) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/time/entries", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { clientName, matterRef, feeEarnerName, entryDate, activityType, description, durationMinutes, rateCents, amountCents, isDisbursement } = req.body;
+  if (!clientName || !description || !feeEarnerName)
+    return res.status(400).json({ error: "Client name, description and fee earner are required." });
+  const amount = Number(amountCents) || Math.round((Number(durationMinutes) / 60) * Number(rateCents));
+  const vat = Math.round(amount * 0.15);
+  try {
+    const result = await pool.query(
+      `insert into time_entries
+        (tenant_id, client_name, matter_ref, fee_earner_name, entry_date, activity_type, description,
+         duration_minutes, rate_cents, amount_cents, vat_amount_cents, is_disbursement, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
+      [req.user.tenantId, clientName, matterRef || null, feeEarnerName, entryDate || new Date().toISOString().slice(0, 10),
+       activityType || "professional_fee", description, Number(durationMinutes || 0),
+       Number(rateCents || 0), amount, vat, Boolean(isDisbursement), req.user.sub]
+    );
+    res.status(201).json({ entry: timeEntryFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/time/entries/:id/status", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { status } = req.body;
+  const valid = ["WIP", "Billed", "Written off", "On hold"];
+  if (!valid.includes(status)) return res.status(400).json({ error: "Invalid status." });
+  try {
+    const result = await pool.query(
+      `update time_entries set status = $2, updated_at = now() where id = $1 and tenant_id = $3 returning *`,
+      [req.params.id, status, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Time entry not found." });
+    res.json({ entry: timeEntryFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIER 1: POPIA COMPLIANCE
+// ─────────────────────────────────────────────────────────────────────────────
+
+function popiaProcessingFromRow(row) {
+  return {
+    id: row.id,
+    processingActivity: row.processing_activity,
+    purpose: row.purpose,
+    legalBasis: row.legal_basis,
+    dataSubjects: row.data_subjects || [],
+    personalInfoTypes: row.personal_info_types || [],
+    retentionPeriod: row.retention_period,
+    thirdPartyRecipients: row.third_party_recipients || "",
+    crossBorderTransfer: Boolean(row.cross_border_transfer),
+    reviewDate: row.review_date ? String(row.review_date).slice(0, 10) : "",
+    active: Boolean(row.active)
+  };
+}
+
+function popiaDsrFromRow(row) {
+  return {
+    id: row.id,
+    requestType: row.request_type,
+    requestorName: row.requestor_name,
+    requestorEmail: row.requestor_email,
+    description: row.description,
+    status: row.status,
+    receivedAt: row.received_at,
+    dueAt: row.due_at,
+    completedAt: row.completed_at || "",
+    responseNotes: row.response_notes || ""
+  };
+}
+
+function popiaBreachFromRow(row) {
+  return {
+    id: row.id,
+    incidentDate: row.incident_date,
+    description: row.description,
+    dataSubjectsAffected: Number(row.data_subjects_affected),
+    severity: row.severity,
+    status: row.status,
+    regulatorNotified: Boolean(row.regulator_notified),
+    remediationSteps: row.remediation_steps || ""
+  };
+}
+
+app.get("/api/popia/records", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [proc, dsr, breach] = await Promise.all([
+      pool.query(`select * from popia_processing_records where tenant_id = $1 and active = true order by created_at desc`, [req.user.tenantId]),
+      pool.query(`select * from popia_dsr_requests where tenant_id = $1 order by received_at desc limit 50`, [req.user.tenantId]),
+      pool.query(`select * from popia_breach_incidents where tenant_id = $1 order by incident_date desc limit 20`, [req.user.tenantId])
+    ]);
+    res.json({
+      processingRecords: proc.rows.map(popiaProcessingFromRow),
+      dsrRequests: dsr.rows.map(popiaDsrFromRow),
+      breachIncidents: breach.rows.map(popiaBreachFromRow)
+    });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/popia/processing", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { processingActivity, purpose, legalBasis, dataSubjects, personalInfoTypes, retentionPeriod, thirdPartyRecipients, crossBorderTransfer, reviewDate } = req.body;
+  if (!processingActivity || !purpose || !legalBasis || !retentionPeriod)
+    return res.status(400).json({ error: "Activity, purpose, legal basis and retention period are required." });
+  try {
+    const result = await pool.query(
+      `insert into popia_processing_records
+        (tenant_id, processing_activity, purpose, legal_basis, data_subjects, personal_info_types, retention_period, third_party_recipients, cross_border_transfer, review_date, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
+      [req.user.tenantId, processingActivity, purpose, legalBasis, dataSubjects || [], personalInfoTypes || [], retentionPeriod,
+       thirdPartyRecipients || null, Boolean(crossBorderTransfer), reviewDate || null, req.user.sub]
+    );
+    res.status(201).json({ record: popiaProcessingFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/popia/dsr", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { requestType, requestorName, requestorEmail, description } = req.body;
+  if (!requestType || !requestorName || !requestorEmail || !description)
+    return res.status(400).json({ error: "Request type, requestor name, email and description are required." });
+  try {
+    const result = await pool.query(
+      `insert into popia_dsr_requests (tenant_id, request_type, requestor_name, requestor_email, description)
+       values ($1,$2,$3,$4,$5) returning *`,
+      [req.user.tenantId, requestType, requestorName, requestorEmail.toLowerCase(), description]
+    );
+    res.status(201).json({ request: popiaDsrFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/popia/dsr/:id/status", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { status, responseNotes } = req.body;
+  try {
+    const result = await pool.query(
+      `update popia_dsr_requests set
+        status = $2,
+        response_notes = coalesce($3, response_notes),
+        completed_at = case when $2 in ('Completed','Denied') then now() else completed_at end,
+        updated_at = now()
+       where id = $1 and tenant_id = $4 returning *`,
+      [req.params.id, status, responseNotes || null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "DSR request not found." });
+    res.json({ request: popiaDsrFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/popia/breach", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { incidentDate, description, dataSubjectsAffected, personalInfoTypes, severity, remediationSteps } = req.body;
+  if (!incidentDate || !description)
+    return res.status(400).json({ error: "Incident date and description are required." });
+  try {
+    const result = await pool.query(
+      `insert into popia_breach_incidents
+        (tenant_id, incident_date, description, data_subjects_affected, personal_info_types, severity, remediation_steps, reported_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [req.user.tenantId, incidentDate, description, Number(dataSubjectsAffected || 0), personalInfoTypes || [], severity || "Low", remediationSteps || null, req.user.sub]
+    );
+    res.status(201).json({ incident: popiaBreachFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
 app.use((error, _req, res, _next) => {
   console.error(error);
-  res.status(500).json({ error: "Server error." });
+  const schemaMessage = explainSettingsDatabaseError(error);
+  const statusCode = error.statusCode || 500;
+  const message = error.expose ? error.message : schemaMessage || "Server error.";
+  res.status(statusCode).json({ error: message });
 });
 
 app.listen(port, () => {

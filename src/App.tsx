@@ -1,11 +1,14 @@
 import {
+  AlertTriangle,
   Archive,
   ArrowRight,
+  BadgeCheck,
   BookOpenCheck,
   Building2,
   CalendarDays,
   CheckCircle2,
   CircleDollarSign,
+  Clock,
   Clock3,
   FilePenLine,
   Home,
@@ -14,22 +17,34 @@ import {
   LockKeyhole,
   LogIn,
   Mail,
+  Pause,
+  Play,
   Plus,
+  Scale,
   Search,
   Send,
   ServerCog,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Split,
+  Timer,
+  UserCheck,
   UserPlus,
+  Users,
   UsersRound,
+  Vault,
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, forgotPassword, getBootstrapSettings, getCurrentUser, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail } from "./api";
+import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
-import type { AiAgentKey, AiChatMessage, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, Invoice, Matter, NavItem, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, ViewKey, WorkTask } from "./types";
+import type { AiAgentKey, AiChatMessage, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, FicaClient, Invoice, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WorkTask } from "./types";
+import { FicaKyc } from "./FicaKyc";
+import { PopiaCompliance } from "./PopiaCompliance";
+import { TimeRecording } from "./TimeRecording";
+import { TrustAccount } from "./TrustAccount";
 
 const nav: NavItem[] = [
   { key: "overview", label: "Overview", icon: Home },
@@ -37,6 +52,10 @@ const nav: NavItem[] = [
   { key: "research", label: "Research", icon: Search },
   { key: "secretary", label: "Secretary", icon: Archive },
   { key: "billing", label: "Billing", icon: CircleDollarSign },
+  { key: "trust", label: "Trust Account", icon: Vault },
+  { key: "time", label: "Time & WIP", icon: Timer },
+  { key: "fica", label: "FICA / KYC", icon: UserCheck },
+  { key: "popia", label: "POPIA", icon: ShieldAlert },
   { key: "booking", label: "Bookings", icon: CalendarDays },
   { key: "portal", label: "Portal", icon: UsersRound },
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
@@ -49,6 +68,10 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   research: "research",
   secretary: "secretary",
   billing: "billing",
+  trust: "billing",
+  time: "billing",
+  fica: "general",
+  popia: "general",
   booking: "secretary",
   portal: "portal",
   "training-guide": "research",
@@ -68,6 +91,7 @@ const aiAgentLabels: Record<AiAgentKey, string> = {
 const money = (value: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(value);
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+const maxKnowledgeUploadBytes = 8 * 1024 * 1024;
 type Toast = { id: string; type: "success" | "error" | "info"; title: string; message: string };
 
 const defaultSmtpSettings = (): SmtpSettings => ({
@@ -167,6 +191,57 @@ export function App() {
     allowTenantPrivateSources: true,
     systemInstructions: "Use South African legal context, cite retrieved sources, flag uncertainty, and require attorney review before client-facing legal advice is sent."
   });
+  // ─── Tier 1 state ──────────────────────────────────────────────────────────
+  const [trustTransactions, setTrustTransactions] = useState<TrustTransaction[]>([
+    { id: "TT-001", clientName: "Dlamini, T", description: "Transfer deposit received – Erf 1204 Sandton", reference: "M-1048/DEP", entryType: "receipt", amountCents: 25000000, runningBalanceCents: 25000000, valueDate: "2026-06-02", reconciled: false },
+    { id: "TT-002", clientName: "Mokoena & Partners", description: "SARS Transfer Duty payment – M-1048", reference: "M-1048/SARS", entryType: "payment", amountCents: 3750000, runningBalanceCents: 21250000, valueDate: "2026-06-04", reconciled: false },
+    { id: "TT-003", clientName: "Sithole, N", description: "Bond registration deposit – Unit 3B Somerset West", reference: "M-2201/BOND", entryType: "receipt", amountCents: 8500000, runningBalanceCents: 29750000, valueDate: "2026-06-05", reconciled: false }
+  ]);
+  const [trustBalanceCents, setTrustBalanceCents] = useState(29750000);
+  const [trustReconciliations, setTrustReconciliations] = useState<TrustReconciliation[]>([
+    { id: "TR-001", periodMonth: "2026-05", bankStatementBalanceCents: 18200000, ledgerBalanceCents: 18200000, clientCreditTotalCents: 18200000, status: "Submitted" }
+  ]);
+
+  const [ficaClients, setFicaClients] = useState<FicaClient[]>([
+    {
+      id: "FC-001", clientName: "Thabo Dlamini", clientType: "natural_person", idNumber: "8201015009087",
+      riskRating: "Low", ficaStatus: "Compliant", ficaExpiryDate: "2027-06-01", sourceOfFunds: "Employment income",
+      sanctionsChecked: true,
+      documents: [
+        { id: "FD-001", documentType: "identity", documentName: "Certified ID / Passport copy", status: "Verified", expiryDate: "" },
+        { id: "FD-002", documentType: "proof_of_address", documentName: "Proof of residence (not older than 3 months)", status: "Verified", expiryDate: "2026-09-01" },
+        { id: "FD-003", documentType: "source_of_funds", documentName: "Source of funds declaration", status: "Verified", expiryDate: "" }
+      ]
+    },
+    {
+      id: "FC-002", clientName: "Sithole Investments (Pty) Ltd", clientType: "legal_entity", idNumber: "",
+      riskRating: "Medium", ficaStatus: "In Progress", ficaExpiryDate: "", sourceOfFunds: "Business operations",
+      sanctionsChecked: false,
+      documents: [
+        { id: "FD-004", documentType: "cipc_cert", documentName: "CIPC registration certificate", status: "Uploaded", expiryDate: "" },
+        { id: "FD-005", documentType: "moi", documentName: "Memorandum of Incorporation", status: "Required", expiryDate: "" },
+        { id: "FD-006", documentType: "directors", documentName: "Certified ID copies of all directors/members", status: "Required", expiryDate: "" }
+      ]
+    }
+  ]);
+
+  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([
+    { id: "TE-001", clientName: "Dlamini, T", matterRef: "M-1048", feeEarnerName: "T. Mokoena", entryDate: "2026-06-05", activityType: "professional_fee", description: "Reviewing title deed and preparing transfer documents", durationMinutes: 90, rateCents: 350000, amountCents: 525000, vatAmountCents: 78750, status: "WIP", isDisbursement: false },
+    { id: "TE-002", clientName: "Dlamini, T", matterRef: "M-1048", feeEarnerName: "T. Mokoena", entryDate: "2026-06-04", activityType: "correspondence", description: "Correspondence with estate agent re: suspensive conditions", durationMinutes: 30, rateCents: 350000, amountCents: 175000, vatAmountCents: 26250, status: "WIP", isDisbursement: false },
+    { id: "TE-003", clientName: "Dlamini, T", matterRef: "M-1048", feeEarnerName: "T. Mokoena", entryDate: "2026-06-03", activityType: "disbursement", description: "Deeds Office search fee", durationMinutes: 0, rateCents: 0, amountCents: 18000, vatAmountCents: 2700, status: "WIP", isDisbursement: true },
+    { id: "TE-004", clientName: "Sithole, N", matterRef: "M-2201", feeEarnerName: "A. Sithole", entryDate: "2026-06-02", activityType: "drafting", description: "Drafting bond cancellation documents and instructions to bank", durationMinutes: 60, rateCents: 320000, amountCents: 320000, vatAmountCents: 48000, status: "WIP", isDisbursement: false }
+  ]);
+  const [timeWipCents, setTimeWipCents] = useState(1038000);
+
+  const [popiaProcessingRecords, setPopiaProcessingRecords] = useState<PopiaProcessingRecord[]>([
+    { id: "PR-001", processingActivity: "Client onboarding and FICA verification", purpose: "Compliance with FICA and POCA obligations", legalBasis: "Legal obligation (FICA Act 38 of 2001)", dataSubjects: ["Clients", "Beneficial owners"], personalInfoTypes: ["Identity numbers", "Addresses", "Financial information"], retentionPeriod: "5 years after matter close", thirdPartyRecipients: "FIC (if suspicious transaction report filed)", crossBorderTransfer: false, reviewDate: "2027-01-01", active: true },
+    { id: "PR-002", processingActivity: "Matter and legal correspondence files", purpose: "Delivery of legal services under mandate", legalBasis: "Contract (mandate agreement)", dataSubjects: ["Clients", "Opposing parties", "Witnesses"], personalInfoTypes: ["Identity numbers", "Addresses", "Financial information", "Legal correspondence"], retentionPeriod: "7 years after matter close", thirdPartyRecipients: "Courts, SARS, Deeds Registry, Sheriff", crossBorderTransfer: false, reviewDate: "2027-01-01", active: true }
+  ]);
+  const [popiaDsrRequests, setPopiaDsrRequests] = useState<PopiaDsrRequest[]>([
+    { id: "DSR-001", requestType: "Access", requestorName: "Thabo Dlamini", requestorEmail: "thabo@example.co.za", description: "Request for copy of all personal information held on file for M-1048", status: "In Progress", receivedAt: "2026-05-28T09:00:00Z", dueAt: "2026-06-27T09:00:00Z", completedAt: "", responseNotes: "" }
+  ]);
+  const [popiaBreachIncidents, setPopiaBreachIncidents] = useState<PopiaBreachIncident[]>([]);
+
   const [emailStatus, setEmailStatus] = useState("SMTP settings not tested in this session.");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -185,6 +260,7 @@ export function App() {
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
   const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
+  const hasTenantContext = Boolean(authUser?.tenantId);
   const activeAgent = viewAgentMap[activeView];
 
   useEffect(() => {
@@ -389,6 +465,48 @@ export function App() {
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
         {activeView === "secretary" && <Secretary tasks={tasks} setTasks={setTasks} log={log} />}
         {activeView === "billing" && <Billing invoices={invoices} setInvoices={setInvoices} log={log} />}
+        {activeView === "trust" && (
+          <TrustAccount
+            transactions={trustTransactions}
+            setTransactions={setTrustTransactions}
+            balanceCents={trustBalanceCents}
+            setBalanceCents={setTrustBalanceCents}
+            reconciliations={trustReconciliations}
+            setReconciliations={setTrustReconciliations}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "time" && (
+          <TimeRecording
+            entries={timeEntries}
+            setEntries={setTimeEntries}
+            wipCents={timeWipCents}
+            setWipCents={setTimeWipCents}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "fica" && (
+          <FicaKyc
+            clients={ficaClients}
+            setClients={setFicaClients}
+            log={log}
+            showToast={showToast}
+          />
+        )}
+        {activeView === "popia" && (
+          <PopiaCompliance
+            processingRecords={popiaProcessingRecords}
+            setProcessingRecords={setPopiaProcessingRecords}
+            dsrRequests={popiaDsrRequests}
+            setDsrRequests={setPopiaDsrRequests}
+            breachIncidents={popiaBreachIncidents}
+            setBreachIncidents={setPopiaBreachIncidents}
+            log={log}
+            showToast={showToast}
+          />
+        )}
         {activeView === "booking" && <Booking appointments={appointments} setAppointments={setAppointments} log={log} />}
         {activeView === "portal" && <Portal matters={matters} setMatters={setMatters} portalMode={portalMode} setPortalMode={setPortalMode} log={log} />}
         {activeView === "training-guide" && <AITrainingGuide setActiveView={setActiveView} />}
@@ -409,6 +527,7 @@ export function App() {
             showToast={showToast}
             log={log}
             isPlatformSuperAdmin={isPlatformSuperAdmin}
+            hasTenantContext={hasTenantContext}
           />
         )}
       </main>
@@ -2429,7 +2548,8 @@ function AdminSettings({
   setEmailStatus,
   showToast,
   log,
-  isPlatformSuperAdmin
+  isPlatformSuperAdmin,
+  hasTenantContext
 }: {
   settings: SmtpSettings;
   setSettings: React.Dispatch<React.SetStateAction<SmtpSettings>>;
@@ -2446,6 +2566,7 @@ function AdminSettings({
   showToast: (type: Toast["type"], title: string, message: string) => void;
   log: (message: string) => void;
   isPlatformSuperAdmin: boolean;
+  hasTenantContext: boolean;
 }) {
   const [savedAt, setSavedAt] = useState("Not saved yet");
   const [apiSavedAt, setApiSavedAt] = useState("Not saved yet");
@@ -2487,6 +2608,12 @@ function AdminSettings({
 
   async function saveTenantEmailSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!hasTenantContext) {
+      const message = "Tenant sender identity can only be saved while logged in as a tenant admin for a law firm. Your platform super-admin account is not attached to a tenant.";
+      setEmailStatus(message);
+      showToast("info", "Tenant account required", message);
+      return;
+    }
     setSettingsBusy("tenant");
     try {
       await saveTenantEmailIdentity(tenantEmailSettings);
@@ -2563,19 +2690,37 @@ function AdminSettings({
 
   async function addRagSource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSettingsBusy("rag");
     const form = new FormData(event.currentTarget);
+    const name = String(form.get("name") || "").trim();
+    const sourceUrl = String(form.get("sourceUrl") || "").trim();
     const file = form.get("sourceFile") as File | null;
     const hasFile = Boolean(file && file.size);
+
+    if (!name) {
+      showToast("error", "Source name required", "Add a short name for the legal source before queueing it.");
+      return;
+    }
+
+    if (!hasFile && !sourceUrl) {
+      showToast("error", "Source content required", "Add a website URL or upload a document so the AI has material to store and index.");
+      return;
+    }
+
+    if (file && file.size > maxKnowledgeUploadBytes) {
+      showToast("error", "File too large", "Upload files smaller than 8 MB for now. Larger legal bundles should be split or uploaded through the server-side bulk import flow.");
+      return;
+    }
+
+    setSettingsBusy("rag");
     const fileDataUrl = hasFile ? await fileToDataUrl(file as File) : "";
     const extractedText = file && file.size ? await file.text().catch(() => "") : "";
     try {
       const response = await queueRagSource({
-        name: String(form.get("name")),
+        name,
         scope: String(form.get("scope")) as RagSource["scope"],
         sourceType: String(form.get("sourceType")) as RagSource["sourceType"],
         documentCount: Number(form.get("documentCount") || 1),
-        sourceUrl: String(form.get("sourceUrl") || ""),
+        sourceUrl,
         fileName: file?.name || "",
         mimeType: file?.type || "",
         fileDataUrl,
@@ -2612,6 +2757,7 @@ function AdminSettings({
     apiSettings.geminiApiKey,
     apiSettings.grokApiKey
   ].filter(Boolean).length;
+  const tenantIdentityDisabled = !hasTenantContext;
 
   return (
     <>
@@ -2654,18 +2800,19 @@ function AdminSettings({
 
         <Panel title="Tenant sender identity" badge="Tenant admin">
           <form className="form" onSubmit={saveTenantEmailSettings}>
-            <label>Company name<input value={tenantEmailSettings.tenantName} onChange={(event) => updateTenantEmail("tenantName", event.target.value)} /></label>
-            <label>Verified domain<input value={tenantEmailSettings.tenantDomain} onChange={(event) => updateTenantEmail("tenantDomain", event.target.value)} /></label>
-            <label>From name<input value={tenantEmailSettings.fromName} onChange={(event) => updateTenantEmail("fromName", event.target.value)} /></label>
-            <label>From email<input type="email" value={tenantEmailSettings.fromEmail} onChange={(event) => updateTenantEmail("fromEmail", event.target.value)} /></label>
-            <label>Reply-to email<input type="email" value={tenantEmailSettings.replyTo} onChange={(event) => updateTenantEmail("replyTo", event.target.value)} /></label>
-            <label>Portal email signature<textarea value={tenantEmailSettings.portalSignature} onChange={(event) => updateTenantEmail("portalSignature", event.target.value)} /></label>
+            {tenantIdentityDisabled ? <p className="settings-warning">Log in as a tenant admin to edit the law firm sender identity. Platform super admins manage shared infrastructure only.</p> : null}
+            <label>Company name<input value={tenantEmailSettings.tenantName} disabled={tenantIdentityDisabled} onChange={(event) => updateTenantEmail("tenantName", event.target.value)} /></label>
+            <label>Verified domain<input value={tenantEmailSettings.tenantDomain} disabled={tenantIdentityDisabled} onChange={(event) => updateTenantEmail("tenantDomain", event.target.value)} /></label>
+            <label>From name<input value={tenantEmailSettings.fromName} disabled={tenantIdentityDisabled} onChange={(event) => updateTenantEmail("fromName", event.target.value)} /></label>
+            <label>From email<input type="email" value={tenantEmailSettings.fromEmail} disabled={tenantIdentityDisabled} onChange={(event) => updateTenantEmail("fromEmail", event.target.value)} /></label>
+            <label>Reply-to email<input type="email" value={tenantEmailSettings.replyTo} disabled={tenantIdentityDisabled} onChange={(event) => updateTenantEmail("replyTo", event.target.value)} /></label>
+            <label>Portal email signature<textarea value={tenantEmailSettings.portalSignature} disabled={tenantIdentityDisabled} onChange={(event) => updateTenantEmail("portalSignature", event.target.value)} /></label>
             <div className="switch-list">
               <label className="switch-row"><input type="checkbox" checked={settings.transactionalEnabled} onChange={(event) => update("transactionalEnabled", event.target.checked)} /> Transactional emails</label>
               <label className="switch-row"><input type="checkbox" checked={settings.systemEnabled} onChange={(event) => update("systemEnabled", event.target.checked)} /> System/admin emails</label>
-              <label className="switch-row"><input type="checkbox" checked={tenantEmailSettings.verifiedDomain} onChange={(event) => updateTenantEmail("verifiedDomain", event.target.checked)} /> Domain verified for sender display</label>
+              <label className="switch-row"><input type="checkbox" checked={tenantEmailSettings.verifiedDomain} disabled={tenantIdentityDisabled} onChange={(event) => updateTenantEmail("verifiedDomain", event.target.checked)} /> Domain verified for sender display</label>
             </div>
-            <button className="primary" type="submit" disabled={settingsBusy === "tenant"}><Mail size={18} /> {settingsBusy === "tenant" ? "Saving..." : "Save tenant identity"}</button>
+            <button className="primary" type="submit" disabled={settingsBusy === "tenant" || tenantIdentityDisabled}><Mail size={18} /> {settingsBusy === "tenant" ? "Saving..." : "Save tenant identity"}</button>
           </form>
         </Panel>
       </section>

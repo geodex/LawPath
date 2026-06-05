@@ -1,6 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 
-export type ViewKey = "overview" | "drafting" | "research" | "secretary" | "billing" | "booking" | "portal" | "training-guide" | "settings";
+export type ViewKey =
+  | "overview" | "drafting" | "research" | "secretary" | "billing"
+  | "booking" | "portal" | "training-guide" | "settings"
+  | "trust" | "fica" | "time" | "popia";
 
 export type Matter = {
   id: string;
@@ -165,4 +168,111 @@ export type NavItem = {
   key: ViewKey;
   label: string;
   icon: LucideIcon;
+};
+
+// ─── TIER 1: TRUST ACCOUNT ───────────────────────────────────────────────────
+
+export type TrustTransaction = {
+  id: string;
+  clientName: string;
+  description: string;
+  reference: string;
+  entryType: "receipt" | "payment" | "transfer_in" | "transfer_out" | "adjustment";
+  amountCents: number;
+  runningBalanceCents: number;
+  valueDate: string;
+  reconciled: boolean;
+};
+
+export type TrustReconciliation = {
+  id: string;
+  periodMonth: string;
+  bankStatementBalanceCents: number;
+  ledgerBalanceCents: number;
+  clientCreditTotalCents: number;
+  status: "Draft" | "Submitted" | "LPC Approved";
+};
+
+// ─── TIER 1: FICA / KYC ──────────────────────────────────────────────────────
+
+export type FicaClient = {
+  id: string;
+  clientName: string;
+  clientType: "natural_person" | "legal_entity" | "trust";
+  idNumber: string;
+  riskRating: "Low" | "Medium" | "High" | "PEP";
+  ficaStatus: "Pending" | "In Progress" | "Compliant" | "Expired" | "Rejected";
+  ficaExpiryDate: string;
+  sourceOfFunds: string;
+  sanctionsChecked: boolean;
+  documents: FicaDocument[];
+};
+
+export type FicaDocument = {
+  id: string;
+  documentType: string;
+  documentName: string;
+  status: "Required" | "Uploaded" | "Verified" | "Expired" | "Rejected";
+  expiryDate: string;
+};
+
+// ─── TIER 1: TIME RECORDING ───────────────────────────────────────────────────
+
+export type TimeEntry = {
+  id: string;
+  clientName: string;
+  matterRef: string;
+  feeEarnerName: string;
+  entryDate: string;
+  activityType:
+    | "professional_fee" | "attendance" | "consultation" | "research"
+    | "drafting" | "court_appearance" | "correspondence" | "telephone"
+    | "travel" | "disbursement" | "disbursement_recovery";
+  description: string;
+  durationMinutes: number;
+  rateCents: number;
+  amountCents: number;
+  vatAmountCents: number;
+  status: "WIP" | "Billed" | "Written off" | "On hold";
+  isDisbursement: boolean;
+};
+
+// ─── TIER 1: POPIA ────────────────────────────────────────────────────────────
+
+export type PopiaProcessingRecord = {
+  id: string;
+  processingActivity: string;
+  purpose: string;
+  legalBasis: string;
+  dataSubjects: string[];
+  personalInfoTypes: string[];
+  retentionPeriod: string;
+  thirdPartyRecipients: string;
+  crossBorderTransfer: boolean;
+  reviewDate: string;
+  active: boolean;
+};
+
+export type PopiaDsrRequest = {
+  id: string;
+  requestType: "Access" | "Correction" | "Deletion" | "Objection" | "Portability";
+  requestorName: string;
+  requestorEmail: string;
+  description: string;
+  status: "Received" | "In Progress" | "Completed" | "Denied" | "Escalated";
+  receivedAt: string;
+  dueAt: string;
+  completedAt: string;
+  responseNotes: string;
+};
+
+export type PopiaBreachIncident = {
+  id: string;
+  incidentDate: string;
+  description: string;
+  dataSubjectsAffected: number;
+  severity: "Low" | "Medium" | "High" | "Critical";
+  status: "Open" | "Under investigation" | "Regulator notified" | "Closed";
+  regulatorNotified: boolean;
+  remediationSteps: string;
 };
