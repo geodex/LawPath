@@ -39,7 +39,7 @@ const StatusIcon = ({ status }: { status: WhatsAppMessage["status"] }) => {
   return <span title="Queued" style={{ fontSize: "11px", color: "#9ca3af" }}>⏱</span>;
 };
 
-type QrStatus = { status: string; qrDataUrl: string | null; phoneNumber: string | null; displayName: string | null; connectedAt: string | null };
+type QrStatus = { status: string; qrDataUrl: string | null; phoneNumber: string | null; displayName: string | null; connectedAt: string | null; errorMessage: string | null };
 
 const TOKEN_KEY = "lawpath.auth.token";
 async function apiFetch(path: string, options: RequestInit = {}) {
@@ -55,7 +55,7 @@ export function WhatsAppComms({ contacts, setContacts, messages, setMessages, te
   const [sendTab, setSendTab] = useState<"template" | "custom">("template");
 
   // QR connection state
-  const [qrStatus, setQrStatus] = useState<QrStatus>({ status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null });
+  const [qrStatus, setQrStatus] = useState<QrStatus>({ status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null, errorMessage: null });
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -85,7 +85,7 @@ export function WhatsAppComms({ contacts, setContacts, messages, setMessages, te
     setDisconnecting(true);
     try {
       await apiFetch("/api/whatsapp/disconnect", { method: "POST" });
-      setQrStatus({ status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null });
+      setQrStatus({ status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null, errorMessage: null });
       showToast("info", "Disconnected", "WhatsApp session ended.");
       log("WhatsApp disconnected");
     } catch { showToast("error", "Disconnect failed", "Could not end session."); }
@@ -313,18 +313,28 @@ export function WhatsAppComms({ contacts, setContacts, messages, setMessages, te
                 </div>
               )}
 
-              {/* Disconnected */}
+              {/* Disconnected / Error */}
               {(qrStatus.status === "disconnected" || qrStatus.status === "error" || qrStatus.status === "auth_failure") && (
                 <div style={{ textAlign: "center", padding: 24 }}>
                   <QrCode size={48} style={{ color: "var(--muted)", marginBottom: 16 }} />
                   {qrStatus.status === "auth_failure" && (
                     <p style={{ color: "var(--rose)", marginBottom: 12 }}>Authentication failed. Please try connecting again.</p>
                   )}
+                  {qrStatus.status === "error" && qrStatus.errorMessage && (
+                    <div style={{ background: "#fdf0f2", border: "1px solid var(--rose)", borderRadius: 8, padding: "12px 16px", marginBottom: 16, textAlign: "left" }}>
+                      <strong style={{ color: "var(--rose)", fontSize: "0.88rem" }}>Chrome/Puppeteer error:</strong>
+                      <pre style={{ margin: "6px 0 0", fontSize: "0.78rem", whiteSpace: "pre-wrap", wordBreak: "break-word", color: "var(--ink)" }}>{qrStatus.errorMessage}</pre>
+                      <p style={{ margin: "10px 0 0", fontSize: "0.83rem", color: "var(--muted)" }}>
+                        Common fix: <code>sudo apt-get install -y chromium-browser</code> then retry.
+                        Or set <code>PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser</code> in your <code>.env</code>.
+                      </p>
+                    </div>
+                  )}
                   <p style={{ color: "var(--muted)", marginBottom: 20, maxWidth: 400, margin: "0 auto 20px" }}>
                     Connect your WhatsApp account to send notifications directly from LawPath SA.
                     No app installation required — uses WhatsApp Web protocol.
                   </p>
-                  <button className="primary" style={{ background: "#25d366", borderColor: "#25d366" }} disabled={connecting} onClick={handleConnect}>
+                  <button className="primary" style={{ background: "#25d366", border: "none" }} disabled={connecting} onClick={handleConnect}>
                     <QrCode size={18} /> {connecting ? "Starting..." : "Connect WhatsApp"}
                   </button>
                 </div>

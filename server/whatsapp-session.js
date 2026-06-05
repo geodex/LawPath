@@ -85,21 +85,51 @@ async function initSession(tenantId) {
 
   const { Client, LocalAuth } = lib;
 
+  // Detect system Chrome/Chromium — tried in order of preference
+  const { execSync } = require("child_process");
+  const CHROME_CANDIDATES = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,        // env override
+    "/usr/bin/chromium-browser",                  // Ubuntu apt
+    "/usr/bin/chromium",                          // Debian/Fedora
+    "/snap/bin/chromium",                         // Ubuntu snap
+    "/usr/bin/google-chrome-stable",              // Google Chrome
+    "/usr/bin/google-chrome",                     // Google Chrome alt
+    "/usr/local/bin/chromium",                    // custom install
+  ].filter(Boolean);
+
+  let executablePath;
+  for (const candidate of CHROME_CANDIDATES) {
+    try {
+      execSync(`test -x "${candidate}"`, { stdio: "ignore" });
+      executablePath = candidate;
+      console.info(`[wa-session] Using Chrome: ${executablePath}`);
+      break;
+    } catch {}
+  }
+
+  if (!executablePath) {
+    console.warn("[wa-session] No system Chrome found — falling back to Puppeteer bundled Chrome.");
+  }
+
+  const puppeteerConfig = {
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--single-process",
+      "--no-zygote"
+    ]
+  };
+  if (executablePath) puppeteerConfig.executablePath = executablePath;
+
   const client = new Client({
     authStrategy: new LocalAuth({
       clientId: `tenant-${tenantId}`,
       dataPath: SESSIONS_DIR
     }),
-    puppeteer: {
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process"
-      ]
-    }
+    puppeteer: puppeteerConfig
   });
 
   session.client = client;
@@ -157,8 +187,23 @@ async function initSession(tenantId) {
 
   // Initialise asynchronously — don't await so endpoint returns immediately
   client.initialize().catch(err => {
-    console.error(`[wa-session] Init error for tenant ${tenantId}:`, err.message);
+    const msg = err.message || String(err);
+    console.error(`[wa-session] Init error for tenant ${tenantId}:`, msg);
+
+    // Helpful hints for common failures
+    if (msg.includes("executablePath") || msg.includes("Chrome") || msg.includes("Chromium") || msg.includes("ENOENT")) {
+      console.error("[wa-session] Chrome not found. Install with: sudo apt-get install -y chromium-browser");
+      console.error("[wa-session] Or set PUPPETEER_EXECUTABLE_PATH=/path/to/chrome in .env");
+    }
+    if (msg.includes("Running as root") || msg.includes("sandbox")) {
+      console.error("[wa-session] Sandbox error. The --no-sandbox flag should fix this — check puppeteerConfig.args.");
+    }
+    if (msg.includes("shared memory") || msg.includes("dev/shm")) {
+      console.error("[wa-session] Shared memory error. --disable-dev-shm-usage is set — may need tmpfs increase.");
+    }
+
     session.status = "error";
+    session.errorMessage = msg;
     sessions.delete(tenantId);
   });
 
@@ -171,13 +216,14 @@ function getSession(tenantId) {
 
 function getSessionStatus(tenantId) {
   const session = sessions.get(tenantId);
-  if (!session) return { status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null };
+  if (!session) return { status: "disconnected", qrDataUrl: null, phoneNumber: null, displayName: null, connectedAt: null, errorMessage: null };
   return {
     status: session.status,
     qrDataUrl: session.qrDataUrl,
     phoneNumber: session.phoneNumber,
     displayName: session.displayName,
-    connectedAt: session.connectedAt
+    connectedAt: session.connectedAt,
+    errorMessage: session.errorMessage || null
   };
 }
 
