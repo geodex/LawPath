@@ -1,6 +1,6 @@
-import { BookOpen, CheckCircle2, Copy, FileText, RefreshCw, Search, Sparkles } from "lucide-react";
+import { BookOpen, CheckCircle2, Copy, ExternalLink, FileText, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { indexCorpusSource, searchLegalCorpus } from "./api";
+import { getCorpusDocumentText, indexCorpusSource, searchLegalCorpus } from "./api";
 import type { LegalCorpusDocument, LegalCorpusSource, ResearchQuery } from "./types";
 
 const uid = (p: string) => `${p}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
@@ -38,6 +38,8 @@ export function LegalResearchDB({
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [indexing, setIndexing] = useState<string | null>(null);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
+  const [fullTextDoc, setFullTextDoc] = useState<{ title: string; citation: string; text: string; source: string } | null>(null);
+  const [loadingFullText, setLoadingFullText] = useState<string | null>(null);
 
   const totalDocs = sources.reduce((s, src) => s + src.documentCount, 0);
   const indexedCount = sources.filter(s => s.indexStatus === "indexed").length;
@@ -96,6 +98,18 @@ export function LegalResearchDB({
     }
   }
 
+  async function handleViewFullText(doc: LegalCorpusDocument) {
+    setLoadingFullText(doc.id);
+    try {
+      const res = await getCorpusDocumentText(doc.id);
+      setFullTextDoc(res);
+    } catch {
+      setFullTextDoc({ title: doc.title, citation: doc.citation, text: doc.summary || "Full text not available.", source: "none" });
+    } finally {
+      setLoadingFullText(null);
+    }
+  }
+
   function toggleCitation(doc: LegalCorpusDocument) {
     setCitationBundle(prev =>
       prev.find(d => d.id === doc.id) ? prev.filter(d => d.id !== doc.id) : [...prev, doc]
@@ -117,6 +131,29 @@ export function LegalResearchDB({
 
   return (
     <>
+      {/* Full judgment viewer modal */}
+      {fullTextDoc && (
+        <div className="modal-overlay" onClick={() => setFullTextDoc(null)}>
+          <div className="modal" style={{ maxWidth: 780, maxHeight: "82vh", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "1rem" }}>{fullTextDoc.title}</h3>
+                <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>{fullTextDoc.citation}
+                  {fullTextDoc.source === "gcs" && <span style={{ marginLeft: 8, color: "var(--green)", fontSize: "0.78rem" }}>● Cloud storage</span>}
+                  {fullTextDoc.source === "snippet" && <span style={{ marginLeft: 8, color: "var(--gold)", fontSize: "0.78rem" }}>● Indexed snippet</span>}
+                </span>
+              </div>
+              <button className="ghost small" onClick={() => setFullTextDoc(null)}><X size={16} /></button>
+            </div>
+            <div style={{ overflowY: "auto", flex: 1, background: "var(--panel)", borderRadius: 8, padding: "14px 16px" }}>
+              <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.86rem", lineHeight: 1.7, fontFamily: "inherit" }}>
+                {fullTextDoc.text || "Full text not available for this judgment."}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Moat notice */}
       <div className="corpus-moat-notice">
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -250,13 +287,21 @@ export function LegalResearchDB({
                       {doc.tags.map(tag => <span key={tag} className="corpus-tag-chip">{tag}</span>)}
                     </div>
                   </div>
-                  <button
-                    className={inBundle ? "primary small" : "ghost small"}
-                    style={{ flexShrink: 0 }}
-                    onClick={() => toggleCitation(doc)}>
-                    {inBundle ? <CheckCircle2 size={14} /> : <FileText size={14} />}
-                    {inBundle ? "In bundle" : "Cite"}
-                  </button>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+                    <button
+                      className={inBundle ? "primary small" : "ghost small"}
+                      onClick={() => toggleCitation(doc)}>
+                      {inBundle ? <CheckCircle2 size={14} /> : <FileText size={14} />}
+                      {inBundle ? "In bundle" : "Cite"}
+                    </button>
+                    <button
+                      className="ghost small"
+                      disabled={loadingFullText === doc.id}
+                      onClick={() => handleViewFullText(doc)}>
+                      {loadingFullText === doc.id ? <RefreshCw size={13} /> : <ExternalLink size={13} />}
+                      {loadingFullText === doc.id ? "Loading..." : "Full judgment"}
+                    </button>
+                  </div>
                 </div>
               </div>
             );

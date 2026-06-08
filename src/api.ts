@@ -380,6 +380,10 @@ export async function indexCorpusSource(sourceId: string) {
   return request<{ source: LegalCorpusSource }>(`/api/research-db/sources/${sourceId}/index`, { method: "POST" });
 }
 
+export async function getCorpusDocumentText(docId: string) {
+  return request<{ title: string; citation: string; text: string; source: "gcs" | "snippet" | "none" }>(`/api/research-db/documents/${docId}/text`);
+}
+
 // ─── E-SIGNATURE ─────────────────────────────────────────────────────────────
 
 export async function getSignatureRequests() {

@@ -8,7 +8,7 @@ const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
 const { authMiddleware, signToken } = require("./auth");
 const { sendTransactionalEmail } = require("./mailer");
-const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText } = require("./gcs");
+const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText, downloadText } = require("./gcs");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -2260,7 +2260,7 @@ function corpusSourceFromRow(row) {
 }
 
 function corpusDocFromRow(row) {
-  return { id: row.id, sourceId: row.source_id, title: row.title, citation: row.citation || "", court: row.court || "", decisionDate: row.decision_date ? String(row.decision_date).slice(0,10) : "", summary: row.summary || "", sourceUrl: row.source_url || "", tags: row.tags || [], year: Number(row.year || 0) };
+  return { id: row.id, sourceId: row.source_id, title: row.title, citation: row.citation || "", court: row.court || "", decisionDate: row.decision_date ? String(row.decision_date).slice(0,10) : "", summary: row.summary || "", sourceUrl: row.source_url || "", gcsUri: row.gcs_uri || "", tags: row.tags || [], year: Number(row.year || 0) };
 }
 
 const DEFAULT_CORPUS_SOURCES = [
@@ -2297,7 +2297,26 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "Query is required." });
   try {
-    const docs = await pool.query("select * from legal_corpus_documents where title ilike $1 or summary ilike $1 or citation ilike $1 order by year desc limit 10", [`%${query}%`]);
+    // Full-text search via generated tsvector; fall back to ILIKE if FTS column missing or no results.
+    let docs;
+    try {
+      docs = await pool.query(
+        `select * from legal_corpus_documents
+         where content_tsv @@ plainto_tsquery('english', $1)
+         order by year desc limit 20`,
+        [query]
+      );
+    } catch {
+      docs = { rows: [], rowCount: 0 };
+    }
+    if (!docs.rowCount) {
+      docs = await pool.query(
+        `select * from legal_corpus_documents
+         where title ilike $1 or summary ilike $1 or citation ilike $1 or full_text_snippet ilike $1
+         order by year desc limit 20`,
+        [`%${query}%`]
+      );
+    }
     let aiSummary = `${docs.rowCount} results found in the SA legal corpus for "${query}". Attorney review required before relying on any AI research summary.`;
     const citations = docs.rows.map(d => ({ title: d.title, citation: d.citation || "", url: d.source_url || "" }));
     const { apiKey, model } = await getOpenAiSettings();
@@ -2310,6 +2329,23 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
     }
     await pool.query("insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)", [req.user.tenantId, query, docs.rowCount, aiSummary, JSON.stringify(citations), req.user.sub]);
     res.json({ documents: docs.rows.map(corpusDocFromRow), aiSummary, citations });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/research-db/documents/:id/text", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query("select gcs_uri, full_text_snippet, title, citation from legal_corpus_documents where id = $1 limit 1", [req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ error: "Document not found." });
+    const row = result.rows[0];
+    if (row.gcs_uri) {
+      const text = await downloadText(row.gcs_uri);
+      return res.json({ title: row.title, citation: row.citation || "", text, source: "gcs" });
+    }
+    if (row.full_text_snippet) {
+      return res.json({ title: row.title, citation: row.citation || "", text: row.full_text_snippet, source: "snippet" });
+    }
+    res.json({ title: row.title, citation: row.citation || "", text: "", source: "none" });
   } catch (error) { next(error); }
 });
 

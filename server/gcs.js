@@ -139,10 +139,19 @@ async function uploadText({ text, prefix, fileName, contentType = "text/plain", 
   return uploadBuffer({ buffer: Buffer.from(String(text || ""), "utf8"), contentType, objectName, metadata });
 }
 
+async function downloadText(gcsUri) {
+  const match = String(gcsUri || "").match(/^gs:\/\/([^/]+)\/(.+)$/);
+  if (!match) throw new Error(`Invalid GCS URI: ${gcsUri}`);
+  const [, bucketName, objectName] = match;
+  const [contents] = await createStorageClient().bucket(bucketName).file(objectName).download();
+  return contents.toString("utf8");
+}
+
 module.exports = {
   configuredBucketName,
   safeObjectPart,
   uploadBuffer,
   uploadDataUrl,
-  uploadText
+  uploadText,
+  downloadText
 };

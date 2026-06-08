@@ -490,6 +490,7 @@ export type LegalCorpusDocument = {
   decisionDate: string;
   summary: string;
   sourceUrl: string;
+  gcsUri: string;
   tags: string[];
   year: number;
 };
