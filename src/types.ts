@@ -546,12 +546,116 @@ export type AccountingExportRecord = {
 // ─── TIER 3: SA LEGAL RESEARCH DATABASE ──────────────────────────────────────
 
 export type ViewKey =
-  | "overview" | "drafting" | "research" | "secretary" | "billing"
+  | "overview" | "clients" | "drafting" | "research" | "secretary" | "billing"
   | "booking" | "portal" | "training-guide" | "settings"
   | "trust" | "fica" | "time" | "popia"
   | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting"
   | "research-db" | "esignature" | "agents" | "analytics"
   | "staff" | "billing-portal";
+
+// ─── CRM: CLIENTS ─────────────────────────────────────────────────────────────
+
+export type ClientType = 'natural_person' | 'company' | 'close_corporation' | 'trust' | 'partnership' | 'non_profit' | 'sole_proprietor' | 'other_entity';
+export type ClientCategory = 'vip' | 'standard' | 'inactive' | 'prospect';
+export type FicaStatus = 'pending' | 'compliant' | 'non_compliant' | 'expired' | 'exempt';
+export type RiskRating = 'low' | 'medium' | 'high' | 'pep' | 'unrated';
+
+export type Client = {
+  id: string;
+  tenantId: string;
+
+  // Classification
+  clientType: ClientType;
+  clientCategory: ClientCategory;
+
+  // Natural person identity
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  saIdNumber: string;
+  passportNumber: string;
+  passportCountry: string;
+  dateOfBirth: string;
+  gender: 'male' | 'female' | 'non_binary' | 'prefer_not_to_say' | '';
+  nationality: string;
+  incomeTaxRef: string;
+
+  // Entity fields
+  registeredName: string;
+  tradingName: string;
+  registrationNumber: string;
+  registrationDate: string;
+  vatNumber: string;
+
+  // Contact
+  email: string;
+  emailAlt: string;
+  mobile: string;
+  phoneLandline: string;
+  whatsappNumber: string;
+  preferredContact: 'email' | 'mobile' | 'whatsapp' | 'phone';
+
+  // Physical address
+  addressLine1: string;
+  addressLine2: string;
+  suburb: string;
+  city: string;
+  province: string;
+  postalCode: string;
+  country: string;
+
+  // Postal address
+  postalSameAsPhysical: boolean;
+  postalLine1: string;
+  postalLine2: string;
+  postalSuburb: string;
+  postalCity: string;
+  postalProvince: string;
+  postalCodePost: string;
+
+  // FICA / KYC
+  ficaStatus: FicaStatus;
+  ficaVerifiedAt: string;
+  ficaExpiresAt: string;
+  riskRating: RiskRating;
+  isPep: boolean;
+  pepDetails: string;
+  sanctionsCheckedAt: string;
+  sanctionsClear: boolean | null;
+  sourceOfFunds: string;
+  sourceOfWealth: string;
+  natureOfBusiness: string;
+
+  // Conflict of interest
+  conflictsChecked: boolean;
+  conflictsCheckedAt: string;
+  conflictsCheckedBy: string;
+  conflictsNotes: string;
+
+  // Billing defaults
+  defaultRateCents: number;
+  billingEmail: string;
+  paymentTermsDays: number;
+  creditLimitCents: number;
+
+  // Relationship management
+  relationshipPartner: string;
+  originatingAttorney: string;
+  clientSince: string;
+  referralSource: string;
+  tags: string[];
+
+  // Portal
+  portalEmail: string;
+  portalActive: boolean;
+
+  // Notes
+  internalNotes: string;
+
+  archivedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type LegalCorpusSource = {
   id: string;

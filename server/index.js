@@ -3386,6 +3386,174 @@ app.post("/api/conveyancing/matters/:id/stage/notify", authMiddleware, async (re
   } catch (error) { next(error); }
 });
 
+// ─── CLIENTS (CRM) ────────────────────────────────────────────────────────────
+
+// camelCase ↔ snake_case helpers
+function clientRowToJson(r) {
+  if (!r) return null;
+  return {
+    id: r.id, tenantId: r.tenant_id,
+    clientType: r.client_type, clientCategory: r.client_category,
+    firstName: r.first_name || "", lastName: r.last_name || "", fullName: r.full_name,
+    saIdNumber: r.sa_id_number || "", passportNumber: r.passport_number || "",
+    passportCountry: r.passport_country || "", dateOfBirth: r.date_of_birth ? r.date_of_birth.toISOString().slice(0,10) : "",
+    gender: r.gender || "", nationality: r.nationality || "South African", incomeTaxRef: r.income_tax_ref || "",
+    registeredName: r.registered_name || "", tradingName: r.trading_name || "",
+    registrationNumber: r.registration_number || "", registrationDate: r.registration_date ? r.registration_date.toISOString().slice(0,10) : "",
+    vatNumber: r.vat_number || "",
+    email: r.email || "", emailAlt: r.email_alt || "", mobile: r.mobile || "",
+    phoneLandline: r.phone_landline || "", whatsappNumber: r.whatsapp_number || "",
+    preferredContact: r.preferred_contact || "email",
+    addressLine1: r.address_line1 || "", addressLine2: r.address_line2 || "",
+    suburb: r.suburb || "", city: r.city || "", province: r.province || "",
+    postalCode: r.postal_code || "", country: r.country || "South Africa",
+    postalSameAsPhysical: r.postal_same_as_physical !== false,
+    postalLine1: r.postal_line1 || "", postalLine2: r.postal_line2 || "",
+    postalSuburb: r.postal_suburb || "", postalCity: r.postal_city || "",
+    postalProvince: r.postal_province || "", postalCodePost: r.postal_code_post || "",
+    ficaStatus: r.fica_status || "pending", ficaVerifiedAt: r.fica_verified_at || "",
+    ficaExpiresAt: r.fica_expires_at || "", riskRating: r.risk_rating || "unrated",
+    isPep: r.is_pep || false, pepDetails: r.pep_details || "",
+    sanctionsCheckedAt: r.sanctions_checked_at || "", sanctionsClear: r.sanctions_clear,
+    sourceOfFunds: r.source_of_funds || "", sourceOfWealth: r.source_of_wealth || "",
+    natureOfBusiness: r.nature_of_business || "",
+    conflictsChecked: r.conflicts_checked || false, conflictsCheckedAt: r.conflicts_checked_at || "",
+    conflictsCheckedBy: r.conflicts_checked_by || "", conflictsNotes: r.conflicts_notes || "",
+    defaultRateCents: r.default_rate_cents || 0, billingEmail: r.billing_email || "",
+    paymentTermsDays: r.payment_terms_days || 30, creditLimitCents: r.credit_limit_cents || 0,
+    relationshipPartner: r.relationship_partner || "", originatingAttorney: r.originating_attorney || "",
+    clientSince: r.client_since ? r.client_since.toISOString().slice(0,10) : "",
+    referralSource: r.referral_source || "", tags: r.tags || [],
+    portalEmail: r.portal_email || "", portalActive: r.portal_active || false,
+    internalNotes: r.internal_notes || "",
+    archivedAt: r.archived_at || "", createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+
+app.get("/api/clients", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const { search, category, ficaStatus, clientType, limit = 100, offset = 0 } = req.query;
+    const conditions = ["tenant_id=$1", "archived_at is null"];
+    const params = [req.user.tenantId];
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`(full_name ilike $${params.length} or email ilike $${params.length} or mobile ilike $${params.length} or registration_number ilike $${params.length})`);
+    }
+    if (category) { params.push(category); conditions.push(`client_category=$${params.length}`); }
+    if (ficaStatus) { params.push(ficaStatus); conditions.push(`fica_status=$${params.length}`); }
+    if (clientType) { params.push(clientType); conditions.push(`client_type=$${params.length}`); }
+    const where = conditions.join(" and ");
+    const rows = await pool.query(
+      `select * from clients where ${where} order by full_name asc limit $${params.length+1} offset $${params.length+2}`,
+      [...params, parseInt(limit), parseInt(offset)]
+    );
+    const count = await pool.query(`select count(*) from clients where ${where}`, params);
+    res.json({ clients: rows.rows.map(clientRowToJson), total: parseInt(count.rows[0].count) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/clients/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const row = await pool.query("select * from clients where id=$1 and tenant_id=$2", [req.params.id, req.user.tenantId]);
+    if (!row.rows[0]) return res.status(404).json({ error: "Client not found." });
+    res.json({ client: clientRowToJson(row.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/clients", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const b = req.body;
+    if (!b.fullName?.trim()) return res.status(400).json({ error: "Full name is required." });
+    const row = await pool.query(
+      `insert into clients (tenant_id,client_type,client_category,first_name,last_name,full_name,
+        sa_id_number,passport_number,passport_country,date_of_birth,gender,nationality,income_tax_ref,
+        registered_name,trading_name,registration_number,registration_date,vat_number,
+        email,email_alt,mobile,phone_landline,whatsapp_number,preferred_contact,
+        address_line1,address_line2,suburb,city,province,postal_code,country,
+        postal_same_as_physical,postal_line1,postal_line2,postal_suburb,postal_city,postal_province,postal_code_post,
+        fica_status,risk_rating,is_pep,pep_details,source_of_funds,source_of_wealth,nature_of_business,
+        conflicts_checked,conflicts_notes,default_rate_cents,billing_email,payment_terms_days,credit_limit_cents,
+        relationship_partner,originating_attorney,client_since,referral_source,client_category,tags,
+        portal_email,portal_active,internal_notes)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,
+               $25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,
+               $46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59)
+       returning *`,
+      [req.user.tenantId, b.clientType||'natural_person', b.clientCategory||'standard',
+       b.firstName||null, b.lastName||null, b.fullName.trim(),
+       b.saIdNumber||null, b.passportNumber||null, b.passportCountry||null,
+       b.dateOfBirth||null, b.gender||null, b.nationality||'South African', b.incomeTaxRef||null,
+       b.registeredName||null, b.tradingName||null, b.registrationNumber||null, b.registrationDate||null, b.vatNumber||null,
+       b.email||null, b.emailAlt||null, b.mobile||null, b.phoneLandline||null, b.whatsappNumber||null, b.preferredContact||'email',
+       b.addressLine1||null, b.addressLine2||null, b.suburb||null, b.city||null, b.province||null, b.postalCode||null, b.country||'South Africa',
+       b.postalSameAsPhysical !== false, b.postalLine1||null, b.postalLine2||null, b.postalSuburb||null, b.postalCity||null, b.postalProvince||null, b.postalCodePost||null,
+       b.ficaStatus||'pending', b.riskRating||'unrated', b.isPep||false, b.pepDetails||null, b.sourceOfFunds||null, b.sourceOfWealth||null, b.natureOfBusiness||null,
+       b.conflictsChecked||false, b.conflictsNotes||null, b.defaultRateCents||0, b.billingEmail||null, b.paymentTermsDays||30, b.creditLimitCents||0,
+       b.relationshipPartner||null, b.originatingAttorney||null, b.clientSince||null, b.referralSource||null, b.clientCategory||'standard', b.tags||[],
+       b.portalEmail||null, b.portalActive||false, b.internalNotes||null]
+    );
+    res.status(201).json({ client: clientRowToJson(row.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/clients/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const b = req.body;
+    const fieldMap = {
+      clientType: 'client_type', clientCategory: 'client_category',
+      firstName: 'first_name', lastName: 'last_name', fullName: 'full_name',
+      saIdNumber: 'sa_id_number', passportNumber: 'passport_number', passportCountry: 'passport_country',
+      dateOfBirth: 'date_of_birth', gender: 'gender', nationality: 'nationality', incomeTaxRef: 'income_tax_ref',
+      registeredName: 'registered_name', tradingName: 'trading_name', registrationNumber: 'registration_number',
+      registrationDate: 'registration_date', vatNumber: 'vat_number',
+      email: 'email', emailAlt: 'email_alt', mobile: 'mobile', phoneLandline: 'phone_landline',
+      whatsappNumber: 'whatsapp_number', preferredContact: 'preferred_contact',
+      addressLine1: 'address_line1', addressLine2: 'address_line2', suburb: 'suburb',
+      city: 'city', province: 'province', postalCode: 'postal_code', country: 'country',
+      postalSameAsPhysical: 'postal_same_as_physical', postalLine1: 'postal_line1', postalLine2: 'postal_line2',
+      postalSuburb: 'postal_suburb', postalCity: 'postal_city', postalProvince: 'postal_province', postalCodePost: 'postal_code_post',
+      ficaStatus: 'fica_status', ficaVerifiedAt: 'fica_verified_at', ficaExpiresAt: 'fica_expires_at',
+      riskRating: 'risk_rating', isPep: 'is_pep', pepDetails: 'pep_details',
+      sanctionsCheckedAt: 'sanctions_checked_at', sanctionsClear: 'sanctions_clear',
+      sourceOfFunds: 'source_of_funds', sourceOfWealth: 'source_of_wealth', natureOfBusiness: 'nature_of_business',
+      conflictsChecked: 'conflicts_checked', conflictsCheckedAt: 'conflicts_checked_at',
+      conflictsCheckedBy: 'conflicts_checked_by', conflictsNotes: 'conflicts_notes',
+      defaultRateCents: 'default_rate_cents', billingEmail: 'billing_email',
+      paymentTermsDays: 'payment_terms_days', creditLimitCents: 'credit_limit_cents',
+      relationshipPartner: 'relationship_partner', originatingAttorney: 'originating_attorney',
+      clientSince: 'client_since', referralSource: 'referral_source', tags: 'tags',
+      portalEmail: 'portal_email', portalActive: 'portal_active', internalNotes: 'internal_notes',
+    };
+    const sets = []; const params = [req.params.id, req.user.tenantId];
+    for (const [jsKey, dbCol] of Object.entries(fieldMap)) {
+      if (b[jsKey] !== undefined) { params.push(b[jsKey]); sets.push(`${dbCol}=$${params.length}`); }
+    }
+    if (!sets.length) return res.status(400).json({ error: "No fields to update." });
+    sets.push("updated_at=now()");
+    const row = await pool.query(
+      `update clients set ${sets.join(",")} where id=$1 and tenant_id=$2 returning *`, params
+    );
+    if (!row.rows[0]) return res.status(404).json({ error: "Client not found." });
+    res.json({ client: clientRowToJson(row.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/clients/:id/archive", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const row = await pool.query(
+      "update clients set archived_at=now(), updated_at=now() where id=$1 and tenant_id=$2 returning *",
+      [req.params.id, req.user.tenantId]
+    );
+    if (!row.rows[0]) return res.status(404).json({ error: "Client not found." });
+    res.json({ client: clientRowToJson(row.rows[0]) });
+  } catch (error) { next(error); }
+});
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   const schemaMessage = explainSettingsDatabaseError(error);

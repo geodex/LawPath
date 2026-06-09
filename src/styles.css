@@ -4291,6 +4291,110 @@ textarea {
   .toast-info { background: var(--blue-bg); }
 }
 
+/* ─── Clients / CRM view ─────────────────────────────────────────────────────── */
+
+.clients-view {
+  display: grid;
+  gap: 0;
+}
+
+/* Client avatar circle */
+.client-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #177a5f, #0f6b52);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.client-avatar-sm {
+  width: 38px;
+  height: 38px;
+  font-size: 0.82rem;
+}
+
+/* Client list table */
+.clients-table {
+  display: grid;
+  overflow-x: auto;
+}
+
+.client-row {
+  display: grid;
+  grid-template-columns: 2.2fr 1.4fr 1fr 0.8fr 1.1fr 0.9fr 0.6fr;
+  gap: 14px;
+  align-items: center;
+  padding: 13px 8px;
+  border-bottom: 1px solid var(--line);
+  min-width: 760px;
+  transition: background 0.1s;
+}
+
+.client-row-head {
+  font-size: 0.77rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.client-row:not(.client-row-head):hover {
+  background: var(--surface);
+}
+
+/* Detail panel layout */
+.detail-section-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  padding: 1.25rem;
+}
+
+.detail-col {
+  display: grid;
+  gap: 0.9rem;
+  align-content: start;
+}
+
+.section-heading {
+  margin: 0 0 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--green);
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.client-field {
+  display: grid;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .client-avatar { background: linear-gradient(145deg, #1a9a72, #0e6048); }
+  .client-row:not(.client-row-head):hover { background: #0e1c15; }
+  .detail-section-grid { background: transparent; }
+}
+
+@media (max-width: 900px) {
+  .detail-section-grid { grid-template-columns: 1fr; }
+  .client-row { grid-template-columns: 1.8fr 1fr 0.9fr 0.7fr; min-width: 560px; }
+  .client-row > :nth-child(5),
+  .client-row > :nth-child(6),
+  .client-row > :nth-child(7) { display: none; }
+}
+
 /* ─── Billing view ───────────────────────────────────────────────────────────── */
 
 .billing-view {

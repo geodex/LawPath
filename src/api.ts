@@ -1,4 +1,4 @@
-import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AgentReferral, AiAgentKey, AnalyticsSnapshot, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, EstateAgent, FicaClient, Invoice, InvoicePayment, LegalCorpusDocument, LegalCorpusSource, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchQuery, SignatureRequest, SignatureSignatory, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AgentReferral, AiAgentKey, AnalyticsSnapshot, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, Client, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, EstateAgent, FicaClient, Invoice, InvoicePayment, LegalCorpusDocument, LegalCorpusSource, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchQuery, SignatureRequest, SignatureSignatory, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -504,4 +504,33 @@ export async function getAnalytics() {
 
 export async function generateAnalyticsSnapshot() {
   return request<{ snapshot: AnalyticsSnapshot }>("/api/analytics/snapshot", { method: "POST" });
+}
+
+// ─── CLIENTS (CRM) ────────────────────────────────────────────────────────────
+
+export async function getClients(params?: { search?: string; category?: string; ficaStatus?: string; clientType?: string; limit?: number; offset?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.search)     qs.set("search",     params.search);
+  if (params?.category)   qs.set("category",   params.category);
+  if (params?.ficaStatus) qs.set("ficaStatus",  params.ficaStatus);
+  if (params?.clientType) qs.set("clientType",  params.clientType);
+  if (params?.limit)      qs.set("limit",       String(params.limit));
+  if (params?.offset)     qs.set("offset",      String(params.offset ?? 0));
+  return request<{ clients: Client[]; total: number }>(`/api/clients?${qs}`);
+}
+
+export async function getClient(id: string) {
+  return request<{ client: Client }>(`/api/clients/${id}`);
+}
+
+export async function createClient(data: Partial<Client>) {
+  return request<{ client: Client }>("/api/clients", { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function updateClient(id: string, data: Partial<Client>) {
+  return request<{ client: Client }>(`/api/clients/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+}
+
+export async function archiveClient(id: string) {
+  return request<{ client: Client }>(`/api/clients/${id}/archive`, { method: "POST" });
 }

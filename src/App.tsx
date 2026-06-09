@@ -58,13 +58,15 @@ import { ESignature } from "./ESignature";
 import { AgentNetwork } from "./AgentNetwork";
 import { PracticeAnalytics } from "./PracticeAnalytics";
 import { StaffManagement } from "./StaffManagement";
+import { Clients } from "./Clients";
 import { StripeBilling } from "./StripeBilling";
 import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
 
 const nav: NavItem[] = [
-  { key: "overview", label: "Overview", icon: Home },
-  { key: "drafting", label: "Contracts", icon: FilePenLine },
+  { key: "overview",  label: "Overview", icon: Home },
+  { key: "clients",   label: "Clients",  icon: Users },
+  { key: "drafting",  label: "Contracts", icon: FilePenLine },
   { key: "research", label: "Research", icon: Search },
   { key: "secretary", label: "Secretary", icon: Archive },
   { key: "billing", label: "Billing", icon: CircleDollarSign },
@@ -92,6 +94,7 @@ const nav: NavItem[] = [
 
 const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   overview: "general",
+  clients: "general",
   drafting: "drafting",
   research: "research",
   secretary: "secretary",
@@ -577,6 +580,7 @@ export function App() {
         {activeView === "overview" && <Overview matters={matters} tasks={tasks} invoices={invoices} research={research} activity={activity} setActiveView={setActiveView} />}
         {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} tenantProfile={tenantProfile} />}
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
+        {activeView === "clients" && <Clients showToast={showToast} log={log} />}
         {activeView === "secretary" && <Secretary tasks={tasks} setTasks={setTasks} log={log} />}
         {activeView === "billing" && (
           <Billing
