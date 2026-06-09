@@ -96,11 +96,7 @@ export const tasks: WorkTask[] = [
   { id: "T-3", title: "File signed mandate in estate matter", owner: "Legal secretary", due: "Friday", done: true, priority: "Normal" }
 ];
 
-export const invoices: Invoice[] = [
-  { id: "INV-2409", client: "Thandi Mokoena", matter: "M-1048", amount: 18500, paid: 9500, status: "Part-paid" },
-  { id: "INV-2410", client: "Sipho Ndlovu", matter: "M-1049", amount: 32000, paid: 0, status: "Draft" },
-  { id: "INV-2411", client: "Priya Naidoo", matter: "M-1050", amount: 14600, paid: 14600, status: "Paid" }
-];
+export const invoices: Invoice[] = [];
 
 export const appointments: Appointment[] = [
   { id: "A-1", title: "Signing appointment: transfer docs", person: "Thandi Mokoena", time: "2026-06-05 10:00", mode: "Office" },

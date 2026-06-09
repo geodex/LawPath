@@ -202,7 +202,7 @@ export function App() {
   const [contracts, setContracts] = useState<ContractDraft[]>(contractSeed);
   const [research, setResearch] = useState<ResearchItem[]>(researchSeed);
   const [tasks, setTasks] = useState<WorkTask[]>(taskSeed);
-  const [invoices, setInvoices] = useState<Invoice[]>(invoiceSeed);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>(appointmentSeed);
   const [smtpSettings, setSmtpSettings] = useState<SmtpSettings>(defaultSmtpSettings);
   const [tenantEmailSettings, setTenantEmailSettings] = useState<TenantEmailSettings>(defaultTenantEmailSettings);
@@ -1174,7 +1174,7 @@ function Overview({
   activity: string[];
   setActiveView: (view: ViewKey) => void;
 }) {
-  const outstanding = invoices.reduce((sum, invoice) => sum + invoice.amount - invoice.paid, 0);
+  const outstanding = invoices.reduce((sum, invoice) => sum + invoice.amountCents - invoice.paidCents, 0);
   const avgProgress = Math.round(matters.reduce((sum, matter) => sum + matter.progress, 0) / matters.length);
 
   return (
@@ -2568,41 +2568,6 @@ function Secretary({ tasks, setTasks, log }: { tasks: WorkTask[]; setTasks: Reac
   );
 }
 
-function LegacyBilling({ invoices, setInvoices, log }: { invoices: Invoice[]; setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>; log: (message: string) => void }) {
-  const total = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
-  const paid = invoices.reduce((sum, invoice) => sum + invoice.paid, 0);
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const client = String(form.get("client"));
-    setInvoices((items) => [{ id: uid("INV"), client, matter: String(form.get("matter")), amount: Number(form.get("amount")), paid: 0, status: "Draft" }, ...items]);
-    log(`Created draft invoice for ${client}`);
-  }
-
-  return (
-    <>
-      <section className="metrics">
-        <Metric label="Fees billed" value={money(total)} help="All active invoices" />
-        <Metric label="Collected" value={money(paid)} help="Payments captured" />
-        <Metric label="Outstanding" value={money(total - paid)} help="Follow-up required" />
-      </section>
-      <section className="grid-two">
-        <Panel title="Create invoice" badge="VAT-aware fields">
-          <form className="form" onSubmit={submit}>
-            <label>Client<input name="client" defaultValue="New client" /></label>
-            <label>Matter<input name="matter" defaultValue="M-1051" /></label>
-            <label>Amount in rand<input name="amount" type="number" defaultValue="12500" /></label>
-            <button className="primary" type="submit"><CircleDollarSign size={18} /> Add invoice</button>
-          </form>
-        </Panel>
-        <Panel title="Billing register" badge={`${invoices.length} invoices`}>
-          <div className="table">{invoices.map((invoice) => <TableRow key={invoice.id} cells={[invoice.id, invoice.client, money(invoice.amount), invoice.status]} />)}</div>
-        </Panel>
-      </section>
-    </>
-  );
-}
 
 function Booking({ appointments, setAppointments, log }: { appointments: Appointment[]; setAppointments: React.Dispatch<React.SetStateAction<Appointment[]>>; log: (message: string) => void }) {
   function submit(event: FormEvent<HTMLFormElement>) {
