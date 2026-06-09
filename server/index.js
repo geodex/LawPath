@@ -2446,9 +2446,9 @@ const VERIFYNOW_SERVICES = new Set([
   "number-plate", "vin-decode"
 ]);
 
-app.post("/api/verifynow/*", authMiddleware, async (req, res, next) => {
+app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  const service = req.path.replace(/^\/api\/verifynow\//, "");
+  const service = req.params.service;
   if (!VERIFYNOW_SERVICES.has(service)) return res.status(400).json({ error: `Unknown VerifyNow service: ${service}` });
   try {
     const ctx = { tenantId: req.user.tenantId, userId: req.user.sub, inputRef: req.body?.input_ref || null };
