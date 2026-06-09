@@ -1084,6 +1084,14 @@ function AuthPanel({
 
   return (
     <aside className="auth-card">
+      <div className="auth-card-brand">
+        <div className="brand-mark">LP</div>
+        <div className="auth-card-brand-text">
+          <strong>LawPath SA</strong>
+          <span>South African legal practice platform</span>
+        </div>
+      </div>
+      <div className="auth-card-body">
       <div className="auth-tabs">
         <button className={visibleMode === "register" ? "active" : ""} onClick={() => setMode("register")}>Register</button>
         <button className={visibleMode === "login" ? "active" : ""} onClick={() => setMode("login")}>Login</button>
@@ -1092,10 +1100,10 @@ function AuthPanel({
 
       {visibleMode === "register" && (
         <form className="form" onSubmit={submitRegister}>
-          <label>Lawyer name<input name="fullName" defaultValue="Thandi Mokoena" required /></label>
-          <label>Company name<input name="companyName" defaultValue="Mokoena & Partners Inc." required /></label>
-          <label>Work email<input name="email" type="email" defaultValue="thandi@mokoenalaw.co.za" required /></label>
-          <label>Password<input name="password" type="password" defaultValue="Password123!" required /></label>
+          <label>Lawyer name<input name="fullName" placeholder="e.g. Thandi Mokoena" required /></label>
+          <label>Practice / firm name<input name="companyName" placeholder="e.g. Mokoena &amp; Partners Inc." required /></label>
+          <label>Work email<input name="email" type="email" placeholder="you@yourfirm.co.za" required /></label>
+          <label>Password<input name="password" type="password" placeholder="Minimum 8 characters" required /></label>
           <button className="primary" type="submit" disabled={busy}><UserPlus size={18} /> {busy ? "Creating..." : "Create tenant workspace"}</button>
           <button className="link-button" type="button" onClick={() => setMode("login")}>Already have an account?</button>
           <button className="link-button" type="button" onClick={onResumeSession}>Resume saved session</button>
@@ -1104,8 +1112,8 @@ function AuthPanel({
 
       {visibleMode === "login" && (
         <form className="form" onSubmit={submitLogin}>
-          <label>Email<input name="email" type="email" defaultValue="thandi@mokoenalaw.co.za" required /></label>
-          <label>Password<input name="password" type="password" defaultValue="Password123!" required /></label>
+          <label>Email<input name="email" type="email" placeholder="you@yourfirm.co.za" required /></label>
+          <label>Password<input name="password" type="password" placeholder="Your password" required /></label>
           <button className="primary" type="submit" disabled={busy}><LogIn size={18} /> {busy ? "Logging in..." : "Login"}</button>
           <button className="link-button" type="button" onClick={() => setMode("forgot")}>Forgot password?</button>
           <button className="link-button" type="button" onClick={onResumeSession}>Resume saved session</button>
@@ -1114,11 +1122,12 @@ function AuthPanel({
 
       {visibleMode === "forgot" && (
         <form className="form" onSubmit={submitForgot}>
-          <label>Account email<input name="email" type="email" defaultValue="thandi@mokoenalaw.co.za" required /></label>
+          <label>Account email<input name="email" type="email" placeholder="you@yourfirm.co.za" required /></label>
           <button className="primary" type="submit" disabled={busy}><Mail size={18} /> {busy ? "Processing..." : "Send reset link"}</button>
           <button className="link-button" type="button" onClick={() => setMode("login")}>Back to login</button>
         </form>
       )}
+      </div>
     </aside>
   );
 }
