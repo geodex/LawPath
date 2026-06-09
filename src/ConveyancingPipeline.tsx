@@ -1,6 +1,7 @@
-import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Plus, ShieldCheck } from "lucide-react";
-import { FormEvent, useCallback, useState } from "react";
-import { advanceConveyancingStage, callVerifyNow, createConveyancingMatter, updateConveyancingClearances } from "./api";
+import { Building2, CheckCircle2, ChevronDown, ChevronRight, Loader2, MapPin, Plus, ShieldCheck } from "lucide-react";
+import { FormEvent, useCallback, useRef, useState } from "react";
+import { advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstoneSectionalUnits, searchLightstoneAddress, updateConveyancingClearances } from "./api";
+import type { LightstoneAddress, LightstoneSectionalUnit } from "./api";
 import type { ConveyancingMatter, ConveyancingStage } from "./types";
 
 const money = (cents: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(cents / 100);
@@ -352,9 +353,15 @@ export function ConveyancingPipeline({
   const [priceInput, setPriceInput] = useState("");
   const [calcDuty, setCalcDuty] = useState(0);
   const [calcFee, setCalcFee] = useState(0);
-  const [windeedResults, setWindeedResults] = useState<any[]>([]);
-  const [windeedQuery, setWindeedQuery] = useState("");
-  const [windeedLoading, setWindeedLoading] = useState(false);
+  // Lightstone property search (replaces Windeed)
+  const [lsQuery, setLsQuery]                         = useState("");
+  const [lsLoading, setLsLoading]                     = useState(false);
+  const [lsResults, setLsResults]                     = useState<LightstoneAddress[]>([]);
+  const [lsSelected, setLsSelected]                   = useState<LightstoneAddress | null>(null);
+  const [lsSectional, setLsSectional]                 = useState<LightstoneSectionalUnit[]>([]);
+  const [lsSectionalLoading, setLsSectionalLoading]   = useState(false);
+  const [lsSearched, setLsSearched]                   = useState(false);
+  const lsAbort = useRef<AbortController | null>(null);
   // VerifyNow: keyed by "matterId:checkKey"
   const [vnChecks, setVnChecks] = useState<VnChecks>({});
 
@@ -428,19 +435,40 @@ export function ConveyancingPipeline({
     setAdvanceNotes("");
   }
 
-  async function handleWindeedSearch() {
-    if (!windeedQuery.trim()) return;
-    setWindeedLoading(true);
+  async function handleLightstoneSearch() {
+    if (!lsQuery.trim()) return;
+    if (lsAbort.current) lsAbort.current.abort();
+    setLsLoading(true);
+    setLsResults([]);
+    setLsSelected(null);
+    setLsSectional([]);
+    setLsSearched(false);
     try {
-      const token = localStorage.getItem("lawpath.auth.token") || "";
-      const res = await fetch(`/api/windeed/search?q=${encodeURIComponent(windeedQuery)}&type=erf`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
-      setWindeedResults(data.results || []);
-      if (data.note) showToast("info", "Windeed", data.note);
-    } catch {
-      showToast("error", "Search failed", "Could not search property register.");
+      const data = await searchLightstoneAddress(lsQuery.trim());
+      setLsResults(data.results || []);
+      setLsSearched(true);
+      if (!data.results?.length) showToast("info", "Lightstone", "No matching properties found. Try a street address, suburb or erf number.");
+    } catch (err: unknown) {
+      const msg = (err instanceof Error) ? err.message : "Property search failed";
+      showToast("error", "Lightstone search failed", msg);
     } finally {
-      setWindeedLoading(false);
+      setLsLoading(false);
+    }
+  }
+
+  async function handleLightstoneSelectResult(addr: LightstoneAddress) {
+    setLsSelected(addr);
+    setLsSectional([]);
+    if (addr.schemeGroupId && addr.schemeGroupId > 0) {
+      setLsSectionalLoading(true);
+      try {
+        const data = await getLightstoneSectionalUnits(addr.id);
+        setLsSectional(data.units || []);
+      } catch {
+        /* sectional lookup optional — don't toast for this */
+      } finally {
+        setLsSectionalLoading(false);
+      }
     }
   }
 
@@ -684,22 +712,123 @@ export function ConveyancingPipeline({
                     <p className="transfer-duty-note">Transfer duty scale per SARS GN R234 (2024/2025). Conveyancing fee is indicative only — prescribed tariff applies. Attorney review required before issuing account to client.</p>
                   </div>
 
-                  {/* Windeed property search */}
-                  <h4 style={{ margin: "20px 0 10px" }}>Property search (Windeed)</h4>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                    <input value={windeedQuery} onChange={e => setWindeedQuery(e.target.value)} placeholder="Erf number, title deed or street address" style={{ flex: 1, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8 }} onKeyDown={e => e.key === "Enter" && handleWindeedSearch()} />
-                    <button className="primary small" onClick={handleWindeedSearch} disabled={windeedLoading}>{windeedLoading ? "Searching..." : "Search"}</button>
+                  {/* Lightstone property search */}
+                  <h4 style={{ margin: "20px 0 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                    <MapPin size={16} color="var(--green)" /> Property search (Lightstone)
+                  </h4>
+                  <div className="ls-search-bar">
+                    <input
+                      value={lsQuery}
+                      onChange={e => setLsQuery(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && handleLightstoneSearch()}
+                      placeholder="Street address, suburb, erf number or estate name…"
+                    />
+                    <button className="primary small" onClick={handleLightstoneSearch} disabled={lsLoading}>
+                      {lsLoading ? <><Loader2 size={13} style={{ animation: "spin 0.8s linear infinite" }} /> Searching</> : "Search"}
+                    </button>
                   </div>
-                  {windeedResults.map((r, i) => (
-                    <div key={i} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "12px 16px", marginBottom: 8, fontSize: "0.87rem" }}>
-                      <strong>{r.propertyDescription}</strong>
-                      <div style={{ color: "var(--muted)", marginTop: 4 }}>
-                        <span>ERF: {r.erfNumber}</span> · <span>Title deed: {r.titleDeedNumber}</span>
-                      </div>
-                      <div style={{ marginTop: 4 }}>Owner: {r.registeredOwner} · Bond: {r.bondHolder}</div>
-                      <div style={{ marginTop: 4 }}>Value: {r.municipalValue} · Rates: {r.ratesLevied}</div>
+
+                  {lsSearched && !lsResults.length && (
+                    <div className="ls-no-results">No properties found for "{lsQuery}"</div>
+                  )}
+
+                  {lsResults.length > 0 && (
+                    <div className="ls-results">
+                      {lsResults.map(addr => (
+                        <div
+                          key={addr.id}
+                          className={`ls-result-card${lsSelected?.id === addr.id ? " selected" : ""}`}
+                          onClick={() => handleLightstoneSelectResult(addr)}
+                        >
+                          <div className="ls-result-main">
+                            <div className="ls-result-address">{addr.addressString || addr.name}</div>
+                            <div className="ls-result-meta">
+                              {[addr.suburbName, addr.municipalityName, addr.provinceName].filter(Boolean).join(" · ")}
+                              {addr.postCode ? ` · ${addr.postCode}` : ""}
+                            </div>
+                          </div>
+                          <div className="ls-result-badges">
+                            {addr.schemeGroupId > 0 && <span className="ls-badge ls-badge-sectional">Sectional</span>}
+                            {addr.estateName && <span className="ls-badge ls-badge-estate">{addr.estateName}</span>}
+                            {addr.relevanceScore > 0 && (
+                              <span className="ls-badge ls-badge-score">{Math.round(addr.relevanceScore * 100)}%</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
+
+                  {lsSelected && (
+                    <div className="ls-property-detail">
+                      <div className="ls-detail-head">
+                        <div>
+                          <div className="ls-detail-title">{lsSelected.addressString}</div>
+                          <div className="ls-detail-pid">
+                            Property ID: {lsSelected.propertyId} · Address ID: {lsSelected.id}
+                            {lsSelected.deedsOfficeId ? ` · Deeds Office: ${lsSelected.deedsOfficeId}` : ""}
+                          </div>
+                        </div>
+                        <Building2 size={22} color="var(--green)" style={{ flexShrink: 0 }} />
+                      </div>
+
+                      <div className="ls-detail-grid">
+                        {[
+                          ["Street", [lsSelected.streetNumber, lsSelected.streetName, lsSelected.streetType].filter(Boolean).join(" ")],
+                          ["Estate", lsSelected.estateName],
+                          ["Scheme", lsSelected.schemeName],
+                          ["Suburb", lsSelected.suburbName],
+                          ["Town / City", lsSelected.townName],
+                          ["Municipality", lsSelected.municipalityName],
+                          ["District Council", lsSelected.districtCouncilName],
+                          ["Province", lsSelected.provinceName],
+                          ["Post code", lsSelected.postCode],
+                          ["Scheme group ID", lsSelected.schemeGroupId > 0 ? String(lsSelected.schemeGroupId) : null],
+                        ].map(([label, val]) => (
+                          val ? (
+                            <div key={String(label)} className="ls-detail-field">
+                              <span className="ls-detail-label">{label}</span>
+                              <span className="ls-detail-value">{val}</span>
+                            </div>
+                          ) : null
+                        ))}
+                      </div>
+
+                      {lsSelected.schemeGroupId > 0 && (
+                        <div className="ls-sectional">
+                          <h5 style={{ margin: "16px 0 8px", fontSize: "0.85rem", fontWeight: 700 }}>
+                            Sectional scheme units
+                            {lsSectionalLoading && <Loader2 size={13} style={{ marginLeft: 8, animation: "spin 0.8s linear infinite" }} />}
+                          </h5>
+                          {!lsSectionalLoading && lsSectional.length === 0 && (
+                            <p style={{ color: "var(--muted)", fontSize: "0.83rem" }}>No units loaded yet.</p>
+                          )}
+                          {lsSectional.length > 0 && (
+                            <table className="ls-sectional-table">
+                              <thead>
+                                <tr>
+                                  <th>Unit / Address</th>
+                                  <th>Scheme</th>
+                                  <th>Suburb</th>
+                                  <th>ID</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {lsSectional.map((u, i) => (
+                                  <tr key={u.id ?? i}>
+                                    <td>{u.unitNumber || u.addressString || "—"}</td>
+                                    <td>{u.schemeName || "—"}</td>
+                                    <td>{u.suburbName || "—"}</td>
+                                    <td style={{ color: "var(--muted)", fontSize: "0.8rem" }}>{u.id ?? "—"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* VerifyNow Due Diligence */}
                   <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "22px 0" }} />

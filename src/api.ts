@@ -436,6 +436,61 @@ export async function getCorpusDocumentText(docId: string) {
   return request<{ title: string; citation: string; text: string; source: "gcs" | "snippet" | "none" }>(`/api/research-db/documents/${docId}/text`);
 }
 
+// ─── LIGHTSTONE PROPERTY API ─────────────────────────────────────────────────
+
+export interface LightstoneAddress {
+  id: number;
+  description: string;
+  name: string;
+  propertyId: number;
+  deedsOfficeId: number;
+  addressString: string;
+  streetNumber: string;
+  streetId: number;
+  streetName: string;
+  streetType: string;
+  estateId: number;
+  estateName: string;
+  schemeName: string;
+  schemeGroupId: number;
+  suburbId: number;
+  suburbName: string;
+  townId: number;
+  townName: string;
+  municipalityId: number;
+  municipalityName: string;
+  districtCouncilId: number;
+  districtCouncilName: string;
+  postCode: string;
+  provinceId: number;
+  provinceName: string;
+  countryId: number;
+  countryName: string;
+  relevanceScore: number;
+}
+
+export interface LightstoneSectionalUnit {
+  id?: number;
+  unitNumber?: string;
+  schemeGroupId?: number;
+  schemeName?: string;
+  addressString?: string;
+  suburbName?: string;
+  [key: string]: unknown; // Lightstone may return additional fields
+}
+
+export async function searchLightstoneAddress(q: string) {
+  return request<{ searchIdentifier: string | null; results: LightstoneAddress[] }>(
+    `/api/lightstone/address?q=${encodeURIComponent(q)}`
+  );
+}
+
+export async function getLightstoneSectionalUnits(addressId: number, maxrows = 20) {
+  return request<{ units: LightstoneSectionalUnit[] }>(
+    `/api/lightstone/sectional/${addressId}?maxrows=${maxrows}`
+  );
+}
+
 // ─── VERIFYNOW SA ─────────────────────────────────────────────────────────────
 
 /** Tenant-facing proxy — call any VerifyNow service.

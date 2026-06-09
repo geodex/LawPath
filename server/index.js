@@ -9,7 +9,8 @@ const { pool } = require("./db");
 const { authMiddleware, signToken } = require("./auth");
 const { sendTransactionalEmail } = require("./mailer");
 const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText, downloadText } = require("./gcs");
-const verifynow = require("./verifynow");
+const verifynow  = require("./verifynow");
+const lightstone = require("./lightstone");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -3146,31 +3147,29 @@ app.get("/api/windeed/search", authMiddleware, async (req, res, next) => {
       } catch { /* fall through to simulation */ }
     }
 
-    // Try Lightstone as secondary provider
-    const lightstoneApiKey = process.env.LIGHTSTONE_API_KEY || "";
-    if (!results.length && lightstoneApiKey) {
+    // Try Lightstone as secondary provider (real API via server/lightstone.js)
+    if (!results.length) {
       try {
-        const lRes = await fetch(
-          `https://api.lightstone.co.za/property/search?q=${encodeURIComponent(q)}&type=${type}`,
-          { headers: { "X-API-Key": lightstoneApiKey, "Accept": "application/json" }, signal: AbortSignal.timeout(8000) }
-        );
-        if (lRes.ok) {
-          const data = await lRes.json();
-          results = (data.properties || data.results || []).map(p => ({
-            erfNumber: p.erf || p.erfNumber || "",
-            titleDeedNumber: p.titleDeed || p.deed_number || "",
-            propertyDescription: p.description || p.address || "",
-            extent: p.size ? `${p.size} m²` : "",
-            registeredOwner: p.owner || "",
-            bondHolder: p.bond?.holder || "",
-            purchasePrice: p.lastSaleAmount ? `R ${Number(p.lastSaleAmount).toLocaleString("en-ZA")}` : "",
-            registrationDate: p.registrationDate || "",
-            municipalValue: p.municipalValue ? `R ${Number(p.municipalValue).toLocaleString("en-ZA")}` : "",
-            ratesLevied: p.monthlyRates ? `R ${Number(p.monthlyRates).toLocaleString("en-ZA")} per month` : ""
+        const lData = await lightstone.searchAddress(q, { tenantId: req.user.tenantId, userId: req.user.sub });
+        if (lData.results.length) {
+          // Map Lightstone's rich response to the legacy Windeed shape for this route
+          results = lData.results.map(p => ({
+            erfNumber: p.addressString || "",
+            titleDeedNumber: p.deedsOfficeId ? `Deeds Office ${p.deedsOfficeId}` : "",
+            propertyDescription: [p.estateName, p.suburbName, p.municipalityName, p.provinceName].filter(Boolean).join(", "),
+            extent: "",
+            registeredOwner: "[Use Lightstone property detail for owner data]",
+            bondHolder: "",
+            purchasePrice: "",
+            registrationDate: "",
+            municipalValue: "",
+            ratesLevied: "",
+            // Pass through native fields for frontend upgrade path
+            _lightstone: p
           }));
           console.info(`[lightstone] ${results.length} results for "${q}"`);
         }
-      } catch (err) { console.error("[lightstone] API error:", err.message); }
+      } catch (err) { console.error("[lightstone] search failed:", err.message); }
     }
 
     // Realistic simulation fallback — plausible SA property structure
@@ -3202,7 +3201,7 @@ app.get("/api/windeed/search", authMiddleware, async (req, res, next) => {
       }];
     }
 
-    const provider = windeedApiKey ? "windeed" : lightstoneApiKey ? "lightstone" : "simulation";
+    const provider = windeedApiKey ? "windeed" : (results.length && results[0]?._lightstone) ? "lightstone" : "simulation";
     await pool.query(
       "insert into property_search_cache (search_query, search_type, result_count, results, provider, searched_by) values ($1,$2,$3,$4,$5,$6) on conflict do nothing",
       [String(q), String(type), results.length, JSON.stringify(results), provider, req.user.sub]
@@ -3212,6 +3211,54 @@ app.get("/api/windeed/search", authMiddleware, async (req, res, next) => {
       "Simulation mode. Set WINDEED_API_KEY (windeed.co.za) or LIGHTSTONE_API_KEY (lightstone.co.za) in .env for live Deeds Office data.";
     res.json({ results, cached: false, provider, note });
   } catch (error) { next(error); }
+});
+
+// ─── LIGHTSTONE PROPERTY API ──────────────────────────────────────────────────
+
+// Address search — GET /api/lightstone/address?q={query}
+// Returns native Lightstone PropertyAddressSingleLineResponse[] sorted by relevance.
+app.get("/api/lightstone/address", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.status(400).json({ error: "Query parameter 'q' is required." });
+
+  try {
+    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub };
+    const data = await lightstone.searchAddress(q, ctx);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Sectional scheme unit lookup — GET /api/lightstone/sectional/:addressId?maxrows=20
+// Use the `id` field from a search result where schemeGroupId > 0.
+app.get("/api/lightstone/sectional/:addressId", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const addressId = Number(req.params.addressId);
+  if (!addressId || isNaN(addressId)) return res.status(400).json({ error: "Valid addressId is required." });
+  const maxrows = Math.min(Number(req.query.maxrows || 20), 100);
+
+  try {
+    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub };
+    const data = await lightstone.getSectionalUnits(addressId, maxrows, ctx);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Super-admin: Lightstone usage summary
+app.get("/api/admin/lightstone/usage", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  try {
+    const [totals, byService, recent] = await Promise.all([
+      pool.query(`select count(*) as total_calls, count(*) filter (where status='error') as errors, round(avg(latency_ms)) as avg_latency_ms, coalesce(sum(result_count), 0) as total_results from lightstone_usage_log`),
+      pool.query(`select service, count(*) as calls, count(*) filter (where status='error') as errors, round(avg(latency_ms)) as avg_latency_ms from lightstone_usage_log group by service order by calls desc`),
+      pool.query(`select l.*, t.name as tenant_name from lightstone_usage_log l left join tenants t on t.id = l.tenant_id order by l.created_at desc limit 50`)
+    ]);
+    res.json({ totals: totals.rows[0], byService: byService.rows, recentLog: recent.rows });
+  } catch (err) { next(err); }
 });
 
 // ─── YOCO BILLING (South African payment gateway — ZAR only) ─────────────────
