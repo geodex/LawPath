@@ -2361,6 +2361,336 @@ app.post("/api/research-db/sources/:id/index", authMiddleware, async (req, res, 
   } catch (error) { next(error); }
 });
 
+// ─── BILLING & INVOICES ──────────────────────────────────────────────────────
+
+function invoiceFromRow(row, lineItems = [], payments = []) {
+  return {
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    clientName: row.client_name,
+    matterRef: row.matter_ref || "",
+    subtotalCents: Number(row.subtotal_cents || 0),
+    vatCents: Number(row.vat_cents || 0),
+    amountCents: Number(row.amount_cents || 0),
+    paidCents: Number(row.paid_cents || 0),
+    currency: row.currency || "ZAR",
+    status: row.status,
+    issuedAt: row.issued_at ? String(row.issued_at).slice(0, 10) : "",
+    dueAt: row.due_at ? String(row.due_at).slice(0, 10) : "",
+    notes: row.notes || "",
+    terms: row.terms || "",
+    paymentRef: row.payment_ref || "",
+    sentAt: row.sent_at ? new Date(row.sent_at).toISOString() : "",
+    pdfGcsUri: row.pdf_gcs_uri || "",
+    accountingSyncedAt: row.accounting_synced_at ? new Date(row.accounting_synced_at).toISOString() : "",
+    accountingProvider: row.accounting_provider || "",
+    createdAt: new Date(row.created_at).toISOString(),
+    lineItems: lineItems.map(li => ({
+      id: li.id, invoiceId: li.invoice_id, timeEntryId: li.time_entry_id || null,
+      description: li.description, activityType: li.activity_type || "",
+      feeEarnerName: li.fee_earner_name || "", entryDate: li.entry_date ? String(li.entry_date).slice(0, 10) : "",
+      durationMinutes: Number(li.duration_minutes || 0), rateCents: Number(li.rate_cents || 0),
+      amountCents: Number(li.amount_cents || 0), vatCents: Number(li.vat_cents || 0),
+      isDisbursement: Boolean(li.is_disbursement), sortOrder: Number(li.sort_order || 0)
+    })),
+    payments: payments.map(p => ({
+      id: p.id, invoiceId: p.invoice_id, amountCents: Number(p.amount_cents),
+      paymentDate: String(p.payment_date).slice(0, 10), paymentMethod: p.payment_method,
+      reference: p.reference || "", notes: p.notes || "", createdAt: new Date(p.created_at).toISOString()
+    }))
+  };
+}
+
+async function generateInvoiceNumber(tenantId) {
+  const year = new Date().getFullYear();
+  const result = await pool.query(
+    `select count(*) as cnt from invoices where tenant_id = $1 and invoice_number like $2`,
+    [tenantId, `INV-${year}-%`]
+  );
+  const seq = Number(result.rows[0].cnt) + 1;
+  return `INV-${year}-${String(seq).padStart(4, "0")}`;
+}
+
+// GET /api/invoices — list invoices for tenant
+app.get("/api/invoices", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { status, limit = 50, offset = 0 } = req.query;
+  try {
+    const where = status ? "and i.status = $2" : "";
+    const params = status ? [req.user.tenantId, status] : [req.user.tenantId];
+    const invoices = await pool.query(
+      `select i.* from invoices i
+       where i.tenant_id = $1 ${where}
+       order by i.created_at desc
+       limit ${Number(limit)} offset ${Number(offset)}`,
+      params
+    );
+    const total = await pool.query(
+      `select count(*) from invoices where tenant_id = $1 ${where}`, params
+    );
+    // Load line items and payments for each invoice
+    const ids = invoices.rows.map(r => r.id);
+    const [items, pmts] = ids.length ? await Promise.all([
+      pool.query("select * from invoice_line_items where invoice_id = any($1) order by sort_order", [ids]),
+      pool.query("select * from invoice_payments where invoice_id = any($1) order by payment_date", [ids])
+    ]) : [{ rows: [] }, { rows: [] }];
+
+    res.json({
+      invoices: invoices.rows.map(r => invoiceFromRow(
+        r,
+        items.rows.filter(li => li.invoice_id === r.id),
+        pmts.rows.filter(p => p.invoice_id === r.id)
+      )),
+      total: Number(total.rows[0].count)
+    });
+  } catch (error) { next(error); }
+});
+
+// POST /api/invoices — create invoice from WIP time entry IDs
+app.post("/api/invoices", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { entryIds = [], clientName, matterRef, dueAt, notes, terms, paymentRef } = req.body;
+  if (!clientName) return res.status(400).json({ error: "Client name is required." });
+  if (!entryIds.length) return res.status(400).json({ error: "At least one time entry is required." });
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    // Load the time entries and verify they belong to this tenant and are WIP
+    const entries = await client.query(
+      `select * from time_entries where id = any($1) and tenant_id = $2 and status = 'WIP'`,
+      [entryIds, req.user.tenantId]
+    );
+    if (!entries.rowCount) return res.status(400).json({ error: "No valid WIP entries found." });
+
+    const subtotalCents = entries.rows.reduce((s, e) => s + Number(e.amount_cents), 0);
+    const vatCents = entries.rows.reduce((s, e) => s + Number(e.vat_amount_cents), 0);
+    const totalCents = subtotalCents + vatCents;
+    const invoiceNumber = await generateInvoiceNumber(req.user.tenantId);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const invResult = await client.query(
+      `insert into invoices
+        (tenant_id, invoice_number, client_name, matter_ref, subtotal_cents, vat_cents,
+         amount_cents, paid_cents, currency, status, issued_at, due_at, notes, terms, payment_ref, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,0,'ZAR','Draft',$8,$9,$10,$11,$12,$13)
+       returning *`,
+      [
+        req.user.tenantId, invoiceNumber, clientName, matterRef || null,
+        subtotalCents, vatCents, totalCents, today,
+        dueAt || null, notes || null,
+        terms || "Payment is due within 30 days of invoice date. Interest at 2% per month accrues on overdue amounts.",
+        paymentRef || null, req.user.sub
+      ]
+    );
+    const invoiceId = invResult.rows[0].id;
+
+    // Create line items from time entries
+    const lineItemRows = [];
+    for (let i = 0; i < entries.rows.length; i++) {
+      const e = entries.rows[i];
+      const liResult = await client.query(
+        `insert into invoice_line_items
+          (tenant_id, invoice_id, time_entry_id, description, activity_type, fee_earner_name,
+           entry_date, duration_minutes, rate_cents, amount_cents, vat_cents, is_disbursement, sort_order)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         returning *`,
+        [
+          req.user.tenantId, invoiceId, e.id, e.description, e.activity_type,
+          e.fee_earner_name, e.entry_date, e.duration_minutes, e.rate_cents,
+          e.amount_cents, e.vat_amount_cents, e.is_disbursement, i
+        ]
+      );
+      lineItemRows.push(liResult.rows[0]);
+    }
+
+    // Mark time entries as Billed and link to invoice
+    await client.query(
+      `update time_entries set status = 'Billed', invoice_id = $1, updated_at = now()
+       where id = any($2) and tenant_id = $3`,
+      [invoiceId, entryIds, req.user.tenantId]
+    );
+
+    await client.query("commit");
+    res.status(201).json({ invoice: invoiceFromRow(invResult.rows[0], lineItemRows, []) });
+  } catch (error) { await client.query("rollback"); next(error); }
+  finally { client.release(); }
+});
+
+// GET /api/invoices/:id — get invoice with full line items and payments
+app.get("/api/invoices/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [inv, items, pmts] = await Promise.all([
+      pool.query("select * from invoices where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]),
+      pool.query("select * from invoice_line_items where invoice_id = $1 order by sort_order", [req.params.id]),
+      pool.query("select * from invoice_payments where invoice_id = $1 order by payment_date", [req.params.id])
+    ]);
+    if (!inv.rowCount) return res.status(404).json({ error: "Invoice not found." });
+    res.json({ invoice: invoiceFromRow(inv.rows[0], items.rows, pmts.rows) });
+  } catch (error) { next(error); }
+});
+
+// PATCH /api/invoices/:id — update status, notes, terms, due_at
+app.patch("/api/invoices/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { status, notes, terms, dueAt, paymentRef } = req.body;
+  const allowedStatuses = ["Draft", "Sent", "Part-paid", "Paid", "Overdue", "Void"];
+  if (status && !allowedStatuses.includes(status)) return res.status(400).json({ error: "Invalid status." });
+  try {
+    const result = await pool.query(
+      `update invoices set
+         status = coalesce($3, status),
+         notes = coalesce($4, notes),
+         terms = coalesce($5, terms),
+         due_at = coalesce($6, due_at),
+         payment_ref = coalesce($7, payment_ref),
+         updated_at = now()
+       where id = $1 and tenant_id = $2 returning *`,
+      [req.params.id, req.user.tenantId, status || null, notes ?? null, terms ?? null, dueAt || null, paymentRef ?? null]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Invoice not found." });
+    const [items, pmts] = await Promise.all([
+      pool.query("select * from invoice_line_items where invoice_id = $1 order by sort_order", [req.params.id]),
+      pool.query("select * from invoice_payments where invoice_id = $1 order by payment_date", [req.params.id])
+    ]);
+    res.json({ invoice: invoiceFromRow(result.rows[0], items.rows, pmts.rows) });
+  } catch (error) { next(error); }
+});
+
+// POST /api/invoices/:id/payments — record a payment
+app.post("/api/invoices/:id/payments", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { amountCents, paymentDate, paymentMethod = "EFT", reference, notes } = req.body;
+  if (!amountCents || amountCents <= 0) return res.status(400).json({ error: "Payment amount must be greater than zero." });
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(
+      `insert into invoice_payments (tenant_id, invoice_id, amount_cents, payment_date, payment_method, reference, notes, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [req.user.tenantId, req.params.id, amountCents, paymentDate || new Date().toISOString().slice(0, 10), paymentMethod, reference || null, notes || null, req.user.sub]
+    );
+    // Recalculate paid_cents from all payments
+    const total = await client.query(
+      "select coalesce(sum(amount_cents),0) as paid from invoice_payments where invoice_id = $1", [req.params.id]
+    );
+    const paidCents = Number(total.rows[0].paid);
+    const inv = await client.query("select amount_cents from invoices where id = $1", [req.params.id]);
+    const totalCents = Number(inv.rows[0]?.amount_cents || 0);
+    const newStatus = paidCents >= totalCents ? "Paid" : paidCents > 0 ? "Part-paid" : "Sent";
+    await client.query(
+      "update invoices set paid_cents = $2, status = $3, updated_at = now() where id = $1",
+      [req.params.id, paidCents, newStatus]
+    );
+    await client.query("commit");
+
+    const [updatedInv, items, pmts] = await Promise.all([
+      pool.query("select * from invoices where id = $1", [req.params.id]),
+      pool.query("select * from invoice_line_items where invoice_id = $1 order by sort_order", [req.params.id]),
+      pool.query("select * from invoice_payments where invoice_id = $1 order by payment_date", [req.params.id])
+    ]);
+    res.json({ invoice: invoiceFromRow(updatedInv.rows[0], items.rows, pmts.rows) });
+  } catch (error) { await client.query("rollback"); next(error); }
+  finally { client.release(); }
+});
+
+// GET /api/invoices/:id/pdf — generate and return a signed PDF URL
+app.get("/api/invoices/:id/pdf", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [inv, items, pmts, profile] = await Promise.all([
+      pool.query("select * from invoices where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]),
+      pool.query("select * from invoice_line_items where invoice_id = $1 order by sort_order", [req.params.id]),
+      pool.query("select * from invoice_payments where invoice_id = $1 order by payment_date", [req.params.id]),
+      pool.query("select * from tenant_profiles where tenant_id = $1 limit 1", [req.user.tenantId])
+    ]);
+    if (!inv.rowCount) return res.status(404).json({ error: "Invoice not found." });
+
+    const tp = tenantProfileFromRow(profile.rows[0]) || {};
+    const pdfBuffer = await generateInvoicePdf({
+      invoice: inv.rows[0], lineItems: items.rows, payments: pmts.rows, tenantProfile: tp
+    });
+
+    // Upload to GCS and cache the URI
+    let pdfUrl = "";
+    try {
+      const { uploadBuffer, configuredBucketName } = require("./gcs");
+      if (configuredBucketName()) {
+        const objectName = `invoices/${req.user.tenantId}/${inv.rows[0].invoice_number}.pdf`;
+        const uploaded = await uploadBuffer({ buffer: pdfBuffer, contentType: "application/pdf", objectName, metadata: { tenantId: req.user.tenantId, invoiceId: req.params.id } });
+        await pool.query("update invoices set pdf_gcs_uri = $1 where id = $2", [uploaded.gcsUri, req.params.id]);
+        pdfUrl = uploaded.publicUrl;
+      }
+    } catch { /* GCS optional — fall back to inline */ }
+
+    if (pdfUrl) {
+      res.json({ url: pdfUrl });
+    } else {
+      // Stream inline if no GCS
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${inv.rows[0].invoice_number}.pdf"`);
+      res.send(pdfBuffer);
+    }
+  } catch (error) { next(error); }
+});
+
+// POST /api/invoices/:id/send — email invoice to client
+app.post("/api/invoices/:id/send", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { toEmail, toName, message } = req.body;
+  if (!toEmail) return res.status(400).json({ error: "Recipient email is required." });
+  try {
+    const [inv, items, pmts, profile] = await Promise.all([
+      pool.query("select * from invoices where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]),
+      pool.query("select * from invoice_line_items where invoice_id = $1 order by sort_order", [req.params.id]),
+      pool.query("select * from invoice_payments where invoice_id = $1 order by payment_date", [req.params.id]),
+      pool.query("select * from tenant_profiles where tenant_id = $1 limit 1", [req.user.tenantId])
+    ]);
+    if (!inv.rowCount) return res.status(404).json({ error: "Invoice not found." });
+
+    const tp = tenantProfileFromRow(profile.rows[0]) || {};
+    const pdfBuffer = await generateInvoicePdf({ invoice: inv.rows[0], lineItems: items.rows, payments: pmts.rows, tenantProfile: tp });
+    const money = (cents) => `R ${(Number(cents || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
+    const { sendTransactionalEmail } = require("./mailer");
+    await sendTransactionalEmail({
+      to: toEmail,
+      subject: `Invoice ${inv.rows[0].invoice_number} from ${tp.tradingName || "LawPath SA"}`,
+      html: `<p>Dear ${toName || inv.rows[0].client_name},</p>
+             ${message ? `<p>${message}</p>` : ""}
+             <p>Please find attached invoice <strong>${inv.rows[0].invoice_number}</strong> for <strong>${money(inv.rows[0].amount_cents)}</strong>.</p>
+             <p>Payment is due by ${inv.rows[0].due_at ? new Date(inv.rows[0].due_at).toLocaleDateString("en-ZA") : "30 days"}.</p>
+             <p>Regards,<br/>${tp.tradingName || "LawPath SA"}</p>`,
+      attachments: [{ filename: `${inv.rows[0].invoice_number}.pdf`, content: pdfBuffer, contentType: "application/pdf" }]
+    });
+    await pool.query(
+      "update invoices set sent_at = now(), status = case when status = 'Draft' then 'Sent' else status end, updated_at = now() where id = $1",
+      [req.params.id]
+    );
+    const updated = await pool.query("select * from invoices where id = $1", [req.params.id]);
+    res.json({ invoice: invoiceFromRow(updated.rows[0], items.rows, pmts.rows) });
+  } catch (error) { next(error); }
+});
+
+// POST /api/invoices/:id/accounting — mark as synced to accounting
+app.post("/api/invoices/:id/accounting", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { provider = "manual" } = req.body;
+  try {
+    const result = await pool.query(
+      "update invoices set accounting_synced_at = now(), accounting_provider = $2, updated_at = now() where id = $1 and tenant_id = $3 returning *",
+      [req.params.id, provider, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Invoice not found." });
+    const [items, pmts] = await Promise.all([
+      pool.query("select * from invoice_line_items where invoice_id = $1 order by sort_order", [req.params.id]),
+      pool.query("select * from invoice_payments where invoice_id = $1 order by payment_date", [req.params.id])
+    ]);
+    res.json({ invoice: invoiceFromRow(result.rows[0], items.rows, pmts.rows) });
+  } catch (error) { next(error); }
+});
+
 // ─── VERIFYNOW SA ────────────────────────────────────────────────────────────
 
 // Super-admin: usage summary (credit monitoring dashboard)
@@ -2637,7 +2967,7 @@ app.post("/api/analytics/snapshot", authMiddleware, async (req, res, next) => {
 
 // ─── PDF GENERATION ───────────────────────────────────────────────────────────
 
-const { generateContractPdf, generateTrustStatementPdf } = require("./pdf");
+const { generateContractPdf, generateTrustStatementPdf, generateInvoicePdf } = require("./pdf");
 const { notifyConveyancingStageAdvance, notifyEsignatureRequest, notifyStaffInvite } = require("./notifications");
 
 app.get("/api/pdf/contract/:contractId", authMiddleware, async (req, res, next) => {

@@ -262,4 +262,182 @@ async function generateTrustStatementPdf({ tenantProfile, transactions, periodLa
   });
 }
 
-module.exports = { generateContractPdf, generateTrustStatementPdf };
+/**
+ * Generate a South African tax invoice PDF.
+ * @param {object} options
+ * @param {object}   options.invoice       - Invoice record from DB
+ * @param {object[]} options.lineItems     - invoice_line_items rows
+ * @param {object[]} options.payments      - invoice_payments rows
+ * @param {object}   options.tenantProfile - Firm details for letterhead
+ */
+async function generateInvoicePdf({ invoice, lineItems = [], payments = [], tenantProfile = {} }) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const doc = new PDFDocument({ size: "A4", margin: 60 });
+    doc.on("data", c => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const money = (cents) =>
+      `R ${(Number(cents || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const firmName = tenantProfile.tradingName || "LawPath SA";
+    const pageWidth = doc.page.width - 120;
+    const rightCol = doc.page.width - 60;
+
+    // ── LETTERHEAD ────────────────────────────────────────────────────────────
+    doc.fontSize(17).fillColor(BRAND_GREEN).font("Helvetica-Bold").text(firmName, 60, 58);
+
+    const addrParts = [
+      tenantProfile.addressLine1, tenantProfile.city,
+      tenantProfile.phone, tenantProfile.website
+    ].filter(Boolean);
+    doc.fontSize(8).fillColor(BRAND_MUTED).font("Helvetica").text(addrParts.join("  |  "), 60, 79, { width: 320 });
+
+    // TAX INVOICE label (right-aligned)
+    doc.fontSize(18).fillColor(BRAND_DARK).font("Helvetica-Bold").text("TAX INVOICE", 60, 58, { width: pageWidth, align: "right" });
+    doc.fontSize(8).fillColor(BRAND_MUTED).font("Helvetica")
+      .text(tenantProfile.vatNumber ? `VAT No: ${tenantProfile.vatNumber}` : "", 60, 79, { width: pageWidth, align: "right" });
+    if (tenantProfile.lpcRegistrationNumber) {
+      doc.text(`LPC: ${tenantProfile.lpcRegistrationNumber}`, 60, 89, { width: pageWidth, align: "right" });
+    }
+
+    doc.moveTo(60, 100).lineTo(rightCol, 100).strokeColor(BRAND_GREEN).lineWidth(1.5).stroke();
+
+    // ── INVOICE META (two-column) ─────────────────────────────────────────────
+    const metaY = 112;
+    // Left: bill-to
+    doc.fontSize(8).fillColor(BRAND_MUTED).font("Helvetica-Bold").text("BILLED TO", 60, metaY);
+    doc.fontSize(9).fillColor(BRAND_DARK).font("Helvetica-Bold").text(invoice.client_name || invoice.clientName, 60, metaY + 12);
+    if (invoice.matter_ref || invoice.matterRef) {
+      doc.fontSize(8).fillColor(BRAND_MUTED).font("Helvetica")
+        .text(`Matter: ${invoice.matter_ref || invoice.matterRef}`, 60, metaY + 24);
+    }
+
+    // Right: invoice details table
+    const detailX = 370;
+    const detailRows = [
+      ["Invoice No:", invoice.invoice_number || invoice.invoiceNumber],
+      ["Invoice Date:", invoice.issued_at ? new Date(invoice.issued_at).toLocaleDateString("en-ZA") : new Date().toLocaleDateString("en-ZA")],
+      ["Due Date:", invoice.due_at ? new Date(invoice.due_at).toLocaleDateString("en-ZA") : "30 days"],
+    ];
+    if (invoice.payment_ref || invoice.paymentRef) {
+      detailRows.push(["Payment Ref:", invoice.payment_ref || invoice.paymentRef]);
+    }
+    let detailRowY = metaY;
+    for (const [label, value] of detailRows) {
+      doc.fontSize(8).fillColor(BRAND_MUTED).font("Helvetica").text(label, detailX, detailRowY, { width: 80 });
+      doc.fontSize(8).fillColor(BRAND_DARK).font("Helvetica-Bold").text(String(value || ""), detailX + 82, detailRowY, { width: 108 });
+      detailRowY += 12;
+    }
+
+    doc.moveTo(60, metaY + 56).lineTo(rightCol, metaY + 56).strokeColor("#dce4de").lineWidth(0.5).stroke();
+
+    // ── LINE ITEMS TABLE ──────────────────────────────────────────────────────
+    const tableY = metaY + 64;
+    const cols = { date: 60, desc: 110, earner: 250, dur: 310, rate: 360, excl: 415, vat: 467, total: 517 };
+
+    // Table header
+    doc.rect(60, tableY, pageWidth, 16).fillColor("#eef2ee").fill();
+    doc.fontSize(7.5).fillColor(BRAND_DARK).font("Helvetica-Bold");
+    doc.text("Date",       cols.date,  tableY + 4, { width: 48 });
+    doc.text("Description",cols.desc,  tableY + 4, { width: 138 });
+    doc.text("Earner",     cols.earner,tableY + 4, { width: 58 });
+    doc.text("Hrs",        cols.dur,   tableY + 4, { width: 48, align: "right" });
+    doc.text("Rate",       cols.rate,  tableY + 4, { width: 53, align: "right" });
+    doc.text("Excl. VAT",  cols.excl,  tableY + 4, { width: 50, align: "right" });
+    doc.text("VAT",        cols.vat,   tableY + 4, { width: 48, align: "right" });
+    doc.text("Total",      cols.total, tableY + 4, { width: 43, align: "right" });
+
+    let rowY = tableY + 18;
+    let rowIndex = 0;
+    for (const item of lineItems) {
+      if (rowY > doc.page.height - 120) { doc.addPage(); rowY = 60; }
+      if (rowIndex % 2 === 0) {
+        doc.rect(60, rowY - 1, pageWidth, 15).fillColor("#f8faf7").fill();
+      }
+      const dur = item.duration_minutes > 0
+        ? (item.duration_minutes / 60).toFixed(2)
+        : (item.is_disbursement ? "—" : "");
+      const rate = item.rate_cents > 0 ? money(item.rate_cents) : "—";
+      doc.fontSize(7.5).fillColor(BRAND_DARK).font("Helvetica");
+      doc.text(item.entry_date ? new Date(item.entry_date).toLocaleDateString("en-ZA") : "", cols.date, rowY + 2, { width: 48 });
+      doc.text((item.description || "").slice(0, 55), cols.desc, rowY + 2, { width: 138 });
+      doc.text((item.fee_earner_name || "").slice(0, 18), cols.earner, rowY + 2, { width: 58 });
+      doc.text(dur,        cols.dur,   rowY + 2, { width: 48,  align: "right" });
+      doc.text(rate,       cols.rate,  rowY + 2, { width: 53,  align: "right" });
+      doc.text(money(item.amount_cents),      cols.excl,  rowY + 2, { width: 50,  align: "right" });
+      doc.text(money(item.vat_cents),         cols.vat,   rowY + 2, { width: 48,  align: "right" });
+      doc.text(money(Number(item.amount_cents) + Number(item.vat_cents)), cols.total, rowY + 2, { width: 43, align: "right" });
+      rowY += 15;
+      rowIndex++;
+      doc.moveTo(60, rowY).lineTo(rightCol, rowY).strokeColor("#f0f4f1").lineWidth(0.3).stroke();
+    }
+
+    // ── TOTALS ────────────────────────────────────────────────────────────────
+    rowY += 6;
+    const totalsX = 380;
+    const totalsW = rightCol - totalsX - 4;
+    const totals = [
+      ["Subtotal (excl. VAT):", money(invoice.subtotal_cents || invoice.subtotalCents || 0)],
+      ["VAT (15%):",            money(invoice.vat_cents || invoice.vatCents || 0)],
+    ];
+    const paidCents = Number(invoice.paid_cents || invoice.paidCents || 0);
+    const totalCents = Number(invoice.amount_cents || invoice.amountCents || 0);
+    if (paidCents > 0) totals.push(["Less payments received:", `(${money(paidCents)})`]);
+
+    for (const [label, value] of totals) {
+      if (rowY > doc.page.height - 80) { doc.addPage(); rowY = 60; }
+      doc.fontSize(8.5).fillColor(BRAND_MUTED).font("Helvetica").text(label, totalsX, rowY, { width: 140 });
+      doc.fillColor(BRAND_DARK).font("Helvetica-Bold").text(value, totalsX, rowY, { width: totalsW, align: "right" });
+      rowY += 14;
+    }
+
+    // Grand total box
+    doc.rect(totalsX - 4, rowY, totalsW + 8, 22).fillColor(BRAND_GREEN).fill();
+    const balance = paidCents > 0 ? totalCents - paidCents : totalCents;
+    const balanceLabel = paidCents > 0 ? "BALANCE DUE:" : "TOTAL DUE:";
+    doc.fontSize(10).fillColor("#ffffff").font("Helvetica-Bold")
+      .text(balanceLabel, totalsX, rowY + 6, { width: 140 });
+    doc.text(money(balance), totalsX, rowY + 6, { width: totalsW, align: "right" });
+    rowY += 34;
+
+    // ── PAYMENTS RECEIVED ─────────────────────────────────────────────────────
+    if (payments.length > 0) {
+      if (rowY > doc.page.height - 80) { doc.addPage(); rowY = 60; }
+      doc.fontSize(8).fillColor(BRAND_MUTED).font("Helvetica-Bold").text("PAYMENTS RECEIVED", 60, rowY);
+      rowY += 12;
+      for (const pmt of payments) {
+        doc.fontSize(8).fillColor(BRAND_DARK).font("Helvetica")
+          .text(`${new Date(pmt.payment_date).toLocaleDateString("en-ZA")}  |  ${pmt.payment_method}${pmt.reference ? `  |  Ref: ${pmt.reference}` : ""}  |  ${money(pmt.amount_cents)}`, 60, rowY, { width: pageWidth });
+        rowY += 12;
+      }
+      rowY += 4;
+    }
+
+    // ── NOTES & TERMS ─────────────────────────────────────────────────────────
+    if (rowY > doc.page.height - 100) { doc.addPage(); rowY = 60; }
+    doc.moveTo(60, rowY).lineTo(rightCol, rowY).strokeColor("#dce4de").lineWidth(0.5).stroke();
+    rowY += 8;
+    if (invoice.notes) {
+      doc.fontSize(8).fillColor(BRAND_MUTED).font("Helvetica-Bold").text("NOTES", 60, rowY);
+      rowY += 10;
+      doc.fontSize(7.5).fillColor(BRAND_DARK).font("Helvetica").text(invoice.notes, 60, rowY, { width: pageWidth });
+      rowY += doc.heightOfString(invoice.notes, { width: pageWidth, fontSize: 7.5 }) + 8;
+    }
+    const terms = invoice.terms || "Payment is due within 30 days of invoice date.";
+    doc.fontSize(7.5).fillColor(BRAND_MUTED).font("Helvetica").text(terms, 60, rowY, { width: pageWidth });
+
+    // ── FOOTER ────────────────────────────────────────────────────────────────
+    for (let i = 0; i < doc._pageBuffer.length; i++) {
+      doc.switchToPage(i);
+      const footerY = doc.page.height - 38;
+      doc.moveTo(60, footerY - 6).lineTo(rightCol, footerY - 6).strokeColor("#dce4de").lineWidth(0.5).stroke();
+      doc.fontSize(7).fillColor(BRAND_MUTED).font("Helvetica")
+        .text(`${firmName}  |  ${invoice.invoice_number || invoice.invoiceNumber}  |  Generated by LawPath SA  |  Page ${i + 1}`, 60, footerY, { width: pageWidth, align: "center" });
+    }
+
+    doc.end();
+  });
+}
+
+module.exports = { generateContractPdf, generateTrustStatementPdf, generateInvoicePdf };

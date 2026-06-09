@@ -1,4 +1,4 @@
-import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AgentReferral, AiAgentKey, AnalyticsSnapshot, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, EstateAgent, FicaClient, LegalCorpusDocument, LegalCorpusSource, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchQuery, SignatureRequest, SignatureSignatory, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AgentReferral, AiAgentKey, AnalyticsSnapshot, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, EstateAgent, FicaClient, Invoice, InvoicePayment, LegalCorpusDocument, LegalCorpusSource, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchQuery, SignatureRequest, SignatureSignatory, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -364,6 +364,58 @@ export async function saveAccountingConnection(input: { provider: AccountingProv
 
 export async function triggerAccountingExport(provider: AccountingProvider, exportType: AccountingExportRecord["exportType"]) {
   return request<{ exportRecord: AccountingExportRecord }>("/api/accounting/export", { method: "POST", body: JSON.stringify({ provider, exportType }) });
+}
+
+// ─── INVOICES & BILLING ───────────────────────────────────────────────────────
+
+export async function getInvoices(params?: { status?: string; limit?: number; offset?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.limit)  qs.set("limit",  String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  return request<{ invoices: Invoice[]; total: number }>(`/api/invoices?${qs}`);
+}
+
+export async function createInvoice(data: {
+  entryIds: string[];
+  clientName: string;
+  matterRef?: string;
+  dueAt?: string;
+  notes?: string;
+  terms?: string;
+  paymentRef?: string;
+}) {
+  return request<{ invoice: Invoice }>("/api/invoices", { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function getInvoice(id: string) {
+  return request<{ invoice: Invoice }>(`/api/invoices/${id}`);
+}
+
+export async function updateInvoice(id: string, data: { status?: string; notes?: string; terms?: string; dueAt?: string; paymentRef?: string }) {
+  return request<{ invoice: Invoice }>(`/api/invoices/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+}
+
+export async function recordInvoicePayment(invoiceId: string, data: {
+  amountCents: number;
+  paymentDate?: string;
+  paymentMethod?: InvoicePayment["paymentMethod"];
+  reference?: string;
+  notes?: string;
+}) {
+  return request<{ invoice: Invoice }>(`/api/invoices/${invoiceId}/payments`, { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function getInvoicePdfUrl(id: string) {
+  return request<{ url: string } | null>(`/api/invoices/${id}/pdf`);
+}
+
+export async function sendInvoiceByEmail(id: string, data: { toEmail: string; toName?: string; message?: string }) {
+  return request<{ invoice: Invoice }>(`/api/invoices/${id}/send`, { method: "POST", body: JSON.stringify(data) });
+}
+
+export async function syncInvoiceToAccounting(id: string, provider: string) {
+  return request<{ invoice: Invoice }>(`/api/invoices/${id}/accounting`, { method: "POST", body: JSON.stringify({ provider }) });
 }
 
 // ─── LEGAL RESEARCH DATABASE ──────────────────────────────────────────────────

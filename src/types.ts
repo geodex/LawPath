@@ -49,11 +49,54 @@ export type WorkTask = {
 
 export type Invoice = {
   id: string;
-  client: string;
-  matter: string;
-  amount: number;
-  paid: number;
-  status: "Draft" | "Part-paid" | "Paid" | "Overdue";
+  invoiceNumber: string;
+  clientName: string;
+  matterRef: string;
+  subtotalCents: number;
+  vatCents: number;
+  amountCents: number;
+  paidCents: number;
+  currency: string;
+  status: "Draft" | "Sent" | "Part-paid" | "Paid" | "Overdue" | "Void";
+  issuedAt: string;
+  dueAt: string;
+  notes: string;
+  terms: string;
+  paymentRef: string;
+  sentAt: string;
+  pdfGcsUri: string;
+  accountingSyncedAt: string;
+  accountingProvider: string;
+  createdAt: string;
+  lineItems: InvoiceLineItem[];
+  payments: InvoicePayment[];
+};
+
+export type InvoiceLineItem = {
+  id: string;
+  invoiceId: string;
+  timeEntryId: string | null;
+  description: string;
+  activityType: string;
+  feeEarnerName: string;
+  entryDate: string;
+  durationMinutes: number;
+  rateCents: number;
+  amountCents: number;
+  vatCents: number;
+  isDisbursement: boolean;
+  sortOrder: number;
+};
+
+export type InvoicePayment = {
+  id: string;
+  invoiceId: string;
+  amountCents: number;
+  paymentDate: string;
+  paymentMethod: "EFT" | "Cash" | "Card" | "Cheque" | "Trust transfer" | "Other";
+  reference: string;
+  notes: string;
+  createdAt: string;
 };
 
 export type Appointment = {

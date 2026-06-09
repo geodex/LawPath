@@ -54,9 +54,10 @@ interface Props {
   setWipCents: React.Dispatch<React.SetStateAction<number>>;
   log: (msg: string) => void;
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
+  onGenerateInvoice: (ids: string[]) => void;
 }
 
-export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log, showToast }: Props) {
+export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log, showToast, onGenerateInvoice }: Props) {
   // Timer state
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
@@ -426,6 +427,13 @@ export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log,
             setSelectedIds(new Set());
             showToast("success", "Bulk billed", `${selectedIds.size} entries marked as billed.`);
           }}>Bill all selected</button>
+          <button className="small" style={{ background: "rgba(255,255,255,0.15)", color: "#f8fbf6", border: "none" }}
+            onClick={() => {
+              onGenerateInvoice([...selectedIds]);
+              setSelectedIds(new Set());
+            }}>
+            Invoice selected
+          </button>
           <button className="small" style={{ background: "rgba(255,255,255,0.15)", color: "#f8fbf6", border: "none" }} onClick={() => setSelectedIds(new Set())}>Clear</button>
           <button className="small" style={{ background: "rgba(255,255,255,0.15)", color: "#f8fbf6", border: "none" }} onClick={() => {
             const fees = [...selectedIds].map(id => entries.find(e => e.id === id)).filter(Boolean);
@@ -556,9 +564,17 @@ export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log,
           <button
             className="ghost small"
             style={{ marginTop: "0.75rem" }}
-            onClick={() => log("Draft invoice generated from WIP")}
+            onClick={() => {
+              const ids = wipEntries.map(e => e.id);
+              if (ids.length === 0) {
+                showToast("info", "No WIP entries", "Add time entries before generating an invoice.");
+                return;
+              }
+              onGenerateInvoice(ids);
+              log("Generating invoice from WIP entries");
+            }}
           >
-            Generate draft invoice
+            Generate invoice
           </button>
         </div>
       )}

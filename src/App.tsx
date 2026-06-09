@@ -59,6 +59,7 @@ import { AgentNetwork } from "./AgentNetwork";
 import { PracticeAnalytics } from "./PracticeAnalytics";
 import { StaffManagement } from "./StaffManagement";
 import { StripeBilling } from "./StripeBilling";
+import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
 
 const nav: NavItem[] = [
@@ -206,6 +207,7 @@ export function App() {
   const [smtpSettings, setSmtpSettings] = useState<SmtpSettings>(defaultSmtpSettings);
   const [tenantEmailSettings, setTenantEmailSettings] = useState<TenantEmailSettings>(defaultTenantEmailSettings);
   const [tenantProfile, setTenantProfile] = useState<TenantProfile>(defaultTenantProfile);
+  const [pendingBillIds, setPendingBillIds] = useState<string[]>([]);
   const [apiSettings, setApiSettings] = useState<ApiProviderSettings>({
     exchangeRatesApiKey: "",
     exchangeRatesBaseCurrency: "ZAR",
@@ -576,7 +578,17 @@ export function App() {
         {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} tenantProfile={tenantProfile} />}
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
         {activeView === "secretary" && <Secretary tasks={tasks} setTasks={setTasks} log={log} />}
-        {activeView === "billing" && <Billing invoices={invoices} setInvoices={setInvoices} log={log} />}
+        {activeView === "billing" && (
+          <Billing
+            entries={timeEntries}
+            setEntries={setTimeEntries}
+            pendingWipIds={pendingBillIds}
+            onClearPendingWip={() => setPendingBillIds([])}
+            tenantProfile={tenantProfile}
+            log={log}
+            showToast={showToast}
+          />
+        )}
         {activeView === "conveyancing" && (
           <ConveyancingPipeline
             matters={conveyancingMatters}
@@ -645,6 +657,10 @@ export function App() {
             setWipCents={setTimeWipCents}
             log={log}
             showToast={showToast}
+            onGenerateInvoice={(ids) => {
+              setPendingBillIds(ids);
+              setActiveView("billing" as ViewKey);
+            }}
           />
         )}
         {activeView === "fica" && (
@@ -2552,7 +2568,7 @@ function Secretary({ tasks, setTasks, log }: { tasks: WorkTask[]; setTasks: Reac
   );
 }
 
-function Billing({ invoices, setInvoices, log }: { invoices: Invoice[]; setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>; log: (message: string) => void }) {
+function LegacyBilling({ invoices, setInvoices, log }: { invoices: Invoice[]; setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>; log: (message: string) => void }) {
   const total = invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
   const paid = invoices.reduce((sum, invoice) => sum + invoice.paid, 0);
 
