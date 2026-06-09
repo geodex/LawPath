@@ -162,9 +162,26 @@ restart_app() {
 }
 
 health_check() {
-  log "Checking API health"
-  curl --fail --silent --show-error "http://127.0.0.1:${PORT:-3069}/api/health"
+  log "Waiting for API to become ready"
+
+  local url="http://127.0.0.1:${PORT:-3069}/api/health"
+  local max_attempts=24   # 24 × 5 s = 120 s maximum wait
+  local attempt=1
+
+  until curl --fail --silent --show-error "$url" > /dev/null 2>&1; do
+    if (( attempt >= max_attempts )); then
+      echo
+      fail "API did not respond after $(( max_attempts * 5 )) seconds. Check: pm2 logs ${PM2_APP}"
+    fi
+    printf "  [%d/%d] Not ready yet — retrying in 5 s…\n" "$attempt" "$max_attempts"
+    sleep 5
+    (( attempt++ ))
+  done
+
   echo
+  curl --fail --silent --show-error "$url"
+  echo
+  log "API is up"
 }
 
 main() {
