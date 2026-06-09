@@ -40,7 +40,7 @@ function httpsGet(urlStr, headers, timeoutMs = 12000) {
       res.on("end", () => {
         let json;
         try { json = JSON.parse(raw); } catch { json = {}; }
-        resolve({ statusCode: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json });
+        resolve({ statusCode: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json, raw });
       });
     });
 
@@ -113,11 +113,14 @@ async function apiGet({ base, path, params = {}, ctx = {} }) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
   }
 
+  const fullUrl = url.toString();
+  console.info(`[lightstone] GET ${fullUrl}`);
+
   const start = Date.now();
   let result;
 
   try {
-    result = await httpsGet(url.toString(), {
+    result = await httpsGet(fullUrl, {
       "Ocp-Apim-Subscription-Key": apiKey,
       "Accept": "application/json",
       "Cache-Control": "no-cache"
@@ -135,6 +138,7 @@ async function apiGet({ base, path, params = {}, ctx = {} }) {
 
   if (!result.ok) {
     const code = String(result.statusCode);
+    console.error(`[lightstone] ${code} from ${fullUrl} — body: ${result.raw?.slice(0, 500)}`);
     await logUsage({ ...ctx, service: path, latencyMs, status: "error", errorCode: code });
     const msg =
       result.statusCode === 401 ? "Lightstone subscription key is invalid or missing." :
