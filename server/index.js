@@ -3219,13 +3219,12 @@ app.get("/api/windeed/search", authMiddleware, async (req, res, next) => {
 
 // Address search — GET /api/lightstone/address?q={query}
 // Returns native Lightstone PropertyAddressSingleLineResponse[] sorted by relevance.
+// No tenantId guard — key is platform-wide; tenantId is only used for usage logging (nullable).
 app.get("/api/lightstone/address", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const q = String(req.query.q || "").trim();
   if (!q) return res.status(400).json({ error: "Query parameter 'q' is required." });
-
   try {
-    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub };
+    const ctx = { tenantId: req.user.tenantId || null, userId: req.user.sub };
     const data = await lightstone.searchAddress(q, ctx);
     res.json(data);
   } catch (err) {
@@ -3236,13 +3235,11 @@ app.get("/api/lightstone/address", authMiddleware, async (req, res, next) => {
 // Sectional scheme unit lookup — GET /api/lightstone/sectional/:addressId?maxrows=20
 // Use the `id` field from a search result where schemeGroupId > 0.
 app.get("/api/lightstone/sectional/:addressId", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const addressId = Number(req.params.addressId);
   if (!addressId || isNaN(addressId)) return res.status(400).json({ error: "Valid addressId is required." });
   const maxrows = Math.min(Number(req.query.maxrows || 20), 100);
-
   try {
-    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub };
+    const ctx = { tenantId: req.user.tenantId || null, userId: req.user.sub };
     const data = await lightstone.getSectionalUnits(addressId, maxrows, ctx);
     res.json(data);
   } catch (err) {
@@ -3254,12 +3251,11 @@ app.get("/api/lightstone/sectional/:addressId", authMiddleware, async (req, res,
 // Fetches owners + legal + municipal + land + address in parallel (one call from UI).
 // propertyId = search result .propertyId; addressId = search result .id (optional).
 app.get("/api/lightstone/property/:propertyId", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const propertyId = Number(req.params.propertyId);
   if (!propertyId || isNaN(propertyId)) return res.status(400).json({ error: "Valid propertyId is required." });
   const addressId = req.query.addressId ? Number(req.query.addressId) : null;
   try {
-    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub };
+    const ctx = { tenantId: req.user.tenantId || null, userId: req.user.sub };
     const bundle = await lightstone.getPropertyBundle(propertyId, addressId, ctx);
     res.json(bundle);
   } catch (err) { next(err); }
@@ -3267,24 +3263,19 @@ app.get("/api/lightstone/property/:propertyId", authMiddleware, async (req, res,
 
 // Individual property data endpoints (for granular fetching if needed)
 app.get("/api/lightstone/property/:propertyId/owners",    authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  try { res.json(await lightstone.getPropertyOwners(Number(req.params.propertyId), { tenantId: req.user.tenantId, userId: req.user.sub })); } catch (e) { next(e); }
+  try { res.json(await lightstone.getPropertyOwners(Number(req.params.propertyId), { tenantId: req.user.tenantId || null, userId: req.user.sub })); } catch (e) { next(e); }
 });
 app.get("/api/lightstone/property/:propertyId/legal",     authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  try { res.json(await lightstone.getPropertyLegal(Number(req.params.propertyId), { tenantId: req.user.tenantId, userId: req.user.sub })); } catch (e) { next(e); }
+  try { res.json(await lightstone.getPropertyLegal(Number(req.params.propertyId), { tenantId: req.user.tenantId || null, userId: req.user.sub })); } catch (e) { next(e); }
 });
 app.get("/api/lightstone/property/:propertyId/municipal", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  try { res.json(await lightstone.getPropertyMunicipal(Number(req.params.propertyId), { tenantId: req.user.tenantId, userId: req.user.sub })); } catch (e) { next(e); }
+  try { res.json(await lightstone.getPropertyMunicipal(Number(req.params.propertyId), { tenantId: req.user.tenantId || null, userId: req.user.sub })); } catch (e) { next(e); }
 });
 app.get("/api/lightstone/property/:propertyId/land",      authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  try { res.json(await lightstone.getPropertyLand(Number(req.params.propertyId), { tenantId: req.user.tenantId, userId: req.user.sub })); } catch (e) { next(e); }
+  try { res.json(await lightstone.getPropertyLand(Number(req.params.propertyId), { tenantId: req.user.tenantId || null, userId: req.user.sub })); } catch (e) { next(e); }
 });
 app.get("/api/lightstone/property/:propertyId/valuation", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  try { res.json(await lightstone.getPropertyValuation(Number(req.params.propertyId), { tenantId: req.user.tenantId, userId: req.user.sub })); } catch (e) { next(e); }
+  try { res.json(await lightstone.getPropertyValuation(Number(req.params.propertyId), { tenantId: req.user.tenantId || null, userId: req.user.sub })); } catch (e) { next(e); }
 });
 
 // Super-admin: Lightstone usage summary
