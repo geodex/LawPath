@@ -165,6 +165,7 @@ export type ApiProviderSettings = {
   grokApiKey: string;
   grokModel: string;
   verifyNowApiKey: string;
+  lightstoneApiKey: string;
 };
 
 export type VerifyNowUsageTotals = {

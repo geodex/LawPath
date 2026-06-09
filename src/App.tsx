@@ -220,7 +220,8 @@ export function App() {
     geminiModel: "gemini-3.5-flash",
     grokApiKey: "",
     grokModel: "grok-4",
-    verifyNowApiKey: ""
+    verifyNowApiKey: "",
+    lightstoneApiKey: ""
   });
   const [ragSources, setRagSources] = useState<RagSource[]>([
     { id: "RAG-001", name: "South African conveyancing authorities", scope: "Platform", sourceType: "Case law", status: "Indexed", documentCount: 1280, lastIndexed: "2026-06-04" },
@@ -3212,11 +3213,27 @@ function AdminSettings({
               <strong style={{ fontSize: "0.9rem" }}>Windeed</strong>
               <p style={{ margin: "4px 0 0", fontSize: "0.83rem", color: "var(--muted)" }}>windeed.co.za — Primary SA Deeds Office data. Set <code>WINDEED_API_KEY</code> in .env.</p>
             </div>
-            <div style={{ padding: "12px 14px", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8 }}>
-              <strong style={{ fontSize: "0.9rem" }}>Lightstone</strong>
-              <p style={{ margin: "4px 0 0", fontSize: "0.83rem", color: "var(--muted)" }}>lightstone.co.za — Alternative property intelligence. Set <code>LIGHTSTONE_API_KEY</code> in .env.</p>
-            </div>
-            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: 12 }}>Both providers require a commercial subscription. API credentials are set in <code>.env</code> and take effect on API restart.</p>
+            <article className="integration-card" style={{ gridColumn: "1 / -1" }}>
+              <div className="integration-head">
+                <Building2 size={20} />
+                <div>
+                  <strong>Lightstone Property API</strong>
+                  <span>SA property search, registered owners, title deeds, municipal valuations, land data and AI valuations. <a href="https://portal.apis.lightstone.co.za" target="_blank" rel="noreferrer" style={{ color: "var(--green)" }}>Portal ↗</a></span>
+                </div>
+              </div>
+              <label>Subscription key (Ocp-Apim-Subscription-Key)
+                <input
+                  type="password"
+                  value={apiSettings.lightstoneApiKey}
+                  onChange={(e) => updateApi("lightstoneApiKey", e.target.value)}
+                  placeholder="32-character hex key from portal.apis.lightstone.co.za"
+                />
+              </label>
+              <p style={{ margin: "8px 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>
+                One key covers all three Lightstone products (Property-Search, Property-Search-Internal, Property-Data). Requires a Standard or higher subscription.
+              </p>
+            </article>
+            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: 4 }}>Windeed requires <code>WINDEED_API_KEY</code> in <code>.env</code>. Both providers need a commercial subscription.</p>
           </div>
         </Panel>
       </section>

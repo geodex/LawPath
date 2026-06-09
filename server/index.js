@@ -144,7 +144,8 @@ function apiSettingsFromRows(rows) {
     geminiModel: byProvider.gemini?.default_model || "gemini-3.5-flash",
     grokApiKey: byProvider.grok?.api_key_secret_ref || "",
     grokModel: byProvider.grok?.default_model || "grok-4",
-    verifyNowApiKey: byProvider.verifynow?.api_key_secret_ref || ""
+    verifyNowApiKey: byProvider.verifynow?.api_key_secret_ref || "",
+    lightstoneApiKey: byProvider.lightstone?.api_key_secret_ref || ""
   };
 }
 
@@ -771,7 +772,8 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
     ["openai", settings.openAiApiKey || "", settings.openAiModel || "gpt-5.2", null],
     ["gemini", settings.geminiApiKey || "", settings.geminiModel || "gemini-3.5-flash", null],
     ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4", null],
-    ["verifynow", settings.verifyNowApiKey || "", null, null]
+    ["verifynow",    settings.verifyNowApiKey    || "", null, null],
+    ["lightstone",   settings.lightstoneApiKey   || "", null, null]
   ];
 
   try {
