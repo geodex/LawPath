@@ -313,17 +313,19 @@ button:disabled {
 }
 
 .brand-mark {
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  background: #f0c84a;
-  color: var(--green-dark);
+  background: linear-gradient(145deg, #f5d060 0%, #e8b830 100%);
+  color: #0a1a12;
   font-weight: 900;
-  border-radius: var(--radius-lg);
-  font-size: 1.1rem;
+  border-radius: 12px;
+  font-size: 1.2rem;
   letter-spacing: -0.02em;
+  box-shadow: 0 4px 16px rgba(240,200,74,0.30), 0 1px 0 rgba(255,255,255,0.2) inset;
+  font-family: var(--font-serif);
 }
 
 .brand strong,
@@ -332,10 +334,12 @@ button:disabled {
 }
 
 .brand strong {
-  font-size: 0.975rem;
-  font-weight: 700;
-  color: #e4f0ea;
-  letter-spacing: -0.01em;
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #e8f6ef;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
 }
 
 .brand span,
@@ -369,26 +373,29 @@ button:disabled {
 
 .nav button {
   justify-content: flex-start;
-  padding: 10px 12px;
+  padding: 10px 14px;
   background: transparent;
-  color: rgba(214,230,222,0.62);
+  color: rgba(204,228,216,0.58);
   border-radius: 8px;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
   font-size: 0.875rem;
-  border-left: 2px solid transparent;
   font-weight: 500;
+  border: 1px solid transparent;
 }
 
 .nav button.active {
-  background: rgba(23,122,95,0.20);
-  color: #d4ece3;
-  border-left-color: var(--gold);
-  font-weight: 600;
+  background: linear-gradient(135deg, rgba(23,122,95,0.32) 0%, rgba(23,122,95,0.16) 100%);
+  color: #b8ead4;
+  border-color: rgba(23,122,95,0.38);
+  font-weight: 650;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.06);
+  letter-spacing: 0.005em;
 }
 
 .nav button:hover:not(.active) {
-  background: rgba(255,255,255,0.07);
-  color: #d4ece3;
+  background: rgba(255,255,255,0.08);
+  color: #cce8d8;
+  border-color: rgba(255,255,255,0.08);
 }
 
 .sidebar-card {
@@ -454,25 +461,26 @@ p {
 h1 {
   margin-bottom: 0;
   font-family: var(--font-serif);
-  font-size: clamp(1.8rem, 3vw, 3rem);
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+  font-size: clamp(2rem, 3.5vw, 3.5rem);
+  letter-spacing: -0.035em;
+  line-height: 1.05;
   font-weight: 600;
 }
 
 h2 {
   font-family: var(--font-serif);
-  font-size: clamp(1.8rem, 4vw, 4.2rem);
-  line-height: 1.05;
-  max-width: 950px;
-  letter-spacing: -0.025em;
+  font-size: clamp(2rem, 4.5vw, 4.8rem);
+  line-height: 1.02;
+  max-width: 960px;
+  letter-spacing: -0.03em;
   font-weight: 600;
 }
 
 h3 {
   margin-bottom: 0;
-  font-size: 0.975rem;
+  font-size: 0.9375rem;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 /* ─── Utility Classes ────────────────────────────────────────────────────── */
@@ -502,27 +510,28 @@ h3 {
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
 
 .primary {
-  background: linear-gradient(160deg, #177a5f 0%, #0f6b52 100%);
+  background: linear-gradient(160deg, #1a8a6c 0%, #0f6b52 100%);
   color: #ffffff;
-  padding: 0 18px;
+  padding: 0 20px;
   min-height: 42px;
   border-radius: 8px;
-  border: 1px solid rgba(0,0,0,0.12);
-  box-shadow: 0 1px 3px rgba(12,30,24,0.20), inset 0 1px 0 rgba(255,255,255,0.10);
+  border: 1px solid rgba(0,0,0,0.10);
+  box-shadow: 0 1px 4px rgba(12,30,24,0.25), 0 4px 16px rgba(23,122,95,0.20), inset 0 1px 0 rgba(255,255,255,0.14);
   font-weight: 700;
   font-size: 0.9rem;
-  transition: all 0.15s;
-  letter-spacing: 0.01em;
+  transition: all 0.18s ease;
+  letter-spacing: 0.015em;
 }
 
 .primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(12,30,24,0.22), inset 0 1px 0 rgba(255,255,255,0.10);
+  background: linear-gradient(160deg, #1e9a78 0%, #13785c 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(12,30,24,0.20), 0 8px 28px rgba(23,122,95,0.28), inset 0 1px 0 rgba(255,255,255,0.14);
 }
 
 .primary:active {
   transform: translateY(0);
-  box-shadow: 0 1px 3px rgba(12,30,24,0.20);
+  box-shadow: 0 1px 4px rgba(12,30,24,0.25), inset 0 1px 0 rgba(255,255,255,0.08);
 }
 
 .ghost,
@@ -785,18 +794,20 @@ h3 {
 /* ─── Dashboard Hero Banner ──────────────────────────────────────────────── */
 
 .hero {
-  min-height: 400px;
+  min-height: 440px;
   border-radius: var(--radius-xl);
-  padding: clamp(28px, 5vw, 56px);
+  padding: clamp(32px, 5vw, 64px);
   background:
-    linear-gradient(135deg, rgba(6,13,10,0.90) 0%, rgba(9,20,16,0.62) 100%),
+    linear-gradient(145deg, rgba(5,11,9,0.94) 0%, rgba(9,20,16,0.70) 55%, rgba(14,32,24,0.50) 100%),
     url('/assets/legal-workspace.png') center / cover no-repeat;
   color: #ffffff;
   display: grid;
   grid-template-columns: 1fr minmax(240px, 340px);
   align-items: end;
-  gap: 24px;
-  margin-bottom: 24px;
+  gap: 28px;
+  margin-bottom: 28px;
+  border: 1px solid rgba(23,122,95,0.18);
+  box-shadow: var(--shadow-lg);
 }
 
 .hero p {
@@ -872,22 +883,50 @@ h3 {
 
 .metric,
 .capability {
-  padding: 20px;
-  min-height: 128px;
+  padding: 24px;
+  min-height: 140px;
   box-shadow: var(--shadow-sm);
   position: relative;
   overflow: hidden;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 
-.metric::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
+.metric:hover {
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+
+/* Featured (dark) metric cards — 1st and 3rd */
+.metrics .metric:nth-child(odd) {
+  background: linear-gradient(145deg, #0c1e18 0%, #162d22 100%);
+  border-color: rgba(23,122,95,0.22);
+  color: #d4ece3;
+}
+
+.metrics .metric:nth-child(odd)::before {
+  background: linear-gradient(90deg, #f0c84a, rgba(240,200,74,0.2));
+  opacity: 0.9;
+  height: 2px;
+}
+
+.metrics .metric:nth-child(odd) span,
+.metrics .metric:nth-child(odd) small {
+  color: rgba(200,230,215,0.62);
+}
+
+.metrics .metric:nth-child(odd) strong {
+  color: #f0c84a;
+}
+
+/* Light metric cards — 2nd and 4th */
+.metrics .metric:nth-child(even) {
+  background: var(--panel);
+}
+
+.metrics .metric:nth-child(even)::before {
   background: linear-gradient(90deg, var(--green), transparent);
-  opacity: 0.6;
+  opacity: 0.5;
+  height: 2px;
 }
 
 .metric span,
@@ -895,16 +934,18 @@ h3 {
   display: block;
   color: var(--muted);
   font-size: 0.82rem;
+  font-weight: 500;
 }
 
 .metric strong {
   display: block;
-  margin: 10px 0;
-  font-size: 1.85rem;
+  margin: 12px 0 8px;
+  font-size: 2.2rem;
   font-weight: 800;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  letter-spacing: -0.03em;
 }
 
 .capability svg {
@@ -948,12 +989,21 @@ h3 {
 }
 
 .panel {
-  padding: 20px;
+  padding: 24px;
   box-shadow: var(--shadow-sm);
 }
 
 .panel-head {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-head h3 {
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .pill,
@@ -4072,12 +4122,17 @@ textarea {
 
   body { background: var(--paper); color: var(--ink); }
 
-  .sidebar { background: #05100c; border-right-color: var(--line); }
-  .brand-mark { background: #f0c84a; }
-  .nav button { color: rgba(221, 232, 226, 0.6); }
-  .nav button.active, .nav button:hover { background: rgba(255,255,255,0.07); color: var(--ink); }
+  .sidebar { background: linear-gradient(180deg, #040c08 0%, #0a1610 100%); border-right-color: rgba(255,255,255,0.05); }
+  .brand-mark { background: linear-gradient(145deg, #f5d060, #e8b830); box-shadow: 0 4px 16px rgba(240,200,74,0.20); }
+  .nav button { color: rgba(204, 226, 216, 0.55); border-color: transparent; }
+  .nav button.active { background: linear-gradient(135deg, rgba(32,168,120,0.28) 0%, rgba(32,168,120,0.14) 100%); color: #a0dfc0; border-color: rgba(32,168,120,0.32); box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+  .nav button:hover:not(.active) { background: rgba(255,255,255,0.07); color: #bcd8ca; border-color: rgba(255,255,255,0.07); }
 
   .topbar { border-bottom: 1px solid var(--line); }
+
+  /* Override the dark metric cards in dark mode — use panel bg so they're not double-dark */
+  .metrics .metric:nth-child(odd) { background: linear-gradient(145deg, #0a1a14 0%, #102418 100%); border-color: rgba(32,168,120,0.18); }
+  .metrics .metric:nth-child(odd) strong { color: #f5d060; }
 
   .auth-card, .panel, .metric, .integration-card,
   .acct-provider-card, .corpus-source-card, .sig-request-card,
