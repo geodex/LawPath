@@ -140,11 +140,14 @@ async function apiGet({ base, path, params = {}, ctx = {} }) {
     const code = String(result.statusCode);
     console.error(`[lightstone] ${code} from ${fullUrl} — body: ${result.raw?.slice(0, 500)}`);
     await logUsage({ ...ctx, service: path, latencyMs, status: "error", errorCode: code });
+    const activityId = payload?.activityId ? ` (activityId: ${payload.activityId})` : "";
     const msg =
       result.statusCode === 401 ? "Lightstone subscription key is invalid or missing." :
+      result.statusCode === 403 ? "Lightstone subscription key is not authorised for this API product. Check portal.apis.lightstone.co.za → Profile → Subscriptions." :
       result.statusCode === 402 ? "Lightstone quota exhausted or endpoint not associated with your contract." :
       result.statusCode === 429 ? "Lightstone rate limit exceeded — please retry shortly." :
-      payload?.message || `Lightstone error ${result.statusCode}`;
+      result.statusCode === 500 ? `Lightstone backend error${activityId}. Try the operation in the portal's "Try it" console to confirm. Contact Lightstone support with the activityId if it fails there too.` :
+      (payload?.message || `Lightstone error ${result.statusCode}`) + activityId;
     throw Object.assign(new Error(msg), { statusCode: result.statusCode, expose: true });
   }
 
