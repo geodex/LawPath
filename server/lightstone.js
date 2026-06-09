@@ -12,9 +12,47 @@
 //   Super Admin → Settings → API Keys, or LIGHTSTONE_SUBSCRIPTION_KEY in .env.
 //
 // Every call is logged to lightstone_usage_log for audit and billing monitoring.
+//
+// Uses Node's built-in `https` module so it works on any Node version ≥ 12
+// (no dependency on global fetch or AbortSignal.timeout which require Node 18+).
 
 require("dotenv").config();
+const https  = require("https");
 const { pool } = require("./db");
+
+// ─── Low-level HTTPS GET (Node built-in, no fetch required) ──────────────────
+
+function httpsGet(urlStr, headers, timeoutMs = 12000) {
+  return new Promise((resolve, reject) => {
+    const url    = new URL(urlStr);
+    const options = {
+      hostname: url.hostname,
+      port:     url.port || 443,
+      path:     url.pathname + url.search,
+      method:   "GET",
+      headers
+    };
+
+    const req = https.request(options, (res) => {
+      let raw = "";
+      res.setEncoding("utf8");
+      res.on("data", chunk => { raw += chunk; });
+      res.on("end", () => {
+        let json;
+        try { json = JSON.parse(raw); } catch { json = {}; }
+        resolve({ statusCode: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json });
+      });
+    });
+
+    req.on("error", reject);
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Lightstone request timed out after ${timeoutMs}ms`));
+    });
+
+    req.end();
+  });
+}
 
 const BASES = {
   search:   "https://apis.lightstone.co.za/lspsearch/v1",
@@ -76,19 +114,14 @@ async function apiGet({ base, path, params = {}, ctx = {} }) {
   }
 
   const start = Date.now();
-  let response, payload;
+  let result;
 
   try {
-    response = await fetch(url.toString(), {
-      method: "GET",
-      headers: {
-        "Ocp-Apim-Subscription-Key": apiKey,
-        "Accept": "application/json",
-        "Cache-Control": "no-cache"
-      },
-      signal: AbortSignal.timeout(12000)
+    result = await httpsGet(url.toString(), {
+      "Ocp-Apim-Subscription-Key": apiKey,
+      "Accept": "application/json",
+      "Cache-Control": "no-cache"
     });
-    payload = await response.json().catch(() => ({}));
   } catch (netErr) {
     await logUsage({ ...ctx, service: path, latencyMs: Date.now() - start, status: "error", errorCode: "network_error" });
     throw Object.assign(
@@ -98,16 +131,17 @@ async function apiGet({ base, path, params = {}, ctx = {} }) {
   }
 
   const latencyMs = Date.now() - start;
+  const payload   = result.json;
 
-  if (!response.ok) {
-    const code = String(response.status);
+  if (!result.ok) {
+    const code = String(result.statusCode);
     await logUsage({ ...ctx, service: path, latencyMs, status: "error", errorCode: code });
     const msg =
-      response.status === 401 ? "Lightstone subscription key is invalid or missing." :
-      response.status === 402 ? "Lightstone quota exhausted or endpoint not associated with your contract." :
-      response.status === 429 ? "Lightstone rate limit exceeded — please retry shortly." :
-      payload?.message || `Lightstone error ${response.status}`;
-    throw Object.assign(new Error(msg), { statusCode: response.status, expose: true });
+      result.statusCode === 401 ? "Lightstone subscription key is invalid or missing." :
+      result.statusCode === 402 ? "Lightstone quota exhausted or endpoint not associated with your contract." :
+      result.statusCode === 429 ? "Lightstone rate limit exceeded — please retry shortly." :
+      payload?.message || `Lightstone error ${result.statusCode}`;
+    throw Object.assign(new Error(msg), { statusCode: result.statusCode, expose: true });
   }
 
   return { payload, latencyMs };

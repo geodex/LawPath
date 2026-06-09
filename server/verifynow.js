@@ -13,7 +13,42 @@
 require("dotenv").config();
 
 const crypto = require("crypto");
+const https  = require("https");
 const { pool } = require("./db");
+
+// ─── Low-level HTTPS POST (Node built-in, no fetch required) ─────────────────
+
+function httpsPost(urlStr, headers, bodyStr, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const url     = new URL(urlStr);
+    const options = {
+      hostname: url.hostname,
+      port:     url.port || 443,
+      path:     url.pathname + url.search,
+      method:   "POST",
+      headers:  { ...headers, "Content-Length": Buffer.byteLength(bodyStr) }
+    };
+
+    const req = https.request(options, (res) => {
+      let raw = "";
+      res.setEncoding("utf8");
+      res.on("data", chunk => { raw += chunk; });
+      res.on("end", () => {
+        let json;
+        try { json = JSON.parse(raw); } catch { json = {}; }
+        resolve({ statusCode: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json });
+      });
+    });
+
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`VerifyNow request timed out after ${timeoutMs}ms`));
+    });
+
+    req.write(bodyStr);
+    req.end();
+  });
+}
 
 const VERIFYNOW_BASE = "https://api.verifynow.co.za";
 
@@ -66,32 +101,31 @@ async function call({ service, body, tenantId, userId, inputRef }) {
   const idempotencyKey = crypto.randomUUID();
   const startTime = Date.now();
 
-  let response;
-  let payload;
+  let result;
   try {
-    response = await fetch(`${VERIFYNOW_BASE}/${service}`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    result = await httpsPost(
+      `${VERIFYNOW_BASE}/${service}`,
+      {
+        "Authorization":   `Bearer ${apiKey}`,
+        "Content-Type":    "application/json",
         "Idempotency-Key": idempotencyKey
       },
-      body: JSON.stringify(body)
-    });
-    payload = await response.json();
+      JSON.stringify(body)
+    );
   } catch (networkErr) {
     await logUsage({ tenantId, userId, service, creditsSpent: 0, latencyMs: Date.now() - startTime, status: "error", errorCode: "network_error", inputRef });
     throw Object.assign(new Error("VerifyNow API unreachable: " + networkErr.message), { statusCode: 503, expose: true });
   }
 
   const latencyMs    = Date.now() - startTime;
+  const payload      = result.json;
   const creditsSpent = payload?.metadata?.credits_spent ?? 0;
   const requestId    = payload?.metadata?.request_id    ?? null;
 
-  if (!response.ok) {
-    await logUsage({ tenantId, userId, service, requestId, creditsSpent, latencyMs, status: "error", errorCode: payload?.error?.code || String(response.status), inputRef });
-    const err = new Error(payload?.error?.message || `VerifyNow error ${response.status}`);
-    err.statusCode = response.status;
+  if (!result.ok) {
+    await logUsage({ tenantId, userId, service, requestId, creditsSpent, latencyMs, status: "error", errorCode: payload?.error?.code || String(result.statusCode), inputRef });
+    const err = new Error(payload?.error?.message || `VerifyNow error ${result.statusCode}`);
+    err.statusCode = result.statusCode;
     err.expose = true;
     throw err;
   }
