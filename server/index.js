@@ -9,6 +9,7 @@ const { pool } = require("./db");
 const { authMiddleware, signToken } = require("./auth");
 const { sendTransactionalEmail } = require("./mailer");
 const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText, downloadText } = require("./gcs");
+const verifynow = require("./verifynow");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -141,7 +142,8 @@ function apiSettingsFromRows(rows) {
     geminiApiKey: byProvider.gemini?.api_key_secret_ref || "",
     geminiModel: byProvider.gemini?.default_model || "gemini-3.5-flash",
     grokApiKey: byProvider.grok?.api_key_secret_ref || "",
-    grokModel: byProvider.grok?.default_model || "grok-4"
+    grokModel: byProvider.grok?.default_model || "grok-4",
+    verifyNowApiKey: byProvider.verifynow?.api_key_secret_ref || ""
   };
 }
 
@@ -767,7 +769,8 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
     ["exchangerates", settings.exchangeRatesApiKey || "", null, settings.exchangeRatesBaseCurrency || "ZAR"],
     ["openai", settings.openAiApiKey || "", settings.openAiModel || "gpt-5.2", null],
     ["gemini", settings.geminiApiKey || "", settings.geminiModel || "gemini-3.5-flash", null],
-    ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4", null]
+    ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4", null],
+    ["verifynow", settings.verifyNowApiKey || "", null, null]
   ];
 
   try {
@@ -2355,6 +2358,116 @@ app.post("/api/research-db/sources/:id/index", authMiddleware, async (req, res, 
     if (!result.rowCount) return res.status(404).json({ error: "Source not found." });
     setTimeout(async () => { await pool.query("update legal_corpus_sources set index_status='indexed', last_indexed_at=now() where id=$1", [req.params.id]).catch(() => {}); }, 3000);
     res.json({ source: corpusSourceFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// ─── VERIFYNOW SA ────────────────────────────────────────────────────────────
+
+// Super-admin: usage summary (credit monitoring dashboard)
+app.get("/api/admin/verifynow/usage", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  try {
+    const [totals, byService, byTenant, recent] = await Promise.all([
+      pool.query(`
+        select
+          count(*)                                         as total_calls,
+          coalesce(sum(credits_spent), 0)                  as total_credits,
+          coalesce(sum(credits_spent) filter (where created_at >= now() - interval '30 days'), 0) as credits_30d,
+          coalesce(sum(credits_spent) filter (where created_at >= now() - interval '7 days'),  0) as credits_7d,
+          coalesce(sum(credits_spent) filter (where created_at >= date_trunc('day', now())),   0) as credits_today,
+          count(*) filter (where status = 'error')         as error_calls,
+          round(avg(latency_ms))                           as avg_latency_ms
+        from verifynow_usage_log`),
+      pool.query(`
+        select service,
+               count(*)                        as calls,
+               coalesce(sum(credits_spent), 0) as credits,
+               count(*) filter (where status = 'error') as errors
+        from verifynow_usage_log
+        group by service
+        order by credits desc`),
+      pool.query(`
+        select t.name as tenant_name, v.tenant_id,
+               count(*)                        as calls,
+               coalesce(sum(v.credits_spent), 0) as credits
+        from verifynow_usage_log v
+        left join tenants t on t.id = v.tenant_id
+        where v.created_at >= now() - interval '30 days'
+        group by v.tenant_id, t.name
+        order by credits desc
+        limit 20`),
+      pool.query(`
+        select v.*, t.name as tenant_name
+        from verifynow_usage_log v
+        left join tenants t on t.id = v.tenant_id
+        order by v.created_at desc
+        limit 50`)
+    ]);
+    res.json({
+      totals: totals.rows[0],
+      byService: byService.rows,
+      byTenant: byTenant.rows,
+      recentLog: recent.rows
+    });
+  } catch (error) { next(error); }
+});
+
+// Super-admin: paginated usage log
+app.get("/api/admin/verifynow/usage/log", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  const limit  = Math.min(Number(req.query.limit  || 100), 500);
+  const offset = Number(req.query.offset || 0);
+  const service = req.query.service || null;
+  try {
+    const result = await pool.query(
+      `select v.*, t.name as tenant_name
+       from verifynow_usage_log v
+       left join tenants t on t.id = v.tenant_id
+       ${service ? "where v.service = $3" : ""}
+       order by v.created_at desc
+       limit $1 offset $2`,
+      service ? [limit, offset, service] : [limit, offset]
+    );
+    const total = await pool.query(
+      `select count(*) from verifynow_usage_log ${service ? "where service = $1" : ""}`,
+      service ? [service] : []
+    );
+    res.json({ log: result.rows, total: Number(total.rows[0].count), limit, offset });
+  } catch (error) { next(error); }
+});
+
+// Tenant-facing proxy — any VerifyNow service via POST /api/verifynow/:service
+// Validates the service name against the known list to prevent open proxy abuse.
+const VERIFYNOW_SERVICES = new Set([
+  "verify", "verify-document", "face-match",
+  "aml-pep", "consumer-trace", "consumer-trace-lite",
+  "cipc/company", "cipc/director",
+  "bank-account-verification",
+  "number-plate", "vin-decode"
+]);
+
+app.post("/api/verifynow/:service(*)", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const service = req.params.service;
+  if (!VERIFYNOW_SERVICES.has(service)) return res.status(400).json({ error: `Unknown VerifyNow service: ${service}` });
+  try {
+    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub, inputRef: req.body?.input_ref || null };
+    // Route to the matching wrapper method
+    const methodMap = {
+      "verify":                    verifynow.verifyId,
+      "verify-document":           verifynow.verifyDocument,
+      "face-match":                verifynow.faceMatch,
+      "aml-pep":                   verifynow.amlPep,
+      "consumer-trace":            verifynow.consumerTrace,
+      "consumer-trace-lite":       verifynow.consumerTraceLite,
+      "cipc/company":              verifynow.cipcCompany,
+      "cipc/director":             verifynow.cipcDirector,
+      "bank-account-verification": verifynow.bankAccountVerification,
+      "number-plate":              verifynow.numberPlate,
+      "vin-decode":                verifynow.vinDecode
+    };
+    const result = await methodMap[service](req.body, ctx);
+    res.json(result);
   } catch (error) { next(error); }
 });
 

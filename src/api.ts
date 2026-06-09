@@ -384,6 +384,30 @@ export async function getCorpusDocumentText(docId: string) {
   return request<{ title: string; citation: string; text: string; source: "gcs" | "snippet" | "none" }>(`/api/research-db/documents/${docId}/text`);
 }
 
+// ─── VERIFYNOW SA ─────────────────────────────────────────────────────────────
+
+export async function getVerifyNowUsage() {
+  return request<{
+    totals: import("./types").VerifyNowUsageTotals;
+    byService: import("./types").VerifyNowServiceStat[];
+    byTenant: import("./types").VerifyNowTenantStat[];
+    recentLog: import("./types").VerifyNowLogEntry[];
+  }>("/api/admin/verifynow/usage");
+}
+
+export async function getVerifyNowLog(params?: { limit?: number; offset?: number; service?: string }) {
+  const qs = new URLSearchParams();
+  if (params?.limit)   qs.set("limit",   String(params.limit));
+  if (params?.offset)  qs.set("offset",  String(params.offset));
+  if (params?.service) qs.set("service", params.service);
+  return request<{
+    log: import("./types").VerifyNowLogEntry[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>(`/api/admin/verifynow/usage/log?${qs}`);
+}
+
 // ─── E-SIGNATURE ─────────────────────────────────────────────────────────────
 
 export async function getSignatureRequests() {

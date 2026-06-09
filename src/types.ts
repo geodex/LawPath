@@ -121,6 +121,46 @@ export type ApiProviderSettings = {
   geminiModel: "gemini-3.1-pro" | "gemini-3.5-flash" | "gemini-3.5-flash-lite";
   grokApiKey: string;
   grokModel: string;
+  verifyNowApiKey: string;
+};
+
+export type VerifyNowUsageTotals = {
+  total_calls: string;
+  total_credits: string;
+  credits_30d: string;
+  credits_7d: string;
+  credits_today: string;
+  error_calls: string;
+  avg_latency_ms: string | null;
+};
+
+export type VerifyNowServiceStat = {
+  service: string;
+  calls: string;
+  credits: string;
+  errors: string;
+};
+
+export type VerifyNowTenantStat = {
+  tenant_id: string | null;
+  tenant_name: string | null;
+  calls: string;
+  credits: string;
+};
+
+export type VerifyNowLogEntry = {
+  id: string;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  user_id: string | null;
+  service: string;
+  request_id: string | null;
+  credits_spent: string;
+  latency_ms: number | null;
+  status: "success" | "error";
+  error_code: string | null;
+  input_ref: string | null;
+  created_at: string;
 };
 
 export type RagSource = {

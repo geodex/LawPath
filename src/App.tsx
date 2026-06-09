@@ -25,6 +25,7 @@ import {
   Send,
   ServerCog,
   Settings,
+  Shield,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -39,7 +40,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
+import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, getVerifyNowUsage, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
 import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 import { FicaKyc } from "./FicaKyc";
@@ -58,6 +59,7 @@ import { AgentNetwork } from "./AgentNetwork";
 import { PracticeAnalytics } from "./PracticeAnalytics";
 import { StaffManagement } from "./StaffManagement";
 import { StripeBilling } from "./StripeBilling";
+import { VerifyNowMonitor } from "./VerifyNowMonitor";
 
 const nav: NavItem[] = [
   { key: "overview", label: "Overview", icon: Home },
@@ -212,7 +214,8 @@ export function App() {
     geminiApiKey: "",
     geminiModel: "gemini-3.5-flash",
     grokApiKey: "",
-    grokModel: "grok-4"
+    grokModel: "grok-4",
+    verifyNowApiKey: ""
   });
   const [ragSources, setRagSources] = useState<RagSource[]>([
     { id: "RAG-001", name: "South African conveyancing authorities", scope: "Platform", sourceType: "Case law", status: "Indexed", documentCount: 1280, lastIndexed: "2026-06-04" },
@@ -3148,6 +3151,29 @@ function AdminSettings({
             </label>
           </article>
 
+          <article className="integration-card" style={{ gridColumn: "1 / -1" }}>
+            <div className="integration-head">
+              <Shield size={20} />
+              <div>
+                <strong>VerifyNow SA</strong>
+                <span>SA identity verification, AML/PEP screening, CIPC lookups, bank account verification and vehicle checks. <a href="https://www.verifynow.co.za/api-docs" target="_blank" rel="noreferrer" style={{ color: "var(--green)" }}>API docs ↗</a></span>
+              </div>
+            </div>
+            <label>API key
+              <input type="password" value={apiSettings.verifyNowApiKey} onChange={(event) => updateApi("verifyNowApiKey", event.target.value)} placeholder="vn_live_..." />
+            </label>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8, marginTop: 4 }}>
+              {["ID Verify", "AML / PEP", "CIPC Company", "CIPC Director", "Consumer Trace", "Bank Account", "Face Match", "Number Plate", "VIN Decode"].map(s => (
+                <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 6, background: "var(--green-light)", color: "var(--green)", fontSize: "0.8rem", fontWeight: 600 }}>
+                  <CheckCircle2 size={12} />{s}
+                </span>
+              ))}
+            </div>
+            <p style={{ margin: "8px 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>
+              Credits are billed per check by VerifyNow. Usage is tracked in the monitoring panel below — no dedicated balance endpoint exists on their platform.
+            </p>
+          </article>
+
           <div className="integration-actions">
             <span>Last saved: {apiSavedAt}</span>
             <button className="primary" type="submit" disabled={settingsBusy === "api"}><ServerCog size={18} /> {settingsBusy === "api" ? "Saving..." : "Save API settings"}</button>
@@ -3199,6 +3225,9 @@ function AdminSettings({
           </div>
         </Panel>
       </section>
+
+      {/* VerifyNow Usage Monitoring */}
+      <VerifyNowMonitor showToast={showToast} />
 
       <section className="rag-shell">
         <div className="panel-head">
