@@ -37,13 +37,10 @@ alter table platform_api_provider_settings
   check (provider in ('exchangerates', 'openai', 'gemini', 'grok', 'verifynow', 'lightstone'));
 
 -- ── Seed provider row (inactive until key is set in Super Admin) ──────────────
+-- Note: platform_api_provider_settings has no display_name/notes columns —
+-- only: id, provider, api_key_secret_ref, default_model, base_currency,
+--        active, created_by, created_at, updated_at.
 
-insert into platform_api_provider_settings (provider, display_name, active, api_key_secret_ref, notes)
-values (
-  'lightstone',
-  'Lightstone Property API',
-  false,
-  '',
-  'Ocp-Apim-Subscription-Key from portal.apis.lightstone.co.za — Standard subscription. Covers property address search and sectional scheme lookups.'
-)
+insert into platform_api_provider_settings (provider, active, api_key_secret_ref)
+values ('lightstone', false, '')
 on conflict (provider) do nothing;
