@@ -1,7 +1,7 @@
 import { Building2, CheckCircle2, ChevronDown, ChevronRight, Loader2, MapPin, Plus, ShieldCheck } from "lucide-react";
 import { FormEvent, useCallback, useRef, useState } from "react";
-import { advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstoneSectionalUnits, searchLightstoneAddress, updateConveyancingClearances } from "./api";
-import type { LightstoneAddress, LightstoneSectionalUnit } from "./api";
+import { advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstonePropertyBundle, getLightstoneSectionalUnits, searchLightstoneAddress, updateConveyancingClearances } from "./api";
+import type { LightstoneAddress, LightstonePropertyBundle, LightstoneSectionalUnit } from "./api";
 import type { ConveyancingMatter, ConveyancingStage } from "./types";
 
 const money = (cents: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(cents / 100);
@@ -358,6 +358,8 @@ export function ConveyancingPipeline({
   const [lsLoading, setLsLoading]                     = useState(false);
   const [lsResults, setLsResults]                     = useState<LightstoneAddress[]>([]);
   const [lsSelected, setLsSelected]                   = useState<LightstoneAddress | null>(null);
+  const [lsBundle, setLsBundle]                       = useState<LightstonePropertyBundle | null>(null);
+  const [lsBundleLoading, setLsBundleLoading]         = useState(false);
   const [lsSectional, setLsSectional]                 = useState<LightstoneSectionalUnit[]>([]);
   const [lsSectionalLoading, setLsSectionalLoading]   = useState(false);
   const [lsSearched, setLsSearched]                   = useState(false);
@@ -458,15 +460,30 @@ export function ConveyancingPipeline({
 
   async function handleLightstoneSelectResult(addr: LightstoneAddress) {
     setLsSelected(addr);
+    setLsBundle(null);
     setLsSectional([]);
+
+    // Fetch property detail bundle (owners + legal + municipal + land) in parallel
+    if (addr.propertyId) {
+      setLsBundleLoading(true);
+      try {
+        const bundle = await getLightstonePropertyBundle(addr.propertyId, addr.id);
+        setLsBundle(bundle);
+      } catch (err: unknown) {
+        const msg = (err instanceof Error) ? err.message : "Could not load property details";
+        showToast("error", "Lightstone property detail", msg);
+      } finally {
+        setLsBundleLoading(false);
+      }
+    }
+
+    // Sectional units (only if sectional title)
     if (addr.schemeGroupId && addr.schemeGroupId > 0) {
       setLsSectionalLoading(true);
       try {
         const data = await getLightstoneSectionalUnits(addr.id);
         setLsSectional(data.units || []);
-      } catch {
-        /* sectional lookup optional — don't toast for this */
-      } finally {
+      } catch { /* optional */ } finally {
         setLsSectionalLoading(false);
       }
     }
@@ -761,6 +778,7 @@ export function ConveyancingPipeline({
 
                   {lsSelected && (
                     <div className="ls-property-detail">
+                      {/* Header */}
                       <div className="ls-detail-head">
                         <div>
                           <div className="ls-detail-title">{lsSelected.addressString}</div>
@@ -769,50 +787,134 @@ export function ConveyancingPipeline({
                             {lsSelected.deedsOfficeId ? ` · Deeds Office: ${lsSelected.deedsOfficeId}` : ""}
                           </div>
                         </div>
-                        <Building2 size={22} color="var(--green)" style={{ flexShrink: 0 }} />
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          {lsBundleLoading && <Loader2 size={16} color="var(--green)" style={{ animation: "spin 0.8s linear infinite" }} />}
+                          <Building2 size={22} color="var(--green)" style={{ flexShrink: 0 }} />
+                        </div>
                       </div>
 
-                      <div className="ls-detail-grid">
-                        {[
-                          ["Street", [lsSelected.streetNumber, lsSelected.streetName, lsSelected.streetType].filter(Boolean).join(" ")],
-                          ["Estate", lsSelected.estateName],
-                          ["Scheme", lsSelected.schemeName],
-                          ["Suburb", lsSelected.suburbName],
-                          ["Town / City", lsSelected.townName],
-                          ["Municipality", lsSelected.municipalityName],
-                          ["District Council", lsSelected.districtCouncilName],
-                          ["Province", lsSelected.provinceName],
-                          ["Post code", lsSelected.postCode],
-                          ["Scheme group ID", lsSelected.schemeGroupId > 0 ? String(lsSelected.schemeGroupId) : null],
-                        ].map(([label, val]) => (
-                          val ? (
-                            <div key={String(label)} className="ls-detail-field">
-                              <span className="ls-detail-label">{label}</span>
-                              <span className="ls-detail-value">{val}</span>
-                            </div>
-                          ) : null
+                      {/* ── Address fields ── */}
+                      <div className="ls-detail-grid" style={{ marginBottom: 16 }}>
+                        {([
+                          ["Street",         [lsSelected.streetNumber, lsSelected.streetName, lsSelected.streetType].filter(Boolean).join(" ")],
+                          ["Estate",         lsSelected.estateName],
+                          ["Scheme",         lsSelected.schemeName],
+                          ["Suburb",         lsSelected.suburbName],
+                          ["Town / City",    lsSelected.townName],
+                          ["Municipality",   lsSelected.municipalityName],
+                          ["District",       lsSelected.districtCouncilName],
+                          ["Province",       lsSelected.provinceName],
+                          ["Post code",      lsSelected.postCode],
+                        ] as [string, string | undefined | number][]).filter(([, v]) => v).map(([label, val]) => (
+                          <div key={label} className="ls-detail-field">
+                            <span className="ls-detail-label">{label}</span>
+                            <span className="ls-detail-value">{String(val)}</span>
+                          </div>
                         ))}
                       </div>
 
+                      {/* ── Registered Owners ── */}
+                      {(lsBundle?.owners && (Array.isArray(lsBundle.owners) ? lsBundle.owners.length > 0 : true)) && (
+                        <div className="ls-data-section">
+                          <div className="ls-section-head">Registered Owner(s)</div>
+                          {(Array.isArray(lsBundle.owners) ? lsBundle.owners : [lsBundle.owners]).map((owner, i) => (
+                            <div key={i} className="ls-detail-grid" style={{ marginBottom: 8 }}>
+                              {([
+                                ["Name",            owner.fullName || [owner.firstName, owner.lastName].filter(Boolean).join(" ") || owner.entityName],
+                                ["ID / Reg no",     owner.idNumber || owner.registrationNumber],
+                                ["Owner type",      owner.ownerType],
+                                ["Purchase price",  owner.purchasePrice ? `R ${Number(owner.purchasePrice).toLocaleString("en-ZA")}` : null],
+                                ["Purchase date",   owner.purchaseDate],
+                                ["Ownership %",     owner.ownershipPercentage != null ? `${owner.ownershipPercentage}%` : null],
+                              ] as [string, string | null | undefined][]).filter(([, v]) => v).map(([label, val]) => (
+                                <div key={label} className="ls-detail-field">
+                                  <span className="ls-detail-label">{label}</span>
+                                  <span className="ls-detail-value">{String(val)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* ── Title Deed / Legal ── */}
+                      {lsBundle?.legal && (
+                        <div className="ls-data-section">
+                          <div className="ls-section-head">Title Deed &amp; Bonds</div>
+                          <div className="ls-detail-grid">
+                            {([
+                              ["Title deed",          lsBundle.legal.titleDeedNumber],
+                              ["Deed type",           lsBundle.legal.deedType],
+                              ["Registration date",   lsBundle.legal.registrationDate],
+                              ["Purchase price",      lsBundle.legal.purchasePrice ? `R ${Number(lsBundle.legal.purchasePrice).toLocaleString("en-ZA")}` : null],
+                              ["Bond holder",         lsBundle.legal.bondHolder],
+                              ["Bond amount",         lsBundle.legal.bondAmount ? `R ${Number(lsBundle.legal.bondAmount).toLocaleString("en-ZA")}` : null],
+                              ["Bond registered",     lsBundle.legal.bondRegistrationDate],
+                              ["Bond cancelled",      lsBundle.legal.bondCancelledDate],
+                            ] as [string, string | null | undefined][]).filter(([, v]) => v).map(([label, val]) => (
+                              <div key={label} className="ls-detail-field">
+                                <span className="ls-detail-label">{label}</span>
+                                <span className="ls-detail-value">{String(val)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Municipal ── */}
+                      {lsBundle?.municipal && (
+                        <div className="ls-data-section">
+                          <div className="ls-section-head">Municipal Valuation</div>
+                          <div className="ls-detail-grid">
+                            {([
+                              ["Municipality",      lsBundle.municipal.municipalityName],
+                              ["Account no",        lsBundle.municipal.accountNumber],
+                              ["Municipal value",   lsBundle.municipal.municipalValue ? `R ${Number(lsBundle.municipal.municipalValue).toLocaleString("en-ZA")}` : null],
+                              ["Valuation date",    lsBundle.municipal.municipalValueDate],
+                              ["Monthly rates",     lsBundle.municipal.monthlyRates ? `R ${Number(lsBundle.municipal.monthlyRates).toLocaleString("en-ZA")}` : null],
+                            ] as [string, string | null | undefined][]).filter(([, v]) => v).map(([label, val]) => (
+                              <div key={label} className="ls-detail-field">
+                                <span className="ls-detail-label">{label}</span>
+                                <span className="ls-detail-value">{String(val)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Land ── */}
+                      {lsBundle?.land && (
+                        <div className="ls-data-section">
+                          <div className="ls-section-head">Land &amp; Erf</div>
+                          <div className="ls-detail-grid">
+                            {([
+                              ["Erf number",  lsBundle.land.erfNumber],
+                              ["Extent",      lsBundle.land.extent ? `${Number(lsBundle.land.extent).toLocaleString("en-ZA")} m²` : null],
+                              ["Land use",    lsBundle.land.landUse],
+                              ["Zoning",      lsBundle.land.zoning],
+                            ] as [string, string | null | undefined][]).filter(([, v]) => v).map(([label, val]) => (
+                              <div key={label} className="ls-detail-field">
+                                <span className="ls-detail-label">{label}</span>
+                                <span className="ls-detail-value">{String(val)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Sectional units ── */}
                       {lsSelected.schemeGroupId > 0 && (
-                        <div className="ls-sectional">
-                          <h5 style={{ margin: "16px 0 8px", fontSize: "0.85rem", fontWeight: 700 }}>
+                        <div className="ls-data-section ls-sectional">
+                          <div className="ls-section-head">
                             Sectional scheme units
-                            {lsSectionalLoading && <Loader2 size={13} style={{ marginLeft: 8, animation: "spin 0.8s linear infinite" }} />}
-                          </h5>
+                            {lsSectionalLoading && <Loader2 size={13} style={{ marginLeft: 8, animation: "spin 0.8s linear infinite", verticalAlign: "middle" }} />}
+                          </div>
                           {!lsSectionalLoading && lsSectional.length === 0 && (
-                            <p style={{ color: "var(--muted)", fontSize: "0.83rem" }}>No units loaded yet.</p>
+                            <p style={{ color: "var(--muted)", fontSize: "0.83rem", margin: 0 }}>No units returned.</p>
                           )}
                           {lsSectional.length > 0 && (
                             <table className="ls-sectional-table">
-                              <thead>
-                                <tr>
-                                  <th>Unit / Address</th>
-                                  <th>Scheme</th>
-                                  <th>Suburb</th>
-                                  <th>ID</th>
-                                </tr>
-                              </thead>
+                              <thead><tr><th>Unit / Address</th><th>Scheme</th><th>Suburb</th><th>ID</th></tr></thead>
                               <tbody>
                                 {lsSectional.map((u, i) => (
                                   <tr key={u.id ?? i}>
@@ -825,6 +927,14 @@ export function ConveyancingPipeline({
                               </tbody>
                             </table>
                           )}
+                        </div>
+                      )}
+
+                      {/* Loading placeholder */}
+                      {lsBundleLoading && !lsBundle && (
+                        <div style={{ textAlign: "center", padding: "20px 0", color: "var(--muted)", fontSize: "0.85rem" }}>
+                          <Loader2 size={18} style={{ animation: "spin 0.8s linear infinite", marginBottom: 6 }} />
+                          <div>Loading owners, legal &amp; municipal data…</div>
                         </div>
                       )}
                     </div>

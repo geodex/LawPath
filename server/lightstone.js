@@ -1,12 +1,13 @@
 // server/lightstone.js
-// Lightstone Property API wrapper — address search & sectional scheme lookups.
+// Lightstone Property API wrapper — search, property detail, owners, legal & more.
 // Portal: https://portal.apis.lightstone.co.za
 //
-// Two API products used:
+// Three API products used:
 //   lspsearch          (Property-Search)          GET /address?query=…
 //   lspsearch-internal (Property-Search-Internal) GET /address/{id}/associatedSectionalSchemeUnitsBySchemeGroupId
+//   lspdata            (Property-Data)            GET /property/{id}/owners|legal|municipal|land|aivm|…
 //
-// Auth: single header — Ocp-Apim-Subscription-Key
+// Auth: single header — Ocp-Apim-Subscription-Key (same key across all three products)
 //   Stored in platform_api_provider_settings (provider = 'lightstone') via
 //   Super Admin → Settings → API Keys, or LIGHTSTONE_SUBSCRIPTION_KEY in .env.
 //
@@ -17,7 +18,8 @@ const { pool } = require("./db");
 
 const BASES = {
   search:   "https://apis.lightstone.co.za/lspsearch/v1",
-  internal: "https://apis.lightstone.co.za/lspsearch-internal/v1"
+  internal: "https://apis.lightstone.co.za/lspsearch-internal/v1",
+  data:     "https://apis.lightstone.co.za/lspdata/v1"
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -166,4 +168,108 @@ async function getSectionalUnits(addressId, maxrows = 20, ctx = {}) {
   return { units };
 }
 
-module.exports = { searchAddress, getSectionalUnits };
+// ─── Property Data API (lspdata/v1) ──────────────────────────────────────────
+// All methods take propertyId (integer from search result .propertyId field)
+// except getAddressDetail which takes addressId (.id from search result).
+
+/** Address and Spatial Details — lspdata/v1/address/{id}/address */
+async function getAddressDetail(addressId, ctx = {}) {
+  const { payload, latencyMs } = await apiGet({ base: BASES.data, path: `/address/${addressId}/address`, ctx });
+  await logUsage({ ...ctx, service: "lspdata/address/detail", latencyMs, status: "success" });
+  return payload;
+}
+
+/** Property address details by propertyId — lspdata/v1/property/{id}/address */
+async function getPropertyAddress(propertyId, ctx = {}) {
+  const { payload, latencyMs } = await apiGet({ base: BASES.data, path: `/property/${propertyId}/address`, ctx });
+  await logUsage({ ...ctx, service: "lspdata/property/address", latencyMs, status: "success" });
+  return payload;
+}
+
+/**
+ * Registered owners — lspdata/v1/property/{id}/owners
+ * Returns an array of current registered owner(s) with identity details.
+ * This is the primary Windeed-replacement call for conveyancing.
+ */
+async function getPropertyOwners(propertyId, ctx = {}) {
+  const { payload, latencyMs } = await apiGet({ base: BASES.data, path: `/property/${propertyId}/owners`, ctx });
+  await logUsage({ ...ctx, service: "lspdata/property/owners", latencyMs, status: "success" });
+  // Lightstone may return array directly or wrapped
+  return Array.isArray(payload) ? payload : (payload.owners || payload.results || payload);
+}
+
+/**
+ * Legal / title deed data — lspdata/v1/property/{id}/legal
+ * Contains title deed number, registration date, purchase price, bond info.
+ */
+async function getPropertyLegal(propertyId, ctx = {}) {
+  const { payload, latencyMs } = await apiGet({ base: BASES.data, path: `/property/${propertyId}/legal`, ctx });
+  await logUsage({ ...ctx, service: "lspdata/property/legal", latencyMs, status: "success" });
+  return payload;
+}
+
+/**
+ * Municipal data — lspdata/v1/property/{id}/municipal
+ * Contains municipal valuation, monthly rates, account number.
+ */
+async function getPropertyMunicipal(propertyId, ctx = {}) {
+  const { payload, latencyMs } = await apiGet({ base: BASES.data, path: `/property/${propertyId}/municipal`, ctx });
+  await logUsage({ ...ctx, service: "lspdata/property/municipal", latencyMs, status: "success" });
+  return payload;
+}
+
+/**
+ * Land details — lspdata/v1/property/{id}/land
+ * Contains erf/lot number, extent (m²), land use, zoning.
+ */
+async function getPropertyLand(propertyId, ctx = {}) {
+  const { payload, latencyMs } = await apiGet({ base: BASES.data, path: `/property/${propertyId}/land`, ctx });
+  await logUsage({ ...ctx, service: "lspdata/property/land", latencyMs, status: "success" });
+  return payload;
+}
+
+/**
+ * AI Valuation Model — lspdata/v1/property/{id}/aivm
+ * Automated market value estimate with confidence band.
+ */
+async function getPropertyValuation(propertyId, ctx = {}) {
+  const { payload, latencyMs } = await apiGet({ base: BASES.data, path: `/property/${propertyId}/aivm`, ctx });
+  await logUsage({ ...ctx, service: "lspdata/property/aivm", latencyMs, status: "success" });
+  return payload;
+}
+
+/**
+ * Fetch the core property detail bundle in parallel:
+ * owners + legal + municipal + land + address.
+ * Returns a single object with each section keyed separately.
+ * Individual sections that fail (e.g. not in subscription) return null rather than throwing.
+ */
+async function getPropertyBundle(propertyId, addressId, ctx = {}) {
+  const safe = fn => fn.catch(err => {
+    console.warn(`[lightstone] bundle partial failure: ${err.message}`);
+    return null;
+  });
+
+  const [address, owners, legal, municipal, land] = await Promise.all([
+    addressId ? safe(getAddressDetail(addressId, ctx))    : null,
+    safe(getPropertyOwners(propertyId, ctx)),
+    safe(getPropertyLegal(propertyId, ctx)),
+    safe(getPropertyMunicipal(propertyId, ctx)),
+    safe(getPropertyLand(propertyId, ctx))
+  ]);
+
+  return { address, owners, legal, municipal, land };
+}
+
+module.exports = {
+  searchAddress,
+  getSectionalUnits,
+  getAddressDetail,
+  getPropertyAddress,
+  getPropertyOwners,
+  getPropertyLegal,
+  getPropertyMunicipal,
+  getPropertyLand,
+  getPropertyValuation,
+  getPropertyBundle
+};

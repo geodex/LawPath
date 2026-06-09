@@ -2310,6 +2310,24 @@ select {
   border-bottom: none;
 }
 
+.ls-data-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.ls-section-head {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--green);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .ls-no-results {
   text-align: center;
   padding: 20px;

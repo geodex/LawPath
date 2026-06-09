@@ -479,6 +479,62 @@ export interface LightstoneSectionalUnit {
   [key: string]: unknown; // Lightstone may return additional fields
 }
 
+/** Owner record returned by GET /lspdata/v1/property/{id}/owners */
+export interface LightstoneOwner {
+  fullName?: string;
+  firstName?: string;
+  lastName?: string;
+  idNumber?: string;
+  entityName?: string;           // for companies/trusts
+  registrationNumber?: string;
+  ownerType?: string;            // 'Natural Person' | 'Legal Entity' | 'Trust' etc.
+  ownershipPercentage?: number;
+  purchasePrice?: number;
+  purchaseDate?: string;
+  [key: string]: unknown;
+}
+
+/** Legal / title deed record */
+export interface LightstoneLegal {
+  titleDeedNumber?: string;
+  deedType?: string;
+  registrationDate?: string;
+  purchasePrice?: number;
+  bondHolder?: string;
+  bondAmount?: number;
+  bondRegistrationDate?: string;
+  bondCancelledDate?: string;
+  [key: string]: unknown;
+}
+
+/** Municipal data */
+export interface LightstoneMunicipal {
+  municipalityName?: string;
+  accountNumber?: string;
+  municipalValue?: number;
+  municipalValueDate?: string;
+  monthlyRates?: number;
+  [key: string]: unknown;
+}
+
+/** Land / extent data */
+export interface LightstoneLand {
+  erfNumber?: string;
+  extent?: number;              // m²
+  landUse?: string;
+  zoning?: string;
+  [key: string]: unknown;
+}
+
+/** Full property detail bundle (parallel fetch of all sections) */
+export interface LightstonePropertyBundle {
+  address: Record<string, unknown> | null;
+  owners:  LightstoneOwner[] | null;
+  legal:   LightstoneLegal | null;
+  municipal: LightstoneMunicipal | null;
+  land:    LightstoneLand | null;
+}
+
 export async function searchLightstoneAddress(q: string) {
   return request<{ searchIdentifier: string | null; results: LightstoneAddress[] }>(
     `/api/lightstone/address?q=${encodeURIComponent(q)}`
@@ -489,6 +545,12 @@ export async function getLightstoneSectionalUnits(addressId: number, maxrows = 2
   return request<{ units: LightstoneSectionalUnit[] }>(
     `/api/lightstone/sectional/${addressId}?maxrows=${maxrows}`
   );
+}
+
+/** Fetch owners + legal + municipal + land + address in one call */
+export async function getLightstonePropertyBundle(propertyId: number, addressId?: number) {
+  const qs = addressId ? `?addressId=${addressId}` : "";
+  return request<LightstonePropertyBundle>(`/api/lightstone/property/${propertyId}${qs}`);
 }
 
 // ─── VERIFYNOW SA ─────────────────────────────────────────────────────────────
