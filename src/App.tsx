@@ -2885,7 +2885,7 @@ function AdminSettings({
     setSettingsBusy("api");
     try {
       const response = await savePlatformApiSettings(apiSettings);
-      setApiSettings(response.apiSettings);
+      if (response.apiSettings) setApiSettings(response.apiSettings);
       const stamp = new Date().toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
       setApiSavedAt(stamp);
       log("Admin saved API provider keys and model selections");
@@ -2964,7 +2964,8 @@ function AdminSettings({
     apiSettings.exchangeRatesApiKey,
     apiSettings.openAiApiKey,
     apiSettings.geminiApiKey,
-    apiSettings.grokApiKey
+    apiSettings.grokApiKey,
+    apiSettings.verifyNowApiKey
   ].filter(Boolean).length;
   const tenantIdentityDisabled = !hasTenantContext;
 
