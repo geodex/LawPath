@@ -2119,6 +2119,141 @@ select {
   margin-top: 4px;
 }
 
+/* ─── VerifyNow Due Diligence Panel ─────────────────────────────────────── */
+
+.dd-panel {
+  margin-top: 22px;
+}
+
+.dd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.dd-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  background: var(--paper);
+  transition: box-shadow 0.15s;
+}
+
+.dd-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+}
+
+.dd-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 8px;
+}
+
+.dd-card-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.dd-card-cost {
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.dd-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.dd-input-row input,
+.dd-input-row select {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.84rem;
+  background: var(--panel);
+  color: var(--ink);
+  min-width: 0;
+}
+
+.dd-input-row input:focus,
+.dd-input-row select:focus {
+  outline: none;
+  border-color: var(--green);
+  background: #fff;
+}
+
+.dd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+
+.dd-status-idle    { background: #f0f4f1; color: var(--muted); }
+.dd-status-loading { background: #e8f4fd; color: #1a6fa0; }
+.dd-status-pass    { background: #e6f7ee; color: #1a7a4a; }
+.dd-status-fail    { background: #fff4e6; color: #c25a00; }
+.dd-status-error   { background: #fdf0f0; color: #b72e2e; }
+
+.dd-result {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
+.dd-result-row {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.dd-result-row:last-child { border-bottom: none; }
+
+.dd-result-key {
+  color: var(--muted);
+  min-width: 130px;
+  flex-shrink: 0;
+}
+
+.dd-result-val {
+  color: var(--ink);
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.dd-result-val.danger  { color: var(--rose); }
+.dd-result-val.warning { color: var(--gold); }
+.dd-result-val.ok      { color: var(--green); }
+
+.dd-notice {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f9fbf9;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+}
+
 /* ─── Litigation Pipeline ───────────────────────────────────────────────── */
 
 .lit-matter-card {

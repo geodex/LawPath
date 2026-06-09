@@ -1,6 +1,6 @@
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Home, Plus, TrendingUp } from "lucide-react";
-import { FormEvent, useState } from "react";
-import { advanceConveyancingStage, createConveyancingMatter, updateConveyancingClearances } from "./api";
+import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Plus, ShieldCheck } from "lucide-react";
+import { FormEvent, useCallback, useState } from "react";
+import { advanceConveyancingStage, callVerifyNow, createConveyancingMatter, updateConveyancingClearances } from "./api";
 import type { ConveyancingMatter, ConveyancingStage } from "./types";
 
 const money = (cents: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(cents / 100);
@@ -29,6 +29,289 @@ const MATTER_TYPE_LABELS: Record<ConveyancingMatter["matterType"], string> = {
 
 const CLEARANCE_STATUSES = ["Not requested", "Requested", "Received", "Expired"] as const;
 const FICA_STATUSES = ["Pending", "In Progress", "Compliant"] as const;
+
+// ─── VerifyNow Due Diligence ──────────────────────────────────────────────────
+
+type VnStatus = "idle" | "loading" | "pass" | "fail" | "error";
+
+interface VnCheckState {
+  status: VnStatus;
+  result?: Record<string, unknown>;
+  error?: string;
+  creditsSpent?: number;
+}
+
+type VnChecks = Record<string, VnCheckState>;   // keyed by matterId:checkKey
+
+const BANKS = ["ABSA", "FNB", "Standard Bank", "Nedbank", "Capitec", "Investec", "African Bank", "TymeBank", "Discovery Bank"];
+
+function statusClass(s: VnStatus) {
+  return `dd-status dd-status-${s}`;
+}
+
+function statusLabel(s: VnStatus) {
+  return s === "idle" ? "Not run" : s === "loading" ? "Checking…" : s === "pass" ? "Passed" : s === "fail" ? "Flagged" : "Error";
+}
+
+function ResultRow({ label, value, variant }: { label: string; value: string; variant?: "danger" | "warning" | "ok" }) {
+  return (
+    <div className="dd-result-row">
+      <span className="dd-result-key">{label}</span>
+      <span className={`dd-result-val${variant ? ` ${variant}` : ""}`}>{value || "—"}</span>
+    </div>
+  );
+}
+
+function DueDiligencePanel({
+  matter, checks, onRun, showToast
+}: {
+  matter: ConveyancingMatter;
+  checks: VnChecks;
+  onRun: (checkKey: string, service: string, payload: Record<string, unknown>) => Promise<void>;
+  showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
+}) {
+  const [buyerSaId, setBuyerSaId]       = useState("");
+  const [sellerSaId, setSellerSaId]     = useState("");
+  const [bankName, setBankName]         = useState("FNB");
+  const [accountNumber, setAccountNumber] = useState("");
+  const [accountHolder, setAccountHolder] = useState("");
+  const [cipcReg, setCipcReg]           = useState("");
+
+  const ck = (key: string): VnCheckState => checks[`${matter.id}:${key}`] ?? { status: "idle" };
+
+  function renderResult(key: string, content: React.ReactNode) {
+    const state = ck(key);
+    if (state.status === "idle" || state.status === "loading") return null;
+    if (state.status === "error") return <div className="dd-result"><ResultRow label="Error" value={state.error ?? "Unknown error"} variant="danger" /></div>;
+    return <div className="dd-result">{content}</div>;
+  }
+
+  // ── ID Verification ───────────────────────────────────────────────────────
+  function runIdVerify(party: "buyer" | "seller") {
+    const idNum = party === "buyer" ? buyerSaId : sellerSaId;
+    const name  = party === "buyer" ? matter.buyerName : matter.sellerName;
+    if (!idNum.trim()) { showToast("error", "SA ID required", `Enter ${party}'s 13-digit SA ID number.`); return; }
+    return onRun(`id-${party}`, "verify", { id_number: idNum.trim(), full_name: name });
+  }
+
+  function renderIdResult(key: string) {
+    const state = ck(key);
+    if (state.status !== "pass" && state.status !== "fail") return null;
+    const d = (state.result ?? {}) as Record<string, string>;
+    const vs = d.verification_status ?? "unknown";
+    return renderResult(key, <>
+      <ResultRow label="Verification status" value={vs.replace(/_/g, " ")} variant={vs === "verified" ? "ok" : "danger"} />
+      <ResultRow label="Full name" value={d.full_name} />
+      <ResultRow label="Date of birth" value={d.dob} />
+      <ResultRow label="Gender" value={d.gender} />
+      <ResultRow label="Deceased" value={d.deceased === "true" ? "Yes — DO NOT PROCEED" : "No"} variant={d.deceased === "true" ? "danger" : "ok"} />
+      <ResultRow label="ID number" value={d.id_number} />
+    </>);
+  }
+
+  // ── AML / PEP Screening ───────────────────────────────────────────────────
+  function runAmlPep(party: "buyer" | "seller") {
+    const idNum = party === "buyer" ? buyerSaId : sellerSaId;
+    const name  = party === "buyer" ? matter.buyerName : matter.sellerName;
+    if (!name.trim()) { showToast("error", "Name required", `Enter ${party} name.`); return; }
+    return onRun(`aml-${party}`, "aml-pep", { full_name: name, id_number: idNum.trim() || undefined });
+  }
+
+  function renderAmlResult(key: string) {
+    const state = ck(key);
+    if (state.status !== "pass" && state.status !== "fail") return null;
+    const d = (state.result ?? {}) as Record<string, string>;
+    const isPep       = d.is_pep === "true";
+    const isSanctioned = d.is_sanctioned === "true";
+    const risk        = d.risk_level ?? "unknown";
+    return renderResult(key, <>
+      <ResultRow label="Risk level" value={risk.toUpperCase()} variant={risk === "high" ? "danger" : risk === "medium" ? "warning" : "ok"} />
+      <ResultRow label="PEP status" value={isPep ? "⚠ Politically Exposed Person" : "Not flagged"} variant={isPep ? "warning" : "ok"} />
+      <ResultRow label="Sanctions" value={isSanctioned ? "⛔ SANCTIONED — halt transaction" : "Clear"} variant={isSanctioned ? "danger" : "ok"} />
+      <ResultRow label="Matches found" value={d.match_count ?? "0"} />
+      {isPep && <ResultRow label="Note" value="Enhanced due diligence required per FICA §21" variant="warning" />}
+    </>);
+  }
+
+  // ── Bank Account Verification ─────────────────────────────────────────────
+  function runBankVerify() {
+    if (!accountNumber.trim() || !accountHolder.trim()) {
+      showToast("error", "Fields required", "Enter account holder name and account number."); return;
+    }
+    return onRun("bank-verify", "bank-account-verification", {
+      bank_name: bankName, account_number: accountNumber.trim(), account_holder: accountHolder.trim()
+    });
+  }
+
+  function renderBankResult() {
+    const state = ck("bank-verify");
+    if (state.status !== "pass" && state.status !== "fail") return null;
+    const d = (state.result ?? {}) as Record<string, string>;
+    const verified = d.verified === "true";
+    return renderResult("bank-verify", <>
+      <ResultRow label="Verified" value={verified ? "Yes — account active" : "No — mismatch or closed"} variant={verified ? "ok" : "danger"} />
+      <ResultRow label="Account holder" value={d.account_holder_name} />
+      <ResultRow label="Bank" value={d.bank_name} />
+      <ResultRow label="Account number" value={d.account_number} />
+      <ResultRow label="Account type" value={d.account_type} />
+    </>);
+  }
+
+  // ── CIPC Company Lookup ───────────────────────────────────────────────────
+  function runCipc() {
+    if (!cipcReg.trim()) { showToast("error", "Reg number required", "Enter company registration number (e.g. 2006/123456/07)."); return; }
+    return onRun("cipc", "cipc/company", { registration_number: cipcReg.trim() });
+  }
+
+  function renderCipcResult() {
+    const state = ck("cipc");
+    if (state.status !== "pass" && state.status !== "fail") return null;
+    const d = (state.result ?? {}) as Record<string, string>;
+    const active = (d.status ?? "").toLowerCase().includes("active");
+    return renderResult("cipc", <>
+      <ResultRow label="Company name" value={d.company_name} />
+      <ResultRow label="Reg number" value={d.registration_number} />
+      <ResultRow label="Status" value={d.status} variant={active ? "ok" : "warning"} />
+      <ResultRow label="Company type" value={d.company_type} />
+      <ResultRow label="Registered date" value={d.registration_date} />
+      <ResultRow label="Business address" value={d.registered_address} />
+    </>);
+  }
+
+  const SpinIcon = () => <Loader2 size={13} style={{ animation: "spin 0.8s linear infinite" }} />;
+
+  return (
+    <div className="dd-panel">
+      <h4 style={{ margin: "0 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
+        <ShieldCheck size={18} color="var(--green)" /> VerifyNow Due Diligence
+      </h4>
+      <p style={{ fontSize: "0.82rem", color: "var(--muted)", margin: "0 0 14px" }}>
+        FICA-compliant identity, AML/PEP, bank and CIPC checks — all logged and credit-tracked via VerifyNow SA.
+      </p>
+
+      <div className="dd-grid">
+        {/* ── Buyer ID Verify ─────────────────────────────── */}
+        <div className="dd-card">
+          <div className="dd-card-head">
+            <span className="dd-card-title">Buyer — ID Verify</span>
+            <span className="dd-card-cost">~1 credit</span>
+          </div>
+          <p style={{ margin: "0 0 8px", fontSize: "0.83rem", color: "var(--muted)" }}>{matter.buyerName}</p>
+          <div className="dd-input-row">
+            <input value={buyerSaId} onChange={e => setBuyerSaId(e.target.value)} placeholder="SA ID number (13 digits)" maxLength={13} />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="primary small" onClick={() => runIdVerify("buyer")} disabled={ck("id-buyer").status === "loading"}>
+              {ck("id-buyer").status === "loading" ? <><SpinIcon /> Checking</> : "Verify"}
+            </button>
+            <span className={statusClass(ck("id-buyer").status)}>{statusLabel(ck("id-buyer").status)}</span>
+          </div>
+          {renderIdResult("id-buyer")}
+        </div>
+
+        {/* ── Seller ID Verify ─────────────────────────────── */}
+        <div className="dd-card">
+          <div className="dd-card-head">
+            <span className="dd-card-title">Seller — ID Verify</span>
+            <span className="dd-card-cost">~1 credit</span>
+          </div>
+          <p style={{ margin: "0 0 8px", fontSize: "0.83rem", color: "var(--muted)" }}>{matter.sellerName}</p>
+          <div className="dd-input-row">
+            <input value={sellerSaId} onChange={e => setSellerSaId(e.target.value)} placeholder="SA ID number (13 digits)" maxLength={13} />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="primary small" onClick={() => runIdVerify("seller")} disabled={ck("id-seller").status === "loading"}>
+              {ck("id-seller").status === "loading" ? <><SpinIcon /> Checking</> : "Verify"}
+            </button>
+            <span className={statusClass(ck("id-seller").status)}>{statusLabel(ck("id-seller").status)}</span>
+          </div>
+          {renderIdResult("id-seller")}
+        </div>
+
+        {/* ── Buyer AML / PEP ──────────────────────────────── */}
+        <div className="dd-card">
+          <div className="dd-card-head">
+            <span className="dd-card-title">Buyer — AML / PEP Screen</span>
+            <span className="dd-card-cost">~2 credits</span>
+          </div>
+          <p style={{ margin: "0 0 8px", fontSize: "0.83rem", color: "var(--muted)" }}>{matter.buyerName}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="primary small" onClick={() => runAmlPep("buyer")} disabled={ck("aml-buyer").status === "loading"}>
+              {ck("aml-buyer").status === "loading" ? <><SpinIcon /> Screening</> : "Screen"}
+            </button>
+            <span className={statusClass(ck("aml-buyer").status)}>{statusLabel(ck("aml-buyer").status)}</span>
+          </div>
+          {renderAmlResult("aml-buyer")}
+        </div>
+
+        {/* ── Seller AML / PEP ─────────────────────────────── */}
+        <div className="dd-card">
+          <div className="dd-card-head">
+            <span className="dd-card-title">Seller — AML / PEP Screen</span>
+            <span className="dd-card-cost">~2 credits</span>
+          </div>
+          <p style={{ margin: "0 0 8px", fontSize: "0.83rem", color: "var(--muted)" }}>{matter.sellerName}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="primary small" onClick={() => runAmlPep("seller")} disabled={ck("aml-seller").status === "loading"}>
+              {ck("aml-seller").status === "loading" ? <><SpinIcon /> Screening</> : "Screen"}
+            </button>
+            <span className={statusClass(ck("aml-seller").status)}>{statusLabel(ck("aml-seller").status)}</span>
+          </div>
+          {renderAmlResult("aml-seller")}
+        </div>
+
+        {/* ── Bank Account Verification ─────────────────────── */}
+        <div className="dd-card">
+          <div className="dd-card-head">
+            <span className="dd-card-title">Bank Account Verify</span>
+            <span className="dd-card-cost">~2 credits</span>
+          </div>
+          <p style={{ margin: "0 0 8px", fontSize: "0.83rem", color: "var(--muted)" }}>Verify disbursement / purchase account</p>
+          <div className="dd-input-row" style={{ marginBottom: 6 }}>
+            <input value={accountHolder} onChange={e => setAccountHolder(e.target.value)} placeholder="Account holder name" />
+          </div>
+          <div className="dd-input-row">
+            <select value={bankName} onChange={e => setBankName(e.target.value)} style={{ maxWidth: 130, flex: "none" }}>
+              {BANKS.map(b => <option key={b}>{b}</option>)}
+            </select>
+            <input value={accountNumber} onChange={e => setAccountNumber(e.target.value)} placeholder="Account number" />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="primary small" onClick={runBankVerify} disabled={ck("bank-verify").status === "loading"}>
+              {ck("bank-verify").status === "loading" ? <><SpinIcon /> Verifying</> : "Verify"}
+            </button>
+            <span className={statusClass(ck("bank-verify").status)}>{statusLabel(ck("bank-verify").status)}</span>
+          </div>
+          {renderBankResult()}
+        </div>
+
+        {/* ── CIPC Company Lookup ──────────────────────────── */}
+        <div className="dd-card">
+          <div className="dd-card-head">
+            <span className="dd-card-title">CIPC Company Lookup</span>
+            <span className="dd-card-cost">~1 credit</span>
+          </div>
+          <p style={{ margin: "0 0 8px", fontSize: "0.83rem", color: "var(--muted)" }}>For company or CC buyer / seller</p>
+          <div className="dd-input-row">
+            <input value={cipcReg} onChange={e => setCipcReg(e.target.value)} placeholder="Reg no e.g. 2006/123456/07" />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="primary small" onClick={runCipc} disabled={ck("cipc").status === "loading"}>
+              {ck("cipc").status === "loading" ? <><SpinIcon /> Looking up</> : "Look up"}
+            </button>
+            <span className={statusClass(ck("cipc").status)}>{statusLabel(ck("cipc").status)}</span>
+          </div>
+          {renderCipcResult()}
+        </div>
+      </div>
+
+      <p className="dd-notice">
+        Each check consumes VerifyNow credits from your tenant balance. Results are logged in Super Admin → VerifyNow Usage.
+        These checks do not constitute legal advice — attorney review of all flagged results is required per FICA §21 and the LPC Rules of Conduct.
+      </p>
+    </div>
+  );
+}
 
 function calcTransferDuty(priceCents: number): number {
   const p = priceCents / 100;
@@ -72,6 +355,8 @@ export function ConveyancingPipeline({
   const [windeedResults, setWindeedResults] = useState<any[]>([]);
   const [windeedQuery, setWindeedQuery] = useState("");
   const [windeedLoading, setWindeedLoading] = useState(false);
+  // VerifyNow: keyed by "matterId:checkKey"
+  const [vnChecks, setVnChecks] = useState<VnChecks>({});
 
   const selected = matters.find(m => m.id === selectedId) ?? null;
   const totalFees = matters.reduce((s, m) => s + m.conveyancingFeeCents + m.vatOnFeeCents, 0);
@@ -158,6 +443,52 @@ export function ConveyancingPipeline({
       setWindeedLoading(false);
     }
   }
+
+  const handleVnRun = useCallback(async (
+    checkKey: string,
+    service: string,
+    payload: Record<string, unknown>
+  ) => {
+    if (!selectedId) return;
+    const fullKey = `${selectedId}:${checkKey}`;
+    setVnChecks(prev => ({ ...prev, [fullKey]: { status: "loading" } }));
+    try {
+      const res = await callVerifyNow(service, payload);
+      // Flatten the top-level data object into a string-keyed map for display
+      const flat: Record<string, string> = {};
+      function flatten(obj: unknown, prefix = "") {
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+          for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+            flatten(v, prefix ? `${prefix}_${k}` : k);
+          }
+        } else {
+          flat[prefix] = String(obj ?? "");
+        }
+      }
+      flatten(res.data);
+      // Determine pass/fail from known fields
+      const failed =
+        flat["verification_status"]?.includes("not_verified") ||
+        flat["verified"] === "false" ||
+        flat["is_sanctioned"] === "true" ||
+        flat["risk_level"] === "high" ||
+        flat["status"]?.toLowerCase().includes("deregistered");
+      setVnChecks(prev => ({
+        ...prev,
+        [fullKey]: {
+          status: failed ? "fail" : "pass",
+          result: flat,
+          creditsSpent: res.metadata?.credits_spent ?? 0
+        }
+      }));
+      showToast(failed ? "error" : "success", `VerifyNow: ${checkKey}`, failed ? "Check flagged — review result below." : "Check passed.");
+      log(`VerifyNow ${service} — ${failed ? "FLAGGED" : "PASS"} (${res.metadata?.credits_spent ?? 0} credits)`);
+    } catch (err: unknown) {
+      const msg = (err instanceof Error) ? err.message : "Check failed";
+      setVnChecks(prev => ({ ...prev, [fullKey]: { status: "error", error: msg } }));
+      showToast("error", "VerifyNow error", msg);
+    }
+  }, [selectedId, showToast, log]);
 
   async function handleClearanceUpdate(field: string, value: string) {
     if (!selected) return;
@@ -369,6 +700,15 @@ export function ConveyancingPipeline({
                       <div style={{ marginTop: 4 }}>Value: {r.municipalValue} · Rates: {r.ratesLevied}</div>
                     </div>
                   ))}
+
+                  {/* VerifyNow Due Diligence */}
+                  <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "22px 0" }} />
+                  <DueDiligencePanel
+                    matter={m}
+                    checks={vnChecks}
+                    onRun={handleVnRun}
+                    showToast={showToast}
+                  />
                 </div>
               )}
             </div>

@@ -438,6 +438,16 @@ export async function getCorpusDocumentText(docId: string) {
 
 // ─── VERIFYNOW SA ─────────────────────────────────────────────────────────────
 
+/** Tenant-facing proxy — call any VerifyNow service.
+ *  @param service  e.g. "verify", "aml-pep", "bank-account-verification", "cipc/company"
+ *  @param body     Service-specific request payload */
+export async function callVerifyNow(service: string, body: Record<string, unknown>) {
+  return request<{ data: Record<string, unknown>; metadata: { credits_spent: number; request_id: string } }>(
+    `/api/verifynow/${service}`,
+    { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
 export async function getVerifyNowUsage() {
   return request<{
     totals: import("./types").VerifyNowUsageTotals;
