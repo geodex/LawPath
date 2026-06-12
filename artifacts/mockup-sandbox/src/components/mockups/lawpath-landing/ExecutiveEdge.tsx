@@ -125,7 +125,7 @@ export function ExecutiveEdge() {
                   <div className="flex items-center gap-2 border-b border-slate-800 pb-6 mb-8">
                     <button 
                       onClick={() => setActiveTab('register')}
-                      className={\`flex-1 pb-4 text-sm font-bold tracking-widest uppercase transition-colors relative \${activeTab === 'register' ? 'text-platinum' : 'text-slate-500 hover:text-slate-300'}\`}
+                      className={`flex-1 pb-4 text-sm font-bold tracking-widest uppercase transition-colors relative \${activeTab === 'register' ? 'text-platinum' : 'text-slate-500 hover:text-slate-300'}`}
                     >
                       Register Firm
                       {activeTab === 'register' && (
@@ -134,7 +134,7 @@ export function ExecutiveEdge() {
                     </button>
                     <button 
                       onClick={() => setActiveTab('login')}
-                      className={\`flex-1 pb-4 text-sm font-bold tracking-widest uppercase transition-colors relative \${activeTab === 'login' ? 'text-platinum' : 'text-slate-500 hover:text-slate-300'}\`}
+                      className={`flex-1 pb-4 text-sm font-bold tracking-widest uppercase transition-colors relative \${activeTab === 'login' ? 'text-platinum' : 'text-slate-500 hover:text-slate-300'}`}
                     >
                       Login
                       {activeTab === 'login' && (

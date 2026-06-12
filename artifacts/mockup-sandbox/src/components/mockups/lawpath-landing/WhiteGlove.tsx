@@ -152,14 +152,14 @@ export function WhiteGlove() {
               <div className="flex border-b border-gray-100 mb-8">
                 <button 
                   onClick={() => setAuthTab("register")}
-                  className={\`flex-1 pb-4 text-xs uppercase tracking-widest font-medium transition-all relative \${authTab === 'register' ? 'text-[#0A1128]' : 'text-gray-400 hover:text-gray-600'}\`}
+                  className={`flex-1 pb-4 text-xs uppercase tracking-widest font-medium transition-all relative \${authTab === 'register' ? 'text-[#0A1128]' : 'text-gray-400 hover:text-gray-600'}`}
                 >
                   Register
                   {authTab === "register" && <span className="absolute bottom-0 left-0 w-full h-[1px] bg-[#0A1128]"></span>}
                 </button>
                 <button 
                   onClick={() => setAuthTab("login")}
-                  className={\`flex-1 pb-4 text-xs uppercase tracking-widest font-medium transition-all relative \${authTab === 'login' ? 'text-[#0A1128]' : 'text-gray-400 hover:text-gray-600'}\`}
+                  className={`flex-1 pb-4 text-xs uppercase tracking-widest font-medium transition-all relative \${authTab === 'login' ? 'text-[#0A1128]' : 'text-gray-400 hover:text-gray-600'}`}
                 >
                   Login
                   {authTab === "login" && <span className="absolute bottom-0 left-0 w-full h-[1px] bg-[#0A1128]"></span>}
