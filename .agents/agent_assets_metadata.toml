@@ -1,0 +1,20 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "sttOxFxsk3loxEIIjp51-"
+uri = "file://artifacts/mockup-sandbox/public/images/hero-dark-prestige.png"
+type = "image"
+title = "Dark prestige hero background"
+
+[[generated]]
+id = "7umSUrDnvJPSwZ53-ynLg"
+uri = "file://artifacts/mockup-sandbox/public/images/hero-white-glove.png"
+type = "image"
+title = "White marble with navy veins"
+
+[[generated]]
+id = "23IAY1fP6bvP0MAmEWqU2"
+uri = "file://artifacts/mockup-sandbox/public/images/hero-executive-edge.png"
+type = "image"
+title = "midnight navy hero background"
