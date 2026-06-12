@@ -25,6 +25,7 @@ import {
   Send,
   ServerCog,
   Settings,
+  Lock,
   Shield,
   ShieldAlert,
   ShieldCheck,
@@ -32,6 +33,7 @@ import {
   Split,
   Timer,
   UserCheck,
+  UserCircle,
   UserPlus,
   TrendingUp,
   Users,
@@ -805,43 +807,66 @@ function MarketingAuth({
   return (
     <main className="public-page">
       <nav className="public-nav">
-        <div className="brand public-brand">
+        <div className="public-brand">
           <div className="brand-mark">LP</div>
-          <div>
+          <div className="public-brand-text">
             <strong>LawPath SA</strong>
-            <span>AI practice platform</span>
+            <span>AI Practice Platform</span>
           </div>
         </div>
         <div className="public-actions">
-          <button className="ghost" onClick={() => setMode("login")}><LogIn size={18} /> Login</button>
-          <button className="primary" onClick={() => setMode("register")}><UserPlus size={18} /> Register</button>
+          <button className="ghost" onClick={() => setMode("login")}><LogIn size={16} /> Login</button>
+          <button className="primary" onClick={() => setMode("register")}><UserPlus size={16} /> Start Firm Account</button>
         </div>
       </nav>
 
       <section className="public-hero">
+        <div className="public-hero-bg">
+          <img src="/images/hero-dark-prestige.png" alt="" aria-hidden="true" />
+        </div>
+
         <div className="public-copy">
-          <p className="eyebrow">SaaS for South African law firms</p>
-          <h1>Run conveyancing, research, drafting, billing and client portals from one tenant-safe workspace.</h1>
+          <p className="public-eyebrow">Enterprise-Grade Legal AI</p>
+          <h1>Run your entire practice from <em>one tenant-safe</em> workspace.</h1>
           <p>LawPath SA gives each firm its own secure company workspace while platform super admins manage shared AI, email infrastructure and model routing centrally.</p>
           <div className="hero-ctas">
             <button className="primary" onClick={() => setMode("register")}><ArrowRight size={18} /> Start firm account</button>
-            <button className="ghost" onClick={() => setMode("login")}><LogIn size={18} /> Login to workspace</button>
+            <button className="ghost" onClick={() => setMode("login")}><Lock size={16} /> Login to workspace</button>
           </div>
           <div className="public-proof">
-            <span>Multi-tenant data isolation</span>
-            <span>Tenant-branded portal emails</span>
-            <span>Super-admin AI controls</span>
+            <span><Shield size={13} /> Multi-tenant data isolation</span>
+            <span><Lock size={13} /> Super-admin AI controls</span>
+            <span><UserCircle size={13} /> Tenant-branded portal emails</span>
           </div>
         </div>
+
         <AuthPanel mode={mode} setMode={setMode} message={message} onLogin={onLogin} onRegister={onRegister} onForgotPassword={onForgotPassword} onResumeSession={onResumeSession} busy={busy} />
       </section>
 
       <section className="sales-grid">
-        <SalesCard icon={FilePenLine} title="Draft legal contracts" text="Generate matter-linked first drafts, review clauses and keep attorney approval in the loop." />
-        <SalesCard icon={Search} title="Research at scale" text="Index large case-law bundles, summarize issues and connect authorities to active matters." />
-        <SalesCard icon={UsersRound} title="Client portals" text="Invite clients or estate agents to view conveyancing progress without exposing firm data." />
-        <SalesCard icon={CircleDollarSign} title="Practice operations" text="Manage invoices, bookings, legal secretary tasks and tenant-branded communications." />
+        <div className="sales-grid-header">
+          <h2>Uncompromising Capabilities</h2>
+          <div className="sales-grid-divider"></div>
+          <p>Purpose-built infrastructure for modern South African law firms requiring both power and absolute confidentiality.</p>
+        </div>
+        <SalesCard icon={FilePenLine} title="Draft legal contracts" text="AI-assisted contract drafting trained on SA legal precedents. Generate compliant agreements in minutes." />
+        <SalesCard icon={Search} title="Research at scale" text="Search thousands of case laws and statutes. Extract relevant arguments and synthesize findings securely." />
+        <SalesCard icon={UsersRound} title="Client portals" text="Firm-branded environments for clients to review documents, sign agreements, and communicate directly." />
+        <SalesCard icon={CircleDollarSign} title="Practice operations" text="Streamline conveyancing pipelines, automate billing, and track time across your entire partnership." />
       </section>
+
+      <footer className="public-footer">
+        <div className="public-footer-brand">
+          <div className="public-footer-brand-mark">LP</div>
+          <span className="public-footer-name">LawPath SA</span>
+          <span className="public-footer-copy">© {new Date().getFullYear()} All rights reserved.</span>
+        </div>
+        <div className="public-footer-links">
+          <a href="#">Privacy</a>
+          <a href="#">Terms</a>
+          <a href="#">Contact</a>
+        </div>
+      </footer>
     </main>
   );
 }

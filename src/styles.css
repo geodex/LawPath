@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
 /* ─── Keyframes ─────────────────────────────────────────────────────────── */
 
@@ -117,231 +117,561 @@ button:disabled {
   outline-offset: 2px;
 }
 
-/* ─── Public Marketing Page ──────────────────────────────────────────────── */
+/* ─── Public Marketing Page (Dark Prestige) ─────────────────────────────── */
 
 .public-page {
   min-height: 100vh;
-  background: var(--paper);
+  background: #0a0a0a;
+  color: #cbd5e1;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  overflow-x: hidden;
 }
 
 .public-nav {
+  position: fixed;
+  top: 0;
+  width: 100%;
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 20px clamp(20px, 4vw, 56px);
-  border-bottom: 1px solid var(--line);
-  background: rgba(243,245,242,0.92);
+  padding: 0 clamp(20px, 4vw, 48px);
+  height: 80px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  background: rgba(10,10,10,0.85);
   backdrop-filter: blur(12px);
-  position: sticky;
-  top: 0;
-  z-index: 20;
+}
+
+.public-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
 .public-brand .brand-mark {
-  width: 46px;
-  height: 46px;
+  width: 40px;
+  height: 40px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #d97706, #92400e);
+  color: #fff;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
   display: grid;
   place-items: center;
-  background: #f0c84a;
-  color: var(--green-dark);
-  font-weight: 900;
-  border-radius: var(--radius-lg);
-  font-size: 1.1rem;
-  letter-spacing: -0.02em;
 }
 
-.public-actions,
-.hero-ctas {
+.public-brand-text strong {
+  display: block;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+
+.public-brand-text span {
+  display: block;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: rgba(245,158,11,0.8);
+  font-weight: 500;
+}
+
+.public-actions {
   display: flex;
   gap: 10px;
-  flex-wrap: wrap;
   align-items: center;
+}
+
+.public-page button.primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 24px;
+  background: #d97706;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.88rem;
+  border-radius: 2px;
+  border: 0;
+  box-shadow: 0 0 18px rgba(217,119,6,0.18);
+  transition: background 0.15s, box-shadow 0.15s;
+  cursor: pointer;
+}
+
+.public-page button.primary:hover:not(:disabled) {
+  background: #b45309;
+  box-shadow: 0 0 24px rgba(217,119,6,0.28);
+}
+
+.public-page button.ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 22px;
+  background: rgba(0,0,0,0.2);
+  color: #e2e8f0;
+  font-weight: 500;
+  font-size: 0.88rem;
+  border-radius: 2px;
+  border: 1px solid rgba(255,255,255,0.16);
+  backdrop-filter: blur(8px);
+  transition: background 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+
+.public-page button.ghost:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.28);
 }
 
 .public-hero {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 460px);
-  gap: clamp(24px, 4vw, 60px);
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 480px);
+  gap: clamp(24px, 4vw, 64px);
   align-items: center;
-  min-height: calc(100vh - 88px);
-  padding: clamp(28px, 6vw, 84px) clamp(20px, 5vw, 70px);
+  min-height: 100vh;
+  padding: 120px clamp(20px, 5vw, 56px) 80px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.public-hero-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.public-hero-bg img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.4;
+  mix-blend-mode: luminosity;
+}
+
+.public-hero-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   background:
-    linear-gradient(108deg, rgba(243,245,242,0.97) 0%, rgba(243,245,242,0.80) 55%, rgba(230,238,233,0.72) 100%),
-    url('/assets/legal-workspace.png') center / cover no-repeat;
+    linear-gradient(to top, #0a0a0a, rgba(10,10,10,0.8) 50%, transparent),
+    linear-gradient(to right, #0a0a0a, transparent 55%, #0a0a0a);
+}
+
+.public-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.public-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  margin-bottom: 32px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #f59e0b;
+}
+
+.public-eyebrow::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: dp-pulse 2s infinite;
+}
+
+@keyframes dp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .public-copy h1 {
-  max-width: 980px;
-  margin-bottom: 20px;
-  font-family: var(--font-serif);
-  font-size: clamp(2.6rem, 6vw, 5.4rem);
-  line-height: 0.97;
-  letter-spacing: -0.025em;
-  color: var(--ink);
+  max-width: 800px;
+  margin: 0 0 24px 0;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(2.8rem, 5.5vw, 5.5rem);
+  line-height: 1.05;
+  font-weight: 500;
+  color: #fff;
+  letter-spacing: -0.01em;
 }
 
-.public-copy p {
-  max-width: 760px;
-  color: var(--muted);
-  font-size: 1.1rem;
-  line-height: 1.65;
+.public-copy h1 em {
+  font-style: normal;
+  background: linear-gradient(135deg, #fde68a, #d97706);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.public-copy > p {
+  max-width: 600px;
+  color: #94a3b8;
+  font-size: 1.05rem;
+  line-height: 1.7;
+  font-weight: 300;
+  margin: 0 0 36px 0;
+}
+
+.hero-ctas {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 48px;
+}
+
+.hero-ctas button {
+  height: 54px;
+  padding: 0 30px;
+  font-size: 0.93rem;
 }
 
 .public-proof {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  margin-top: 26px;
+  padding-top: 32px;
+  border-top: 1px solid rgba(255,255,255,0.08);
 }
 
 .public-proof span {
   display: inline-flex;
   align-items: center;
+  gap: 7px;
   min-height: 36px;
   padding: 0 14px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.90);
-  border: 1px solid var(--line);
-  color: var(--green-dark);
-  font-weight: 700;
-  font-size: 0.84rem;
-  box-shadow: var(--shadow-sm);
+  border-radius: 2px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: #cbd5e1;
+  font-size: 0.8rem;
 }
 
 .auth-card {
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(255,255,255,0.97);
-  box-shadow: var(--shadow-xl);
-  backdrop-filter: blur(12px);
+  position: relative;
+  z-index: 1;
+  background: #111111;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  box-shadow: 0 25px 80px rgba(0,0,0,0.6);
   overflow: hidden;
+}
+
+.auth-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(to right, #d97706, #fbbf24);
+  z-index: 2;
 }
 
 .auth-card-brand {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 22px 26px 18px;
-  border-bottom: 1px solid var(--line);
-  background: linear-gradient(135deg, #f7faf7 0%, #eef3ef 100%);
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  background: transparent;
 }
 
 .auth-card-brand .brand-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, #177a5f, #0f6b52);
-  color: #f0c84a;
+  width: 42px;
+  height: 42px;
+  border-radius: 4px;
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #f59e0b;
   display: grid;
   place-items: center;
-  font-weight: 900;
-  font-size: 1rem;
-  letter-spacing: -0.02em;
-  box-shadow: 0 2px 8px rgba(23,122,95,0.3);
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  letter-spacing: 0.05em;
 }
 
 .auth-card-brand-text strong {
   display: block;
-  font-size: 0.95rem;
-  font-weight: 800;
-  color: var(--ink);
-  letter-spacing: -0.01em;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.02em;
 }
 
 .auth-card-brand-text span {
-  font-size: 0.78rem;
-  color: var(--muted);
-  font-weight: 500;
+  font-size: 0.73rem;
+  color: #475569;
+  font-weight: 400;
 }
 
 .auth-card-body {
-  padding: 22px 26px 26px;
+  padding: 24px 28px 28px;
 }
 
 .auth-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  padding: 4px;
-  margin-bottom: 20px;
-  border-radius: 10px;
-  background: #eaf0eb;
+  gap: 3px;
+  padding: 3px;
+  margin-bottom: 22px;
+  border-radius: 4px;
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.05);
 }
 
 .auth-tabs button {
-  min-height: 36px;
+  min-height: 38px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 3px;
   background: transparent;
-  color: var(--muted);
-  font-weight: 600;
-  font-size: 0.875rem;
+  color: #475569;
+  font-weight: 500;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   transition: all 0.15s;
-  letter-spacing: 0.01em;
 }
 
 .auth-tabs button.active {
-  background: #ffffff;
-  color: var(--ink);
-  box-shadow: 0 1px 4px rgba(13,27,23,0.10), 0 1px 2px rgba(13,27,23,0.06);
-  font-weight: 700;
+  background: #222222;
+  color: #f59e0b;
+  font-weight: 600;
 }
 
 .auth-message {
   margin-bottom: 16px;
-  color: var(--muted);
-  font-size: 0.875rem;
+  color: #475569;
+  font-size: 0.84rem;
   line-height: 1.5;
 }
 
 .link-button {
-  min-height: 38px;
+  min-height: 36px;
   border: 0;
   background: transparent;
-  color: var(--green);
-  font-weight: 700;
+  color: #d97706;
+  font-weight: 500;
+  font-size: 0.83rem;
   text-decoration: underline;
   text-underline-offset: 2px;
+  transition: color 0.15s;
+}
+
+.link-button:hover { color: #f59e0b; }
+
+.public-page .form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.public-page .form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #475569;
+  font-weight: 500;
+}
+
+.public-page .form input {
+  height: 46px;
+  padding: 0 14px;
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 2px;
+  color: #fff;
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color 0.15s;
+  outline: none;
+}
+
+.public-page .form input:focus {
+  border-color: rgba(245,158,11,0.5);
+}
+
+.public-page .form input::placeholder {
+  color: #334155;
+  opacity: 1;
+}
+
+.public-page .form button.primary {
+  height: 48px;
+  margin-top: 6px;
+  padding: 0 20px;
+  font-size: 0.88rem;
 }
 
 .sales-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
-  padding: 0 clamp(20px, 5vw, 70px) 60px;
+  padding: 80px clamp(20px, 5vw, 56px);
+  background: #050505;
+}
+
+.sales-grid-header {
+  grid-column: 1 / -1;
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.sales-grid-header h2 {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(1.8rem, 3.5vw, 3rem);
+  color: #fff;
+  font-weight: 500;
+  margin: 0 0 16px;
+}
+
+.sales-grid-divider {
+  width: 64px;
+  height: 1px;
+  background: #d97706;
+  margin: 0 auto 18px;
+}
+
+.sales-grid-header p {
+  color: #475569;
+  font-size: 1rem;
+  font-weight: 300;
+  max-width: 560px;
+  margin: 0 auto;
 }
 
 .sales-card {
-  padding: 22px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--panel);
-  box-shadow: var(--shadow-sm);
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  padding: 32px;
+  border-radius: 2px;
+  background: #111;
+  border: 1px solid rgba(255,255,255,0.05);
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
 
 .sales-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg);
+  transform: translateY(-3px);
+  border-color: rgba(217,119,6,0.3);
+  background: #151515;
+  box-shadow: none;
 }
 
 .sales-card svg {
-  color: var(--green);
-  margin-bottom: 14px;
+  color: #f59e0b;
+  margin-bottom: 20px;
 }
 
 .sales-card strong {
   display: block;
-  margin-bottom: 8px;
-  font-size: 0.975rem;
+  margin-bottom: 10px;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.35rem;
+  font-weight: 500;
+  color: #fff;
+  letter-spacing: 0.01em;
 }
 
 .sales-card p {
-  margin-bottom: 0;
-  color: var(--muted);
-  font-size: 0.9rem;
+  margin: 0;
+  color: #475569;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  font-weight: 300;
+}
+
+.public-footer {
+  padding: 36px clamp(20px, 5vw, 56px);
+  background: #050505;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.public-footer-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.public-footer-brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #d97706, #92400e);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+}
+
+.public-footer-name {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.public-footer-copy {
+  font-size: 0.82rem;
+  color: #334155;
+}
+
+.public-footer-links {
+  display: flex;
+  gap: 24px;
+}
+
+.public-footer-links a {
+  font-size: 0.83rem;
+  color: #334155;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.public-footer-links a:hover { color: #fff; }
+
+@media (max-width: 900px) {
+  .public-hero {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    padding-top: 100px;
+  }
+  .sales-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .sales-grid { grid-template-columns: 1fr; }
+  .hero-ctas { flex-direction: column; }
+  .hero-ctas button { width: 100%; justify-content: center; }
 }
 
 /* ─── App Shell ──────────────────────────────────────────────────────────── */
