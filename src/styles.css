@@ -5003,6 +5003,11 @@ select {
   border-bottom: 0;
 }
 
+/* Hidden on screen — only shown inside the @media print block */
+.inv-print-header {
+  display: none;
+}
+
 .inv-row:not(.inv-row-head):hover {
   background: var(--surface);
 }
@@ -5219,7 +5224,53 @@ select {
     color: #111111 !important;
   }
 
-  /* ── 7. Invoice table — explicit belt-and-suspenders overrides ───────── */
+  /* ── 7. Branded firm header (print-only) ─────────────────────────────── */
+  .inv-print-header {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 2pt solid #111111;
+    padding-bottom: 10pt;
+    margin-bottom: 14pt;
+  }
+
+  .inv-print-header-left {
+    display: flex !important;
+    flex-direction: column;
+    gap: 4pt;
+  }
+
+  .inv-print-logo {
+    display: block !important;
+    max-height: 48pt;
+    max-width: 160pt;
+    object-fit: contain;
+    margin-bottom: 4pt;
+  }
+
+  .inv-print-firm-name {
+    display: block !important;
+    font-size: 15pt;
+    font-weight: 700;
+    color: #111111;
+    letter-spacing: 0.01em;
+  }
+
+  .inv-print-header-right {
+    display: flex !important;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2pt;
+    font-size: 9pt;
+    color: #444444;
+    text-align: right;
+  }
+
+  .inv-print-header-right span {
+    display: block !important;
+  }
+
+  /* ── 8. Invoice table — explicit belt-and-suspenders overrides ───────── */
   .inv-table,
   .inv-row,
   .inv-row-head,

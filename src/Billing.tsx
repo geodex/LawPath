@@ -52,7 +52,7 @@ const EMPTY_DRAFT = {
   terms: "Payment due within 30 days of invoice date.",
 };
 
-export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip, log, showToast }: Props) {
+export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip, tenantProfile, log, showToast }: Props) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<FilterTab>("All");
@@ -279,6 +279,31 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
 
             {filtered.map(inv => (
               <div key={inv.id} className={printingId === inv.id ? "invoice-print-target" : undefined}>
+                {printingId === inv.id && (
+                  <div className="inv-print-header">
+                    <div className="inv-print-header-left">
+                      {(tenantProfile.logoPublicUrl || tenantProfile.logoDataUrl) && (
+                        <img
+                          src={tenantProfile.logoPublicUrl || tenantProfile.logoDataUrl}
+                          alt={tenantProfile.tradingName}
+                          className="inv-print-logo"
+                        />
+                      )}
+                      <div className="inv-print-firm-name">{tenantProfile.tradingName}</div>
+                    </div>
+                    <div className="inv-print-header-right">
+                      {tenantProfile.addressLine1 && <span>{tenantProfile.addressLine1}</span>}
+                      {tenantProfile.addressLine2 && <span>{tenantProfile.addressLine2}</span>}
+                      {(tenantProfile.city || tenantProfile.province || tenantProfile.postalCode) && (
+                        <span>{[tenantProfile.city, tenantProfile.province, tenantProfile.postalCode].filter(Boolean).join(", ")}</span>
+                      )}
+                      {tenantProfile.phone && <span>Tel: {tenantProfile.phone}</span>}
+                      {tenantProfile.website && <span>{tenantProfile.website}</span>}
+                      {tenantProfile.vatNumber && <span>VAT: {tenantProfile.vatNumber}</span>}
+                      {tenantProfile.lpcRegistrationNumber && <span>LPC: {tenantProfile.lpcRegistrationNumber}</span>}
+                    </div>
+                  </div>
+                )}
                 <div className={`inv-row${expandedId === inv.id ? " inv-row-open" : ""}`}>
                   <span><code style={{ fontSize: "0.82rem", fontWeight: 700 }}>{inv.invoiceNumber}</code></span>
                   <span>
