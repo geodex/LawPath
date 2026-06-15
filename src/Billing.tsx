@@ -93,6 +93,12 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
   const didInitPending = useRef(false);
   const headerModalRef = useRef<HTMLDivElement>(null);
   const headerModalScrollPos = useRef(0);
+  const createModalRef = useRef<HTMLDivElement>(null);
+  const createModalScrollPos = useRef(0);
+  const emailModalRef = useRef<HTMLDivElement>(null);
+  const emailModalScrollPos = useRef(0);
+  const payFormRef = useRef<HTMLDivElement>(null);
+  const payFormScrollPos = useRef(0);
 
   useEffect(() => {
     (async () => {
@@ -131,6 +137,24 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
       headerModalRef.current.scrollTop = headerModalScrollPos.current;
     }
   }, [showHeaderSettings]);
+
+  useEffect(() => {
+    if (showCreate && createModalRef.current) {
+      createModalRef.current.scrollTop = createModalScrollPos.current;
+    }
+  }, [showCreate]);
+
+  useEffect(() => {
+    if (emailTarget && emailModalRef.current) {
+      emailModalRef.current.scrollTop = emailModalScrollPos.current;
+    }
+  }, [emailTarget]);
+
+  useEffect(() => {
+    if (payingId && payFormRef.current) {
+      payFormRef.current.scrollTop = payFormScrollPos.current;
+    }
+  }, [payingId]);
 
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -603,6 +627,8 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
                       onSyncAccounting={handleSyncAccounting}
                       rands={rands}
                       fmtDate={fmtDate}
+                      payFormRef={payFormRef}
+                      onPayFormScroll={(top) => { payFormScrollPos.current = top; }}
                     />
                   </div>
                 )}
@@ -625,6 +651,8 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
           onSubmit={handleCreate}
           onClose={() => { setShowCreate(false); setCreateWipIds([]); setCreateDraft(EMPTY_DRAFT); didInitPending.current = false; }}
           rands={rands}
+          modalRef={createModalRef}
+          onScrollSave={(top) => { createModalScrollPos.current = top; }}
         />
       )}
 
@@ -637,6 +665,8 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
           onSubmit={() => handleSendEmail(emailTarget)}
           onClose={() => { setEmailTarget(null); setEmailForm({ toEmail: "", toName: "", message: "" }); }}
           rands={rands}
+          modalRef={emailModalRef}
+          onScrollSave={(top) => { emailModalScrollPos.current = top; }}
         />
       )}
     </div>
@@ -647,7 +677,7 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
 
 type PayForm = typeof EMPTY_PAY;
 
-function InvoiceDetail({ invoice, payingId, payForm, paySubmitting, syncingId, PAY_METHODS, onSetPayingId, onPayFormChange, onPaySubmit, onSyncAccounting, rands, fmtDate }: {
+function InvoiceDetail({ invoice, payingId, payForm, paySubmitting, syncingId, PAY_METHODS, onSetPayingId, onPayFormChange, onPaySubmit, onSyncAccounting, rands, fmtDate, payFormRef, onPayFormScroll }: {
   invoice: Invoice;
   payingId: string | null;
   payForm: PayForm;
@@ -660,6 +690,8 @@ function InvoiceDetail({ invoice, payingId, payForm, paySubmitting, syncingId, P
   onSyncAccounting: (id: string) => void;
   rands: (c: number) => string;
   fmtDate: (s: string) => string;
+  payFormRef?: React.RefObject<HTMLDivElement>;
+  onPayFormScroll?: (top: number) => void;
 }) {
   return (
     <div style={{ display: "grid", gap: "1.25rem" }}>
@@ -723,7 +755,7 @@ function InvoiceDetail({ invoice, payingId, payForm, paySubmitting, syncingId, P
         )}
 
         {payingId === invoice.id && (
-          <div style={{ marginTop: "1rem", padding: "1rem", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: "0.75rem" }}>
+          <div ref={payFormRef} onScroll={() => { if (payFormRef?.current) onPayFormScroll?.(payFormRef.current.scrollTop); }} style={{ marginTop: "1rem", padding: "1rem", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: "0.75rem" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem" }}>
               <label>Amount (ZAR)
                 <input type="number" min="0" step="0.01" placeholder="0.00" value={payForm.amountCents}
@@ -768,7 +800,7 @@ function InvoiceDetail({ invoice, payingId, payForm, paySubmitting, syncingId, P
 
 // ─── CreateModal ───────────────────────────────────────────────────────────────
 
-function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, setCreateDraft, selTotal, selVat, creating, onSubmit, onClose, rands }: {
+function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, setCreateDraft, selTotal, selVat, creating, onSubmit, onClose, rands, modalRef, onScrollSave }: {
   wipEntries: TimeEntry[];
   createWipIds: string[];
   setCreateWipIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -780,6 +812,8 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
   onSubmit: () => void;
   onClose: () => void;
   rands: (c: number) => string;
+  modalRef?: React.RefObject<HTMLDivElement>;
+  onScrollSave?: (top: number) => void;
 }) {
   function toggleWip(id: string) {
     setCreateWipIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -787,7 +821,7 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 680, maxHeight: "88vh", display: "flex", flexDirection: "column", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className="modal" style={{ maxWidth: 680, maxHeight: "88vh", display: "flex", flexDirection: "column", overflowY: "auto" }} onClick={e => e.stopPropagation()} onScroll={() => { if (modalRef?.current) onScrollSave?.(modalRef.current.scrollTop); }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
           <h3 style={{ margin: 0, fontFamily: "var(--font-serif)", fontSize: "1.4rem" }}>New Invoice</h3>
           <button className="ghost small" onClick={onClose}>✕</button>
@@ -854,7 +888,7 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
 
 // ─── EmailModal ────────────────────────────────────────────────────────────────
 
-function EmailModal({ invoice, emailForm, setEmailForm, sending, onSubmit, onClose, rands }: {
+function EmailModal({ invoice, emailForm, setEmailForm, sending, onSubmit, onClose, rands, modalRef, onScrollSave }: {
   invoice: Invoice;
   emailForm: { toEmail: string; toName: string; message: string };
   setEmailForm: React.Dispatch<React.SetStateAction<{ toEmail: string; toName: string; message: string }>>;
@@ -862,10 +896,12 @@ function EmailModal({ invoice, emailForm, setEmailForm, sending, onSubmit, onClo
   onSubmit: () => void;
   onClose: () => void;
   rands: (c: number) => string;
+  modalRef?: React.RefObject<HTMLDivElement>;
+  onScrollSave?: (top: number) => void;
 }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 520, display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className="modal" style={{ maxWidth: 520, maxHeight: "88vh", overflowY: "auto", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()} onScroll={() => { if (modalRef?.current) onScrollSave?.(modalRef.current.scrollTop); }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
           <h3 style={{ margin: 0, fontFamily: "var(--font-serif)", fontSize: "1.4rem" }}>Send Invoice</h3>
           <button className="ghost small" onClick={onClose}>✕</button>
