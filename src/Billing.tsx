@@ -1,3 +1,4 @@
+import { Printer } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createInvoice, downloadInvoicePdf, getInvoicePdfUrl, getInvoices, recordInvoicePayment, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
 import type { Invoice, InvoicePayment, TenantProfile, TimeEntry } from "./types";
@@ -284,6 +285,9 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
                       </button>
                       <button className="ghost small" disabled={pdfDownloadingId === inv.id} onClick={() => handleDownloadPdf(inv)}>
                         {pdfDownloadingId === inv.id ? "…" : "Download PDF"}
+                      </button>
+                      <button className="ghost small" title="Print invoice" onClick={() => window.print()}>
+                        <Printer size={14} /> Print
                       </button>
                       <button className="ghost small" onClick={() => setEmailTarget(inv.id)}>Email</button>
                       {inv.status !== "Void" && inv.status !== "Paid" && (
