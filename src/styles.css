@@ -5009,6 +5009,83 @@ select {
   display: none;
 }
 
+/* ── Invoice header live preview (inside header-settings modal) ────────── */
+.inv-header-preview-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.65rem 0.75rem 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.inv-header-preview-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.inv-header-preview {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 2px solid #111111;
+  padding-bottom: 8px;
+}
+
+.inv-header-preview .inv-print-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.inv-header-preview-logo-box {
+  width: 52px;
+  height: 26px;
+  border: 1px dashed #ccc;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: #bbb;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+
+.inv-header-preview-logo {
+  display: block;
+  max-height: 32px;
+  max-width: 100px;
+  object-fit: contain;
+  margin-bottom: 2px;
+}
+
+.inv-header-preview .inv-print-firm-name {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #111111;
+  letter-spacing: 0.01em;
+}
+
+.inv-header-preview .inv-print-header-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-size: 0.72rem;
+  color: #444444;
+  text-align: right;
+}
+
+.inv-header-preview .inv-print-header-right span {
+  display: block;
+}
+
 .inv-row:not(.inv-row-head):hover {
   background: var(--surface);
 }
