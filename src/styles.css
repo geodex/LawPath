@@ -5004,7 +5004,8 @@ select {
 }
 
 /* Hidden on screen — only shown inside the @media print block */
-.inv-print-header {
+.inv-print-header,
+.inv-print-title {
   display: none;
 }
 
@@ -5270,7 +5271,51 @@ select {
     display: block !important;
   }
 
-  /* ── 8. Invoice table — explicit belt-and-suspenders overrides ───────── */
+  /* ── 8. Invoice title block (TAX INVOICE + meta) ─────────────────────── */
+  .inv-print-title {
+    display: block !important;
+    margin-bottom: 14pt;
+    padding-bottom: 10pt;
+    border-bottom: 1pt solid #cccccc;
+  }
+
+  .inv-print-title-heading {
+    display: block !important;
+    font-size: 20pt;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: #111111;
+    margin-bottom: 8pt;
+  }
+
+  .inv-print-title-meta {
+    display: grid !important;
+    grid-template-columns: repeat(2, max-content);
+    column-gap: 40pt;
+    row-gap: 3pt;
+  }
+
+  .inv-print-title-row {
+    display: contents !important;
+  }
+
+  .inv-print-title-label {
+    display: block !important;
+    font-size: 8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #444444;
+  }
+
+  .inv-print-title-value {
+    display: block !important;
+    font-size: 10pt;
+    font-weight: 600;
+    color: #111111;
+  }
+
+  /* ── 9. Invoice table — explicit belt-and-suspenders overrides ───────── */
   .inv-table,
   .inv-row,
   .inv-row-head,

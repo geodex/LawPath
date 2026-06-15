@@ -304,6 +304,41 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
                     </div>
                   </div>
                 )}
+                {printingId === inv.id && (
+                  <div className="inv-print-title">
+                    <div className="inv-print-title-heading">TAX INVOICE</div>
+                    <div className="inv-print-title-meta">
+                      <div className="inv-print-title-row">
+                        <span className="inv-print-title-label">Invoice No</span>
+                        <span className="inv-print-title-value">{inv.invoiceNumber}</span>
+                      </div>
+                      <div className="inv-print-title-row">
+                        <span className="inv-print-title-label">Issue Date</span>
+                        <span className="inv-print-title-value">{fmtDate(inv.issuedAt)}</span>
+                      </div>
+                      <div className="inv-print-title-row">
+                        <span className="inv-print-title-label">Due Date</span>
+                        <span className="inv-print-title-value">{fmtDate(inv.dueAt)}</span>
+                      </div>
+                      <div className="inv-print-title-row">
+                        <span className="inv-print-title-label">Client</span>
+                        <span className="inv-print-title-value">{inv.clientName}</span>
+                      </div>
+                      {inv.matterRef && (
+                        <div className="inv-print-title-row">
+                          <span className="inv-print-title-label">Matter Ref</span>
+                          <span className="inv-print-title-value">{inv.matterRef}</span>
+                        </div>
+                      )}
+                      {inv.paymentRef && (
+                        <div className="inv-print-title-row">
+                          <span className="inv-print-title-label">Payment Ref</span>
+                          <span className="inv-print-title-value">{inv.paymentRef}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div className={`inv-row${expandedId === inv.id ? " inv-row-open" : ""}`}>
                   <span><code style={{ fontSize: "0.82rem", fontWeight: 700 }}>{inv.invoiceNumber}</code></span>
                   <span>
