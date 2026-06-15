@@ -51,6 +51,7 @@ export type Invoice = {
   id: string;
   invoiceNumber: string;
   clientName: string;
+  clientEmail: string;
   matterRef: string;
   subtotalCents: number;
   vatCents: number;

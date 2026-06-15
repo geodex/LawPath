@@ -41,12 +41,12 @@ function createTransporter(settings = {}) {
   });
 }
 
-async function sendTransactionalEmail({ to, subject, text, html, tenantFromName, tenantFromEmail, replyTo, smtpSettings }) {
+async function sendTransactionalEmail({ to, subject, text, html, tenantFromName, tenantFromEmail, replyTo, smtpSettings, attachments }) {
   const transporter = createTransporter(smtpSettings);
   const platformFromEmail = process.env.SMTP_FROM_EMAIL || smtpSettings?.username || process.env.SMTP_USERNAME;
   const safeFromName = tenantFromName || process.env.SMTP_FROM_NAME || "LawPath SA";
 
-  return transporter.sendMail({
+  const mailOptions = {
     from: `${safeFromName} <${platformFromEmail}>`,
     to,
     replyTo: replyTo || tenantFromEmail || platformFromEmail,
@@ -57,7 +57,13 @@ async function sendTransactionalEmail({ to, subject, text, html, tenantFromName,
       from: platformFromEmail,
       to
     }
-  });
+  };
+
+  if (attachments && attachments.length) {
+    mailOptions.attachments = attachments;
+  }
+
+  return transporter.sendMail(mailOptions);
 }
 
 module.exports = { sendTransactionalEmail };

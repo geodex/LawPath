@@ -45,6 +45,7 @@ const EMPTY_PAY = {
 
 const EMPTY_DRAFT = {
   clientName: "",
+  clientEmail: "",
   matterRef: "",
   dueAt: "",
   notes: "",
@@ -112,7 +113,7 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
     if (!createWipIds.length) { showToast("error", "No entries", "Select at least one WIP entry."); return; }
     if (!createDraft.clientName.trim()) { showToast("error", "Client required", "Enter a client name."); return; }
     setCreating(true);
-    const res = await createInvoice({ entryIds: createWipIds, clientName: createDraft.clientName, matterRef: createDraft.matterRef, dueAt: createDraft.dueAt || undefined, notes: createDraft.notes, terms: createDraft.terms });
+    const res = await createInvoice({ entryIds: createWipIds, clientName: createDraft.clientName, clientEmail: createDraft.clientEmail || undefined, matterRef: createDraft.matterRef, dueAt: createDraft.dueAt || undefined, notes: createDraft.notes, terms: createDraft.terms });
     setCreating(false);
     if (res?.invoice) {
       setInvoices(prev => [res.invoice, ...prev]);
@@ -289,7 +290,7 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
                       <button className="ghost small" title="Print invoice" onClick={() => window.print()}>
                         <Printer size={14} /> Print
                       </button>
-                      <button className="ghost small" onClick={() => setEmailTarget(inv.id)}>Email</button>
+                      <button className="ghost small" onClick={() => { setEmailTarget(inv.id); setEmailForm({ toEmail: inv.clientEmail || "", toName: inv.clientName || "", message: "" }); }}>Email Invoice</button>
                       {inv.status !== "Void" && inv.status !== "Paid" && (
                         <button className="ghost small" style={{ color: "var(--rose)" }} onClick={() => handleVoid(inv.id)}>Void</button>
                       )}
@@ -344,7 +345,7 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
           setEmailForm={setEmailForm}
           sending={emailSending}
           onSubmit={() => handleSendEmail(emailTarget)}
-          onClose={() => setEmailTarget(null)}
+          onClose={() => { setEmailTarget(null); setEmailForm({ toEmail: "", toName: "", message: "" }); }}
           rands={rands}
         />
       )}
@@ -505,6 +506,9 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "1.25rem" }}>
           <label style={{ gridColumn: "span 1" }}>Client name *
             <input type="text" value={createDraft.clientName} onChange={e => setCreateDraft(d => ({ ...d, clientName: e.target.value }))} />
+          </label>
+          <label>Client email
+            <input type="email" placeholder="client@example.com" value={createDraft.clientEmail} onChange={e => setCreateDraft(d => ({ ...d, clientEmail: e.target.value }))} />
           </label>
           <label>Matter ref
             <input type="text" value={createDraft.matterRef} onChange={e => setCreateDraft(d => ({ ...d, matterRef: e.target.value }))} />

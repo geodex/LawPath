@@ -379,6 +379,7 @@ export async function getInvoices(params?: { status?: string; limit?: number; of
 export async function createInvoice(data: {
   entryIds: string[];
   clientName: string;
+  clientEmail?: string;
   matterRef?: string;
   dueAt?: string;
   notes?: string;

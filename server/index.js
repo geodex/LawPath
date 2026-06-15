@@ -2371,6 +2371,7 @@ function invoiceFromRow(row, lineItems = [], payments = []) {
     id: row.id,
     invoiceNumber: row.invoice_number,
     clientName: row.client_name,
+    clientEmail: row.client_email || "",
     matterRef: row.matter_ref || "",
     subtotalCents: Number(row.subtotal_cents || 0),
     vatCents: Number(row.vat_cents || 0),
@@ -2452,7 +2453,7 @@ app.get("/api/invoices", authMiddleware, async (req, res, next) => {
 // POST /api/invoices — create invoice from WIP time entry IDs
 app.post("/api/invoices", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  const { entryIds = [], clientName, matterRef, dueAt, notes, terms, paymentRef } = req.body;
+  const { entryIds = [], clientName, clientEmail, matterRef, dueAt, notes, terms, paymentRef } = req.body;
   if (!clientName) return res.status(400).json({ error: "Client name is required." });
   if (!entryIds.length) return res.status(400).json({ error: "At least one time entry is required." });
 
@@ -2475,12 +2476,12 @@ app.post("/api/invoices", authMiddleware, async (req, res, next) => {
 
     const invResult = await client.query(
       `insert into invoices
-        (tenant_id, invoice_number, client_name, matter_ref, subtotal_cents, vat_cents,
+        (tenant_id, invoice_number, client_name, client_email, matter_ref, subtotal_cents, vat_cents,
          amount_cents, paid_cents, currency, status, issued_at, due_at, notes, terms, payment_ref, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,0,'ZAR','Draft',$8,$9,$10,$11,$12,$13)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,0,'ZAR','Draft',$9,$10,$11,$12,$13,$14)
        returning *`,
       [
-        req.user.tenantId, invoiceNumber, clientName, matterRef || null,
+        req.user.tenantId, invoiceNumber, clientName, clientEmail || null, matterRef || null,
         subtotalCents, vatCents, totalCents, today,
         dueAt || null, notes || null,
         terms || "Payment is due within 30 days of invoice date. Interest at 2% per month accrues on overdue amounts.",
@@ -2645,26 +2646,38 @@ app.post("/api/invoices/:id/send", authMiddleware, async (req, res, next) => {
   const { toEmail, toName, message } = req.body;
   if (!toEmail) return res.status(400).json({ error: "Recipient email is required." });
   try {
-    const [inv, items, pmts, profile] = await Promise.all([
+    const [inv, items, pmts, profile, smtpRow, identityRow] = await Promise.all([
       pool.query("select * from invoices where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]),
       pool.query("select * from invoice_line_items where invoice_id = $1 order by sort_order", [req.params.id]),
       pool.query("select * from invoice_payments where invoice_id = $1 order by payment_date", [req.params.id]),
-      pool.query("select * from tenant_profiles where tenant_id = $1 limit 1", [req.user.tenantId])
+      pool.query("select * from tenant_profiles where tenant_id = $1 limit 1", [req.user.tenantId]),
+      pool.query("select * from platform_smtp_settings where active = true order by updated_at desc limit 1"),
+      pool.query("select * from tenant_email_identities where tenant_id = $1 limit 1", [req.user.tenantId])
     ]);
     if (!inv.rowCount) return res.status(404).json({ error: "Invoice not found." });
 
     const tp = tenantProfileFromRow(profile.rows[0]) || {};
+    const smtpSettings = smtpFromRow(smtpRow.rows[0]) || undefined;
+    const identity = identityRow.rows[0] || null;
+    const tenantFromName = identity?.from_name || tp.tradingName || "LawPath SA";
+    const tenantFromEmail = identity?.from_email || null;
+    const replyTo = identity?.reply_to || tenantFromEmail || null;
+
     const pdfBuffer = await generateInvoicePdf({ invoice: inv.rows[0], lineItems: items.rows, payments: pmts.rows, tenantProfile: tp });
     const money = (cents) => `R ${(Number(cents || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
     const { sendTransactionalEmail } = require("./mailer");
     await sendTransactionalEmail({
       to: toEmail,
-      subject: `Invoice ${inv.rows[0].invoice_number} from ${tp.tradingName || "LawPath SA"}`,
-      html: `<p>Dear ${toName || inv.rows[0].client_name},</p>
-             ${message ? `<p>${message}</p>` : ""}
-             <p>Please find attached invoice <strong>${inv.rows[0].invoice_number}</strong> for <strong>${money(inv.rows[0].amount_cents)}</strong>.</p>
+      subject: `Invoice ${inv.rows[0].invoice_number} from ${tenantFromName}`,
+      tenantFromName,
+      tenantFromEmail,
+      replyTo,
+      smtpSettings,
+      html: `<p>Dear ${escapeHtml(toName || inv.rows[0].client_name)},</p>
+             ${message ? `<p>${escapeHtml(message)}</p>` : ""}
+             <p>Please find attached invoice <strong>${escapeHtml(inv.rows[0].invoice_number)}</strong> for <strong>${money(inv.rows[0].amount_cents)}</strong>.</p>
              <p>Payment is due by ${inv.rows[0].due_at ? new Date(inv.rows[0].due_at).toLocaleDateString("en-ZA") : "30 days"}.</p>
-             <p>Regards,<br/>${tp.tradingName || "LawPath SA"}</p>`,
+             <p>Regards,<br/>${escapeHtml(tenantFromName)}</p>`,
       attachments: [{ filename: `${inv.rows[0].invoice_number}.pdf`, content: pdfBuffer, contentType: "application/pdf" }]
     });
     await pool.query(
