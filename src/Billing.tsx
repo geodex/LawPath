@@ -12,6 +12,7 @@ interface Props {
   setTenantProfile: React.Dispatch<React.SetStateAction<TenantProfile>>;
   log: (msg: string) => void;
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
+  setActiveView: (view: string) => void;
 }
 
 const ALL_HEADER_FIELDS: { key: InvoiceHeaderField; label: string }[] = [
@@ -61,7 +62,7 @@ const EMPTY_DRAFT = {
   terms: "Payment due within 30 days of invoice date.",
 };
 
-export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip, tenantProfile, setTenantProfile, log, showToast }: Props) {
+export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip, tenantProfile, setTenantProfile, log, showToast, setActiveView }: Props) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<FilterTab>("All");
@@ -308,48 +309,78 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
             </p>
 
             {/* Live preview */}
-            <div className="inv-header-preview-wrap">
-              <div className="inv-header-preview-label">Preview</div>
-              <div className="inv-header-preview">
-                <div className="inv-print-header-left">
-                  {(tenantProfile.logoPublicUrl || tenantProfile.logoDataUrl) ? (
-                    <img
-                      src={tenantProfile.logoPublicUrl || tenantProfile.logoDataUrl}
-                      alt={tenantProfile.tradingName}
-                      className="inv-header-preview-logo"
-                    />
-                  ) : (
-                    <div className="inv-header-preview-logo-box">LOGO</div>
-                  )}
-                  <div className="inv-print-firm-name">{tenantProfile.tradingName || "Firm Name"}</div>
-                </div>
-                <div className="inv-print-header-right">
-                  {headerFieldsDraft.length === 0 && (
-                    <span style={{ opacity: 0.35, fontStyle: "italic" }}>No fields selected</span>
-                  )}
-                  {headerFieldsDraft.map(field => {
-                    if (field === "address") {
-                      const lines = [tenantProfile.addressLine1, tenantProfile.addressLine2].filter(Boolean);
-                      const cityLine = [tenantProfile.city, tenantProfile.province, tenantProfile.postalCode].filter(Boolean).join(", ");
-                      const hasData = lines.length > 0 || cityLine;
-                      return hasData ? (
-                        <>
-                          {lines.map((l, i) => <span key={`addr-${i}`}>{l}</span>)}
-                          {cityLine && <span key="city">{cityLine}</span>}
-                        </>
+            {(() => {
+              const missingLogo = !tenantProfile.logoPublicUrl && !tenantProfile.logoDataUrl;
+              const missingName = !tenantProfile.tradingName;
+              const missingSelectedFields = headerFieldsDraft.some(field => {
+                if (field === "address") {
+                  const lines = [tenantProfile.addressLine1, tenantProfile.addressLine2].filter(Boolean);
+                  const cityLine = [tenantProfile.city, tenantProfile.province, tenantProfile.postalCode].filter(Boolean).join(", ");
+                  return lines.length === 0 && !cityLine;
+                }
+                if (field === "phone") return !tenantProfile.phone;
+                if (field === "website") return !tenantProfile.website;
+                if (field === "vatNumber") return !tenantProfile.vatNumber;
+                if (field === "lpcNumber") return !tenantProfile.lpcRegistrationNumber;
+                return false;
+              });
+              const hasMissingData = missingLogo || missingName || missingSelectedFields;
+              return (
+                <div className="inv-header-preview-wrap">
+                  <div className="inv-header-preview-label">Preview</div>
+                  <div className="inv-header-preview">
+                    <div className="inv-print-header-left">
+                      {(tenantProfile.logoPublicUrl || tenantProfile.logoDataUrl) ? (
+                        <img
+                          src={tenantProfile.logoPublicUrl || tenantProfile.logoDataUrl}
+                          alt={tenantProfile.tradingName}
+                          className="inv-header-preview-logo"
+                        />
                       ) : (
-                        <span key="addr-placeholder" style={{ opacity: 0.35 }}>123 Example St, City</span>
-                      );
-                    }
-                    if (field === "phone") return <span key="phone">{tenantProfile.phone ? `Tel: ${tenantProfile.phone}` : <span style={{ opacity: 0.35 }}>Tel: +27 00 000 0000</span>}</span>;
-                    if (field === "website") return <span key="website">{tenantProfile.website ? tenantProfile.website : <span style={{ opacity: 0.35 }}>www.yourfirm.co.za</span>}</span>;
-                    if (field === "vatNumber") return <span key="vat">{tenantProfile.vatNumber ? `VAT: ${tenantProfile.vatNumber}` : <span style={{ opacity: 0.35 }}>VAT: 4012345678</span>}</span>;
-                    if (field === "lpcNumber") return <span key="lpc">{tenantProfile.lpcRegistrationNumber ? `LPC: ${tenantProfile.lpcRegistrationNumber}` : <span style={{ opacity: 0.35 }}>LPC: 123/456</span>}</span>;
-                    return null;
-                  })}
+                        <div className="inv-header-preview-logo-box">LOGO</div>
+                      )}
+                      <div className="inv-print-firm-name">{tenantProfile.tradingName || "Firm Name"}</div>
+                    </div>
+                    <div className="inv-print-header-right">
+                      {headerFieldsDraft.length === 0 && (
+                        <span style={{ opacity: 0.35, fontStyle: "italic" }}>No fields selected</span>
+                      )}
+                      {headerFieldsDraft.map(field => {
+                        if (field === "address") {
+                          const lines = [tenantProfile.addressLine1, tenantProfile.addressLine2].filter(Boolean);
+                          const cityLine = [tenantProfile.city, tenantProfile.province, tenantProfile.postalCode].filter(Boolean).join(", ");
+                          const hasData = lines.length > 0 || cityLine;
+                          return hasData ? (
+                            <>
+                              {lines.map((l, i) => <span key={`addr-${i}`}>{l}</span>)}
+                              {cityLine && <span key="city">{cityLine}</span>}
+                            </>
+                          ) : (
+                            <span key="addr-placeholder" style={{ opacity: 0.35 }}>123 Example St, City</span>
+                          );
+                        }
+                        if (field === "phone") return <span key="phone">{tenantProfile.phone ? `Tel: ${tenantProfile.phone}` : <span style={{ opacity: 0.35 }}>Tel: +27 00 000 0000</span>}</span>;
+                        if (field === "website") return <span key="website">{tenantProfile.website ? tenantProfile.website : <span style={{ opacity: 0.35 }}>www.yourfirm.co.za</span>}</span>;
+                        if (field === "vatNumber") return <span key="vat">{tenantProfile.vatNumber ? `VAT: ${tenantProfile.vatNumber}` : <span style={{ opacity: 0.35 }}>VAT: 4012345678</span>}</span>;
+                        if (field === "lpcNumber") return <span key="lpc">{tenantProfile.lpcRegistrationNumber ? `LPC: ${tenantProfile.lpcRegistrationNumber}` : <span style={{ opacity: 0.35 }}>LPC: 123/456</span>}</span>;
+                        return null;
+                      })}
+                    </div>
+                  </div>
+                  {hasMissingData && (
+                    <div style={{ marginTop: "0.5rem", textAlign: "right" }}>
+                      <button
+                        className="ghost small"
+                        style={{ fontSize: "0.8rem", color: "var(--accent, #4f6ef7)", padding: "0.15rem 0.3rem" }}
+                        onClick={() => { setShowHeaderSettings(false); setActiveView("settings"); }}
+                      >
+                        Edit firm profile →
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
-            </div>
+              );
+            })()}
 
             <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "1.25rem" }}>
               {ALL_HEADER_FIELDS.map(({ key, label }) => {

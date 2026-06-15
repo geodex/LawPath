@@ -596,6 +596,7 @@ export function App() {
             setTenantProfile={setTenantProfile}
             log={log}
             showToast={showToast}
+            setActiveView={setActiveView}
           />
         )}
         {activeView === "conveyancing" && (
