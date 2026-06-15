@@ -4198,38 +4198,6 @@ select {
   }
 }
 
-@media print {
-  body * {
-    visibility: hidden;
-  }
-
-  .document-modal,
-  .document-modal * {
-    visibility: visible;
-  }
-
-  .document-modal {
-    position: static;
-    display: block;
-    background: #ffffff;
-  }
-
-  .document-modal-bar {
-    display: none;
-  }
-
-  .document-scroll {
-    overflow: visible;
-    padding: 0;
-  }
-
-  .document-page {
-    width: auto;
-    min-height: auto;
-    padding: 0;
-    box-shadow: none;
-  }
-}
 
 /* ── Trust Account ─────────────────────────────────────────── */
 
@@ -5100,4 +5068,167 @@ select {
 .inv-paid     { background: var(--green-light); color: var(--green-dark); }
 .inv-overdue  { background: var(--rose-bg);   color: var(--rose);  }
 .inv-void     { background: var(--line);      color: var(--muted); text-decoration: line-through; }
+
+/* ─── Print Styles ───────────────────────────────────────────────────────── */
+
+@media print {
+
+  /* ── 1. Page setup ────────────────────────────────────────────────────── */
+  @page {
+    margin: 18mm 20mm;
+    size: A4 portrait;
+  }
+
+  /* ── 2. Remap dark CSS variables to light values.
+          Every element using var(--panel), var(--surface), var(--paper), etc.
+          automatically resolves to a print-friendly colour without needing
+          individual class overrides across hundreds of rules. ────────────── */
+  :root {
+    --ink:        #111111;
+    --muted:      #444444;
+    --line:       #cccccc;
+    --paper:      #ffffff;
+    --panel:      #ffffff;
+    --surface:    #f4f4f4;
+    --green:      #1a6b3c;
+    --green-dark: #1a6b3c;
+    --gold:       #7a5200;
+    --blue:       #1a3d7a;
+    --rose:       #8b1a2f;
+    --green-light: #e6f4ec;
+    --gold-bg:    #fdf6e3;
+    --blue-bg:    #e8eef8;
+    --rose-bg:    #fce8ec;
+  }
+
+  /* ── 3. Body baseline ─────────────────────────────────────────────────── */
+  body {
+    background: #ffffff !important;
+    color: #111111 !important;
+    font-size: 12pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ── 4. CASE A — Document modal is open in the DOM.
+          Isolate the modal: hide all other content, then reveal only the
+          modal and its children. Dark chrome toolbar is hidden explicitly. ── */
+  body:has(.document-modal) * {
+    visibility: hidden !important;
+  }
+
+  body:has(.document-modal) .document-modal,
+  body:has(.document-modal) .document-modal * {
+    visibility: visible !important;
+  }
+
+  body:has(.document-modal) .document-modal {
+    position: static !important;
+    display: block !important;
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+  }
+
+  body:has(.document-modal) .document-modal-bar {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  body:has(.document-modal) .document-scroll {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  /* ── 5. CASE B — No document modal (invoice/billing/overview screens).
+          Hide navigation chrome; collapse the shell; let .main print. ───── */
+  .sidebar,
+  .topbar,
+  .nav,
+  .brand,
+  .sidebar-card,
+  .modal-overlay,
+  .public-nav,
+  .public-footer,
+  .top-actions,
+  .panel-head > button,
+  .primary,
+  .ghost,
+  .small {
+    display: none !important;
+  }
+
+  /* Collapse sidebar column so .main fills the page */
+  .app-shell {
+    display: block !important;
+  }
+
+  .main {
+    padding: 16pt 0 0 !important;
+  }
+
+  /* ── 6. Document page — white paper, black ink (both cases) ──────────── */
+  .document-page {
+    width: 100% !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 24pt 32pt !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+  }
+
+  .document-page pre {
+    color: #111111 !important;
+    font-size: 11pt;
+    line-height: 1.7;
+  }
+
+  /* Reset any gradient text in document headings */
+  .document-page h1,
+  .document-page h2,
+  .document-page h3 {
+    -webkit-text-fill-color: #111111 !important;
+    background: none !important;
+    color: #111111 !important;
+  }
+
+  /* ── 7. Invoice table — explicit belt-and-suspenders overrides ───────── */
+  .inv-table,
+  .inv-row,
+  .inv-row-head,
+  .inv-detail,
+  .inv-lines,
+  .inv-line-head,
+  .inv-line-row,
+  .inv-line-total {
+    background: #ffffff !important;
+    color: #111111 !important;
+    border-color: #cccccc !important;
+  }
+
+  .inv-line-head {
+    opacity: 1 !important;
+    color: #333333 !important;
+  }
+
+  /* Status pills: print-safe neutral tones */
+  .inv-draft,
+  .inv-sent,
+  .inv-part-paid,
+  .inv-paid,
+  .inv-overdue,
+  .inv-void {
+    background: #eeeeee !important;
+    color: #333333 !important;
+    text-decoration: none !important;
+  }
+
+  /* ── 8. Suppress decorative shadows across the board ─────────────────── */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+}
 
