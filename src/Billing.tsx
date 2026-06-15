@@ -90,6 +90,8 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
   const [headerSettingsSaving, setHeaderSettingsSaving] = useState(false);
 
   const didInitPending = useRef(false);
+  const headerModalRef = useRef<HTMLDivElement>(null);
+  const headerModalScrollPos = useRef(0);
 
   useEffect(() => {
     (async () => {
@@ -122,6 +124,12 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
       onClearPendingWip();
     }
   }, [pendingWipIds]);
+
+  useEffect(() => {
+    if (showHeaderSettings && headerModalRef.current) {
+      headerModalRef.current.scrollTop = headerModalScrollPos.current;
+    }
+  }, [showHeaderSettings]);
 
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -284,7 +292,13 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
       {/* INVOICE HEADER SETTINGS PANEL */}
       {showHeaderSettings && (
         <div className="modal-backdrop" onClick={() => setShowHeaderSettings(false)}>
-          <div className="modal" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+          <div
+            className="modal"
+            style={{ maxWidth: 420 }}
+            onClick={e => e.stopPropagation()}
+            ref={headerModalRef}
+            onScroll={() => { headerModalScrollPos.current = headerModalRef.current?.scrollTop ?? 0; }}
+          >
             <div className="modal-head">
               <h3>Invoice print header fields</h3>
               <button className="ghost small" onClick={() => setShowHeaderSettings(false)}>✕</button>
