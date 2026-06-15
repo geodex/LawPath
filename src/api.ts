@@ -410,6 +410,42 @@ export async function getInvoicePdfUrl(id: string) {
   return request<{ url: string } | null>(`/api/invoices/${id}/pdf`);
 }
 
+export async function downloadInvoicePdf(id: string, filename: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const response = await fetch(`${API_BASE_URL}/api/invoices/${id}/pdf`, { headers });
+    if (!response.ok) return { ok: false, error: "Server error" };
+
+    const contentType = response.headers.get("content-type") ?? "";
+    let blob: Blob;
+
+    if (contentType.includes("application/pdf")) {
+      blob = await response.blob();
+    } else {
+      const data = await response.json() as { url?: string };
+      if (!data.url) return { ok: false, error: "No PDF URL returned" };
+      const pdfRes = await fetch(data.url);
+      if (!pdfRes.ok) return { ok: false, error: "Could not fetch PDF from storage" };
+      blob = await pdfRes.blob();
+    }
+
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Download failed" };
+  }
+}
+
 export async function sendInvoiceByEmail(id: string, data: { toEmail: string; toName?: string; message?: string }) {
   return request<{ invoice: Invoice }>(`/api/invoices/${id}/send`, { method: "POST", body: JSON.stringify(data) });
 }

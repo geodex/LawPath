@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createInvoice, getInvoicePdfUrl, getInvoices, recordInvoicePayment, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
+import { createInvoice, downloadInvoicePdf, getInvoicePdfUrl, getInvoices, recordInvoicePayment, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
 import type { Invoice, InvoicePayment, TenantProfile, TimeEntry } from "./types";
 
 interface Props {
@@ -59,6 +59,7 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
   const [emailTarget, setEmailTarget] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
+  const [pdfDownloadingId, setPdfDownloadingId] = useState<string | null>(null);
 
   const [createWipIds, setCreateWipIds] = useState<string[]>([]);
   const [createDraft, setCreateDraft] = useState(EMPTY_DRAFT);
@@ -156,6 +157,15 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
     setPdfLoadingId(null);
     if (res?.url) window.open(res.url, "_blank");
     else showToast("error", "PDF error", "Could not generate PDF.");
+  }
+
+  async function handleDownloadPdf(inv: Invoice) {
+    setPdfDownloadingId(inv.id);
+    const safeClient = inv.clientName.replace(/[^a-z0-9 ]/gi, "_").trim();
+    const filename = `${inv.invoiceNumber} - ${safeClient}.pdf`;
+    const res = await downloadInvoicePdf(inv.id, filename);
+    setPdfDownloadingId(null);
+    if (!res.ok) showToast("error", "Download failed", res.error ?? "Could not download PDF.");
   }
 
   async function handleSendEmail(id: string) {
@@ -271,6 +281,9 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
                       </button>
                       <button className="ghost small" disabled={pdfLoadingId === inv.id} onClick={() => handleOpenPdf(inv.id)}>
                         {pdfLoadingId === inv.id ? "…" : "PDF"}
+                      </button>
+                      <button className="ghost small" disabled={pdfDownloadingId === inv.id} onClick={() => handleDownloadPdf(inv)}>
+                        {pdfDownloadingId === inv.id ? "…" : "Download PDF"}
                       </button>
                       <button className="ghost small" onClick={() => setEmailTarget(inv.id)}>Email</button>
                       {inv.status !== "Void" && inv.status !== "Paid" && (

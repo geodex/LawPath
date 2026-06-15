@@ -64,6 +64,7 @@ import { Clients } from "./Clients";
 import { StripeBilling } from "./StripeBilling";
 import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
+import html2pdf from "html2pdf.js";
 
 const nav: NavItem[] = [
   { key: "overview",  label: "Overview", icon: Home },
@@ -1317,7 +1318,7 @@ function Drafting({
       <Panel title="Contract register" badge={`${contracts.length} drafts`}>
         <div className="table">{contracts.map((contract) => <TableRow key={contract.id} cells={[contract.name, contract.partyA, contract.status, contract.updated]} />)}</div>
       </Panel>
-      {fullPreviewOpen && <DocumentPreviewModal body={preview} tenantProfile={tenantProfile} onClose={() => setFullPreviewOpen(false)} />}
+      {fullPreviewOpen && <DocumentPreviewModal body={preview} tenantProfile={tenantProfile} onClose={() => setFullPreviewOpen(false)} filename={selectedTemplate} />}
     </>
   );
 }
@@ -2457,7 +2458,24 @@ function buildContractBody(template: string, partyA: string, partyB: string, ins
   ].join("\n");
 }
 
-function DocumentPreviewModal({ body, tenantProfile, onClose }: { body: string; tenantProfile: TenantProfile; onClose: () => void }) {
+function DocumentPreviewModal({ body, tenantProfile, onClose, filename }: { body: string; tenantProfile: TenantProfile; onClose: () => void; filename?: string }) {
+  function handleDownloadPdf() {
+    const element = document.querySelector<HTMLElement>(".document-page");
+    if (!element) return;
+    const safeFilename = (filename ?? "document").replace(/[^a-z0-9\-_ ]/gi, "_");
+    html2pdf()
+      .set({
+        margin: [15, 15, 15, 15],
+        filename: `${safeFilename}.pdf`,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        pagebreak: { mode: ["avoid-all", "css"] },
+      })
+      .from(element)
+      .save();
+  }
+
   return (
     <div className="document-modal" role="dialog" aria-modal="true" aria-label="Full document preview">
       <div className="document-modal-bar">
@@ -2468,6 +2486,7 @@ function DocumentPreviewModal({ body, tenantProfile, onClose }: { body: string; 
         <div className="preview-actions">
           <button className="small" onClick={() => navigator.clipboard.writeText(body)}>Copy</button>
           <button className="small" onClick={() => window.print()}>Print</button>
+          <button className="small" onClick={handleDownloadPdf}>Download PDF</button>
           <button className="small" onClick={onClose}><X size={16} /> Close</button>
         </div>
       </div>
