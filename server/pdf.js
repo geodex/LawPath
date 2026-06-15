@@ -34,6 +34,25 @@ async function generateContractPdf(options) {
     includeReviewWarning = true
   } = options;
 
+  // Pre-load logo buffer before entering the synchronous PDFKit stream
+  let logoBuffer = null;
+  const logoSrc = tenantProfile.logoDataUrl || tenantProfile.logoPublicUrl || "";
+  if (logoSrc) {
+    try {
+      if (logoSrc.startsWith("data:image")) {
+        const base64Data = logoSrc.replace(/^data:image\/\w+;base64,/, "");
+        logoBuffer = Buffer.from(base64Data, "base64");
+      } else if (logoSrc.startsWith("http")) {
+        const resp = await fetch(logoSrc);
+        if (resp.ok) {
+          logoBuffer = Buffer.from(await resp.arrayBuffer());
+        }
+      }
+    } catch {
+      logoBuffer = null;
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const chunks = [];
     const doc = new PDFDocument({ size: "A4", margin: 60, info: { Title: title, Author: tenantProfile.tradingName || "LawPath SA" } });
@@ -46,6 +65,15 @@ async function generateContractPdf(options) {
     const firmName = tenantProfile.tradingName || "LawPath SA";
 
     // ── LETTERHEAD ──────────────────────────────────────────────────────────
+    // Logo (top-right corner, max 120×44 pt)
+    if (logoBuffer) {
+      try {
+        doc.image(logoBuffer, doc.page.width - 180, 52, { fit: [120, 44] });
+      } catch {
+        // logo rendering failed; fall through to text-only header
+      }
+    }
+
     // Firm name
     doc.fontSize(16).fillColor(BRAND_GREEN).font("Helvetica-Bold").text(firmName, 60, 60);
 

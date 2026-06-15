@@ -3026,6 +3026,30 @@ app.post("/api/pdf/custom", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.post("/api/documents/pdf", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { title, body, matterRef, documentType } = req.body;
+  if (!body) return res.status(400).json({ error: "Body is required." });
+  try {
+    const profile = await pool.query("select * from tenant_profiles where tenant_id=$1", [req.user.tenantId]);
+    const tp = tenantProfileFromRow(profile.rows[0]) || {};
+    const docTitle = title || "Legal Document";
+    const pdfBuffer = await generateContractPdf({
+      title: docTitle,
+      body,
+      tenantProfile: tp,
+      parties: [],
+      signatories: [],
+      matterRef: matterRef || "",
+      documentType: documentType || "Draft Document",
+      includeReviewWarning: true
+    });
+    const safeFilename = docTitle.replace(/[^a-z0-9\-_ ]/gi, "_").replace(/\s+/g, "-");
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${safeFilename}.pdf"`, "Content-Length": pdfBuffer.length });
+    res.end(pdfBuffer);
+  } catch (error) { next(error); }
+});
+
 app.get("/api/pdf/trust-statement", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const { period } = req.query;

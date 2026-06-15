@@ -407,6 +407,34 @@ export async function recordInvoicePayment(invoiceId: string, data: {
   return request<{ invoice: Invoice }>(`/api/invoices/${invoiceId}/payments`, { method: "POST", body: JSON.stringify(data) });
 }
 
+export async function downloadDocumentPdf(title: string, body: string, filename: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const response = await fetch(`${API_BASE_URL}/api/documents/pdf`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title, body }),
+    });
+    if (!response.ok) return { ok: false, error: "Server error" };
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `${filename}.pdf`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Download failed" };
+  }
+}
+
 export async function getInvoicePdfUrl(id: string) {
   return request<{ url: string } | null>(`/api/invoices/${id}/pdf`);
 }

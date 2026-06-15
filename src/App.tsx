@@ -42,7 +42,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, getVerifyNowUsage, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
+import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, getVerifyNowUsage, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
 import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 import { FicaKyc } from "./FicaKyc";
@@ -64,7 +64,6 @@ import { Clients } from "./Clients";
 import { StripeBilling } from "./StripeBilling";
 import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
-import html2pdf from "html2pdf.js";
 
 const nav: NavItem[] = [
   { key: "overview",  label: "Overview", icon: Home },
@@ -2459,21 +2458,17 @@ function buildContractBody(template: string, partyA: string, partyB: string, ins
 }
 
 function DocumentPreviewModal({ body, tenantProfile, onClose, filename }: { body: string; tenantProfile: TenantProfile; onClose: () => void; filename?: string }) {
-  function handleDownloadPdf() {
-    const element = document.querySelector<HTMLElement>(".document-page");
-    if (!element) return;
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+
+  async function handleDownloadPdf() {
     const safeFilename = (filename ?? "document").replace(/[^a-z0-9\-_ ]/gi, "_");
-    html2pdf()
-      .set({
-        margin: [15, 15, 15, 15],
-        filename: `${safeFilename}.pdf`,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: { mode: ["avoid-all", "css"] },
-      })
-      .from(element)
-      .save();
+    const title = (filename ?? "Legal Document").replace(/[_-]/g, " ");
+    setPdfDownloading(true);
+    const result = await downloadDocumentPdf(title, body, safeFilename);
+    setPdfDownloading(false);
+    if (!result.ok) {
+      console.error("PDF download failed:", result.error);
+    }
   }
 
   return (
@@ -2486,7 +2481,7 @@ function DocumentPreviewModal({ body, tenantProfile, onClose, filename }: { body
         <div className="preview-actions">
           <button className="small" onClick={() => navigator.clipboard.writeText(body)}>Copy</button>
           <button className="small" onClick={() => window.print()}>Print</button>
-          <button className="small" onClick={handleDownloadPdf}>Download PDF</button>
+          <button className="small" onClick={handleDownloadPdf} disabled={pdfDownloading}>{pdfDownloading ? "Generating…" : "Download PDF"}</button>
           <button className="small" onClick={onClose}><X size={16} /> Close</button>
         </div>
       </div>
