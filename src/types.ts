@@ -131,6 +131,8 @@ export type TenantEmailSettings = {
   verifiedDomain: boolean;
 };
 
+export type InvoiceHeaderField = "address" | "phone" | "website" | "vatNumber" | "lpcNumber";
+
 export type TenantProfile = {
   tradingName: string;
   practiceType: string;
@@ -154,6 +156,7 @@ export type TenantProfile = {
   logoPublicUrl: string;
   onboardingCompleted: boolean;
   onboardingStep: number;
+  invoiceHeaderFields: InvoiceHeaderField[];
 };
 
 export type ApiProviderSettings = {

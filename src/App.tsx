@@ -184,7 +184,8 @@ const defaultTenantProfile = (companyName = ""): TenantProfile => ({
   logoStorageUri: "",
   logoPublicUrl: "",
   onboardingCompleted: false,
-  onboardingStep: 1
+  onboardingStep: 1,
+  invoiceHeaderFields: ["address", "phone", "website", "vatNumber", "lpcNumber"]
 });
 
 function fileToDataUrl(file: File) {
@@ -592,6 +593,7 @@ export function App() {
             pendingWipIds={pendingBillIds}
             onClearPendingWip={() => setPendingBillIds([])}
             tenantProfile={tenantProfile}
+            setTenantProfile={setTenantProfile}
             log={log}
             showToast={showToast}
           />

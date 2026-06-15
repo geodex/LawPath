@@ -88,6 +88,19 @@ function explainSettingsDatabaseError(error) {
   return "Database schema is missing a LawPath settings table or column. Pull the latest code and run migrations, including db/migrations/005_google_cloud_storage.sql.";
 }
 
+const DEFAULT_INVOICE_HEADER_FIELDS = ["address", "phone", "website", "vatNumber", "lpcNumber"];
+const VALID_INVOICE_HEADER_FIELDS = new Set(DEFAULT_INVOICE_HEADER_FIELDS);
+
+function parseInvoiceHeaderFields(raw) {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(f => VALID_INVOICE_HEADER_FIELDS.has(f))) {
+      return parsed;
+    }
+  } catch (_) {}
+  return DEFAULT_INVOICE_HEADER_FIELDS;
+}
+
 function tenantProfileFromRow(row) {
   if (!row) return null;
   return {
@@ -112,7 +125,8 @@ function tenantProfileFromRow(row) {
     logoStorageUri: row.logo_storage_uri || "",
     logoPublicUrl: row.logo_public_url || "",
     onboardingCompleted: Boolean(row.onboarding_completed),
-    onboardingStep: Number(row.onboarding_step || 1)
+    onboardingStep: Number(row.onboarding_step || 1),
+    invoiceHeaderFields: parseInvoiceHeaderFields(row.invoice_header_fields)
   };
 }
 
@@ -582,13 +596,18 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
       logoPublicUrl = uploadedLogo.publicUrl;
     }
 
+    const invoiceHeaderFields = Array.isArray(profile.invoiceHeaderFields) && profile.invoiceHeaderFields.length > 0
+      ? JSON.stringify(profile.invoiceHeaderFields.filter(f => VALID_INVOICE_HEADER_FIELDS.has(f)))
+      : JSON.stringify(DEFAULT_INVOICE_HEADER_FIELDS);
+
     const result = await pool.query(
       `insert into tenant_profiles
         (tenant_id, trading_name, practice_type, address_line_1, address_line_2, city, province, postal_code,
          phone, website, lpc_registration_number, company_registration_number, vat_number, conveyancer_count,
          senior_attorney_count, junior_attorney_count, candidate_attorney_count, legal_secretary_count,
-         logo_data_url, logo_storage_uri, logo_public_url, onboarding_completed, onboarding_step)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+         logo_data_url, logo_storage_uri, logo_public_url, onboarding_completed, onboarding_step,
+         invoice_header_fields)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
        on conflict (tenant_id) do update set
         trading_name = excluded.trading_name,
         practice_type = excluded.practice_type,
@@ -612,6 +631,7 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
         logo_public_url = excluded.logo_public_url,
         onboarding_completed = excluded.onboarding_completed,
         onboarding_step = excluded.onboarding_step,
+        invoice_header_fields = excluded.invoice_header_fields,
         updated_at = now()
        returning *`,
       [
@@ -637,7 +657,8 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
         logoStorageUri,
         logoPublicUrl,
         Boolean(profile.onboardingCompleted),
-        Number(profile.onboardingStep || 1)
+        Number(profile.onboardingStep || 1),
+        invoiceHeaderFields
       ]
     );
 

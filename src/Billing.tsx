@@ -1,7 +1,7 @@
-import { Printer } from "lucide-react";
+import { ChevronDown, ChevronUp, Printer, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { createInvoice, downloadInvoicePdf, getInvoicePdfUrl, getInvoices, recordInvoicePayment, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
-import type { Invoice, InvoicePayment, TenantProfile, TimeEntry } from "./types";
+import { createInvoice, downloadInvoicePdf, getInvoicePdfUrl, getInvoices, recordInvoicePayment, saveTenantProfile, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
+import type { InvoiceHeaderField, Invoice, InvoicePayment, TenantProfile, TimeEntry } from "./types";
 
 interface Props {
   entries: TimeEntry[];
@@ -9,9 +9,18 @@ interface Props {
   pendingWipIds: string[];
   onClearPendingWip: () => void;
   tenantProfile: TenantProfile;
+  setTenantProfile: React.Dispatch<React.SetStateAction<TenantProfile>>;
   log: (msg: string) => void;
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
 }
+
+const ALL_HEADER_FIELDS: { key: InvoiceHeaderField; label: string }[] = [
+  { key: "address", label: "Address" },
+  { key: "phone", label: "Phone" },
+  { key: "website", label: "Website" },
+  { key: "vatNumber", label: "VAT number" },
+  { key: "lpcNumber", label: "LPC registration" },
+];
 
 type FilterTab = "All" | Invoice["status"];
 const TABS: FilterTab[] = ["All", "Draft", "Sent", "Part-paid", "Overdue", "Paid", "Void"];
@@ -52,7 +61,7 @@ const EMPTY_DRAFT = {
   terms: "Payment due within 30 days of invoice date.",
 };
 
-export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip, tenantProfile, log, showToast }: Props) {
+export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip, tenantProfile, setTenantProfile, log, showToast }: Props) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<FilterTab>("All");
@@ -75,6 +84,10 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
   const [emailSending, setEmailSending] = useState(false);
 
   const [printingId, setPrintingId] = useState<string | null>(null);
+
+  const [showHeaderSettings, setShowHeaderSettings] = useState(false);
+  const [headerFieldsDraft, setHeaderFieldsDraft] = useState<InvoiceHeaderField[]>([]);
+  const [headerSettingsSaving, setHeaderSettingsSaving] = useState(false);
 
   const didInitPending = useRef(false);
 
@@ -211,15 +224,120 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
     }
   }
 
+  function openHeaderSettings() {
+    const current = tenantProfile.invoiceHeaderFields?.length
+      ? tenantProfile.invoiceHeaderFields
+      : ALL_HEADER_FIELDS.map(f => f.key);
+    setHeaderFieldsDraft(current);
+    setShowHeaderSettings(true);
+  }
+
+  function toggleHeaderField(key: InvoiceHeaderField) {
+    setHeaderFieldsDraft(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  }
+
+  function moveHeaderField(index: number, direction: -1 | 1) {
+    setHeaderFieldsDraft(prev => {
+      const next = [...prev];
+      const swapIndex = index + direction;
+      if (swapIndex < 0 || swapIndex >= next.length) return prev;
+      [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+      return next;
+    });
+  }
+
+  async function saveHeaderSettings() {
+    setHeaderSettingsSaving(true);
+    try {
+      const updated: TenantProfile = { ...tenantProfile, invoiceHeaderFields: headerFieldsDraft };
+      const res = await saveTenantProfile(updated);
+      setTenantProfile(res.tenantProfile);
+      setShowHeaderSettings(false);
+      showToast("success", "Header saved", "Invoice print header updated.");
+      log("Billing staff updated invoice header fields");
+    } catch (error) {
+      showToast("error", "Save failed", error instanceof Error ? error.message : "Could not save header settings.");
+    } finally {
+      setHeaderSettingsSaving(false);
+    }
+  }
+
+  const activeHeaderFields: InvoiceHeaderField[] = tenantProfile.invoiceHeaderFields?.length
+    ? tenantProfile.invoiceHeaderFields
+    : ALL_HEADER_FIELDS.map(f => f.key);
+
   return (
     <div className="billing-view">
       {/* PAGE HEADER */}
       <div className="topbar">
         <h1>Billing</h1>
         <div className="top-actions">
+          <button className="ghost small" title="Customise print header" onClick={openHeaderSettings}>
+            <Settings2 size={15} /> Header fields
+          </button>
           <button className="primary" onClick={() => setShowCreate(true)}>+ New Invoice</button>
         </div>
       </div>
+
+      {/* INVOICE HEADER SETTINGS PANEL */}
+      {showHeaderSettings && (
+        <div className="modal-backdrop" onClick={() => setShowHeaderSettings(false)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>Invoice print header fields</h3>
+              <button className="ghost small" onClick={() => setShowHeaderSettings(false)}>✕</button>
+            </div>
+            <p style={{ color: "var(--muted)", fontSize: "0.88rem", margin: "0 0 1rem" }}>
+              Choose which firm details appear beside your logo on printed invoices. Use the arrows to reorder them.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "1.25rem" }}>
+              {ALL_HEADER_FIELDS.map(({ key, label }) => {
+                const enabledIndex = headerFieldsDraft.indexOf(key);
+                const enabled = enabledIndex !== -1;
+                return (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.45rem 0.6rem", borderRadius: 6, background: "var(--surface-raised, #f8f8f8)" }}>
+                    <input
+                      type="checkbox"
+                      id={`hf-${key}`}
+                      checked={enabled}
+                      onChange={() => toggleHeaderField(key)}
+                      style={{ cursor: "pointer" }}
+                    />
+                    <label htmlFor={`hf-${key}`} style={{ flex: 1, cursor: "pointer", userSelect: "none" }}>{label}</label>
+                    {enabled && (
+                      <span style={{ display: "flex", gap: "0.2rem" }}>
+                        <button
+                          className="ghost small"
+                          title="Move up"
+                          disabled={enabledIndex === 0}
+                          onClick={() => moveHeaderField(enabledIndex, -1)}
+                          style={{ padding: "0 0.3rem" }}
+                        ><ChevronUp size={13} /></button>
+                        <button
+                          className="ghost small"
+                          title="Move down"
+                          disabled={enabledIndex === headerFieldsDraft.length - 1}
+                          onClick={() => moveHeaderField(enabledIndex, 1)}
+                          style={{ padding: "0 0.3rem" }}
+                        ><ChevronDown size={13} /></button>
+                      </span>
+                    )}
+                    {!enabled && <span style={{ width: 44 }} />}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", gap: "0.6rem", justifyContent: "flex-end" }}>
+              <button className="ghost small" onClick={() => setShowHeaderSettings(false)}>Cancel</button>
+              <button className="primary small" disabled={headerSettingsSaving} onClick={saveHeaderSettings}>
+                {headerSettingsSaving ? "Saving…" : "Save header"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* METRICS */}
       <section className="metrics">
@@ -292,15 +410,23 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
                       <div className="inv-print-firm-name">{tenantProfile.tradingName}</div>
                     </div>
                     <div className="inv-print-header-right">
-                      {tenantProfile.addressLine1 && <span>{tenantProfile.addressLine1}</span>}
-                      {tenantProfile.addressLine2 && <span>{tenantProfile.addressLine2}</span>}
-                      {(tenantProfile.city || tenantProfile.province || tenantProfile.postalCode) && (
-                        <span>{[tenantProfile.city, tenantProfile.province, tenantProfile.postalCode].filter(Boolean).join(", ")}</span>
-                      )}
-                      {tenantProfile.phone && <span>Tel: {tenantProfile.phone}</span>}
-                      {tenantProfile.website && <span>{tenantProfile.website}</span>}
-                      {tenantProfile.vatNumber && <span>VAT: {tenantProfile.vatNumber}</span>}
-                      {tenantProfile.lpcRegistrationNumber && <span>LPC: {tenantProfile.lpcRegistrationNumber}</span>}
+                      {activeHeaderFields.map(field => {
+                        if (field === "address") {
+                          const lines = [tenantProfile.addressLine1, tenantProfile.addressLine2].filter(Boolean);
+                          const cityLine = [tenantProfile.city, tenantProfile.province, tenantProfile.postalCode].filter(Boolean).join(", ");
+                          return (
+                            <>
+                              {lines.map((l, i) => <span key={`addr-${i}`}>{l}</span>)}
+                              {cityLine && <span key="city">{cityLine}</span>}
+                            </>
+                          );
+                        }
+                        if (field === "phone" && tenantProfile.phone) return <span key="phone">Tel: {tenantProfile.phone}</span>;
+                        if (field === "website" && tenantProfile.website) return <span key="website">{tenantProfile.website}</span>;
+                        if (field === "vatNumber" && tenantProfile.vatNumber) return <span key="vat">VAT: {tenantProfile.vatNumber}</span>;
+                        if (field === "lpcNumber" && tenantProfile.lpcRegistrationNumber) return <span key="lpc">LPC: {tenantProfile.lpcRegistrationNumber}</span>;
+                        return null;
+                      })}
                     </div>
                   </div>
                 )}
