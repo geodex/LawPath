@@ -5139,6 +5139,31 @@ select {
     padding: 0 !important;
   }
 
+  /* ── 5. CASE B-2 — Invoice print target is active.
+          Hide all content; reveal only the targeted invoice row + detail. ── */
+  body:has(.invoice-print-target) * {
+    visibility: hidden !important;
+  }
+
+  body:has(.invoice-print-target) .invoice-print-target,
+  body:has(.invoice-print-target) .invoice-print-target * {
+    visibility: visible !important;
+  }
+
+  body:has(.invoice-print-target) .invoice-print-target {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  body:has(.invoice-print-target) .invoice-print-target button {
+    display: none !important;
+  }
+
   /* ── 5. CASE B — No document modal (invoice/billing/overview screens).
           Hide navigation chrome; collapse the shell; let .main print. ───── */
   .sidebar,

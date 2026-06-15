@@ -74,6 +74,8 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
   const [emailForm, setEmailForm] = useState({ toEmail: "", toName: "", message: "" });
   const [emailSending, setEmailSending] = useState(false);
 
+  const [printingId, setPrintingId] = useState<string | null>(null);
+
   const didInitPending = useRef(false);
 
   useEffect(() => {
@@ -84,6 +86,18 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
       setLoading(false);
     })();
   }, []);
+
+  useEffect(() => {
+    function onAfterPrint() { setPrintingId(null); }
+    window.addEventListener("afterprint", onAfterPrint);
+    return () => window.removeEventListener("afterprint", onAfterPrint);
+  }, []);
+
+  function handlePrint(id: string) {
+    setExpandedId(id);
+    setPrintingId(id);
+    setTimeout(() => window.print(), 60);
+  }
 
   useEffect(() => {
     if (pendingWipIds.length > 0 && !didInitPending.current) {
@@ -264,7 +278,7 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
             </div>
 
             {filtered.map(inv => (
-              <div key={inv.id}>
+              <div key={inv.id} className={printingId === inv.id ? "invoice-print-target" : undefined}>
                 <div className={`inv-row${expandedId === inv.id ? " inv-row-open" : ""}`}>
                   <span><code style={{ fontSize: "0.82rem", fontWeight: 700 }}>{inv.invoiceNumber}</code></span>
                   <span>
@@ -287,7 +301,7 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
                       <button className="ghost small" disabled={pdfDownloadingId === inv.id} onClick={() => handleDownloadPdf(inv)}>
                         {pdfDownloadingId === inv.id ? "…" : "Download PDF"}
                       </button>
-                      <button className="ghost small" title="Print invoice" onClick={() => window.print()}>
+                      <button className="ghost small" title="Print invoice" onClick={() => handlePrint(inv.id)}>
                         <Printer size={14} /> Print
                       </button>
                       <button className="ghost small" onClick={() => { setEmailTarget(inv.id); setEmailForm({ toEmail: inv.clientEmail || "", toName: inv.clientName || "", message: "" }); }}>Email Invoice</button>
