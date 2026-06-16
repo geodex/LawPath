@@ -2425,6 +2425,46 @@ app.get("/api/documents/analyses", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Decode a data: URL into { buffer, mimeType }. Returns null for malformed
+// or non-base64 inputs. Used by the document analyser to recover the raw
+// upload bytes before extraction.
+function decodeDataUrl(dataUrl) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return null;
+  const m = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
+  if (!m) return null;
+  try {
+    return { mimeType: m[1], buffer: Buffer.from(m[2], "base64") };
+  } catch {
+    return null;
+  }
+}
+
+// Extract text from common SA legal document uploads. PDF / DOCX text
+// extraction would require pdf-parse / mammoth (not installed) — for now
+// those return null and the caller falls back to a helpful "unsupported
+// format" status instead of producing an empty Complete analysis.
+function extractDocumentText(buffer, mimeType, fileName) {
+  if (!buffer) return { text: "", reason: "no_buffer" };
+  const name = (fileName || "").toLowerCase();
+  const mt = (mimeType || "").toLowerCase();
+  const isTextLike =
+    mt.startsWith("text/") ||
+    mt === "application/json" ||
+    name.endsWith(".txt") ||
+    name.endsWith(".md") ||
+    name.endsWith(".csv") ||
+    name.endsWith(".html") ||
+    name.endsWith(".htm");
+  if (isTextLike) {
+    let text = buffer.toString("utf8");
+    if (mt.includes("html") || name.endsWith(".html") || name.endsWith(".htm")) {
+      text = htmlToText(text);
+    }
+    return { text: text.slice(0, 80_000), reason: "ok" };
+  }
+  return { text: "", reason: "unsupported_format" };
+}
+
 app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const { fileName, fileDataUrl, matterRef } = req.body;
@@ -2436,24 +2476,113 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     );
     const analysis = result.rows[0];
     const { apiKey, model } = await getOpenAiSettings();
-    if (apiKey) {
-      (async () => {
-        try {
-          await pool.query("update document_analyses set analysis_status='Analysing' where id=$1", [analysis.id]);
-          const prompt = `Analyse this South African legal document and return ONLY valid JSON with these fields: documentType (string), parties (string array), keyDates (array of {label,date}), obligations (string array of obligations), riskFlags (string array of risks), saLawFlags (string array of SA-specific flags like voetstoots, CPA, NCA, POPIA), summary (2-3 sentence plain English summary). Document name: ${fileName}. Content: ${fileDataUrl ? "See attached" : "Analyse by filename only."}`;
-          const aiRes = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, input: [{ role: "user", content: prompt }] }) });
-          const payload = await aiRes.json();
-          const text = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || "{}";
-          const jsonMatch = text.match(/\{[\s\S]*\}/);
-          const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-          await pool.query("update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, analysed_at=now() where id=$1", [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], parsed.summary || "", model]);
-        } catch (e) {
-          await pool.query("update document_analyses set analysis_status='Failed' where id=$1", [analysis.id]);
-        }
-      })();
-    } else {
-      await pool.query("update document_analyses set analysis_status='Failed', summary='No OpenAI API key configured. Add one under Settings.' where id=$1", [analysis.id]);
+
+    if (!apiKey) {
+      await pool.query(
+        "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+        [analysis.id, "No OpenAI API key configured on the platform. Ask your administrator to add one under Settings → API keys."]
+      );
+      const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+      return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
     }
+
+    // Decode and extract text up front so we can give the user a useful
+    // error before we even spend an AI call on an unanalysable file.
+    const decoded = decodeDataUrl(fileDataUrl);
+    const { text, reason } = extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
+
+    if (reason === "unsupported_format") {
+      await pool.query(
+        "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+        [analysis.id, "PDF and DOCX text extraction is not yet enabled on the server. Convert the document to TXT or MD and upload it again."]
+      );
+      const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+      return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
+    }
+
+    if (!text.trim()) {
+      await pool.query(
+        "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+        [analysis.id, "Could not read any text from the uploaded file. Check that the file is not empty and try again."]
+      );
+      const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+      return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
+    }
+
+    // Fire-and-forget. The frontend will see the new record on its next
+    // refresh of the analyses list.
+    (async () => {
+      try {
+        await pool.query("update document_analyses set analysis_status='Analysing' where id=$1", [analysis.id]);
+        const prompt = `You are analysing a South African legal document. Return ONLY valid JSON (no prose, no markdown fences) with these exact fields:
+- documentType (short string, e.g. "Sale of Land Agreement", "Lease", "Notice of Motion")
+- parties (string array of party names)
+- keyDates (array of { label: string, date: string } — date in ISO YYYY-MM-DD if possible)
+- obligations (string array; each item is one concrete obligation in plain English)
+- riskFlags (string array of concerning clauses or risks)
+- saLawFlags (string array of SA-specific concerns: voetstoots, CPA cooling-off, NCA compliance, POPIA obligations, FICA, etc.)
+- summary (2–3 sentence plain English summary)
+
+Document filename: ${fileName}
+
+Document content:
+"""
+${text}
+"""`;
+        const aiRes = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model, input: [{ role: "user", content: prompt }] })
+        });
+        const payload = await aiRes.json();
+        if (!aiRes.ok) {
+          const apiMsg = payload?.error?.message || `HTTP ${aiRes.status}`;
+          await pool.query(
+            "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+            [analysis.id, `AI request failed: ${apiMsg}. Check the model name (${model}) and API key under Settings → API keys.`]
+          );
+          return;
+        }
+        const aiText = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || "";
+        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          await pool.query(
+            "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+            [analysis.id, "AI did not return structured analysis. Try a different model under Settings → API keys, or re-upload the document."]
+          );
+          return;
+        }
+        let parsed;
+        try { parsed = JSON.parse(jsonMatch[0]); } catch { parsed = {}; }
+
+        const hasContent =
+          (parsed.summary && String(parsed.summary).trim()) ||
+          (Array.isArray(parsed.parties) && parsed.parties.length > 0) ||
+          (Array.isArray(parsed.keyDates) && parsed.keyDates.length > 0) ||
+          (Array.isArray(parsed.obligations) && parsed.obligations.length > 0) ||
+          (Array.isArray(parsed.riskFlags) && parsed.riskFlags.length > 0) ||
+          (Array.isArray(parsed.saLawFlags) && parsed.saLawFlags.length > 0);
+
+        if (!hasContent) {
+          await pool.query(
+            "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+            [analysis.id, "AI returned an empty analysis. The document may be too short or unclear for extraction — try uploading a longer text version."]
+          );
+          return;
+        }
+
+        await pool.query(
+          "update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, analysed_at=now() where id=$1",
+          [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], parsed.summary || "", model]
+        );
+      } catch (e) {
+        await pool.query(
+          "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+          [analysis.id, `Analysis pipeline error: ${e.message || "Unknown error"}.`]
+        );
+      }
+    })();
+
     res.status(201).json({ analysis: docAnalysisFromRow(analysis) });
   } catch (error) { next(error); }
 });

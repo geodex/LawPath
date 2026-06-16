@@ -1,6 +1,6 @@
-import { AlertTriangle, CheckCircle2, FileSearch, FileText, Scale, Sparkles, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileSearch, FileText, RefreshCw, Scale, Sparkles, Upload } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { submitDocumentForAnalysis } from "./api";
+import { getDocumentAnalyses, submitDocumentForAnalysis } from "./api";
 import type { DocumentAnalysis } from "./types";
 
 type Props = {
@@ -33,8 +33,22 @@ function StatusPill({ status }: { status: DocumentAnalysis["analysisStatus"] }) 
 export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [matterRef, setMatterRef] = useState("");
+
+  async function refreshAnalyses() {
+    setRefreshing(true);
+    try {
+      const res = await getDocumentAnalyses();
+      setAnalyses(res.analyses);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Refresh failed";
+      showToast("error", "Refresh failed", msg);
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const totalRiskFlags = analyses.reduce((acc, a) => acc + a.riskFlags.length, 0);
   const totalSaFlags = analyses.reduce((acc, a) => acc + a.saLawFlags.length, 0);
@@ -149,7 +163,12 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
         <div className="panel">
           <div className="panel-head">
             <h3><FileText size={16} style={{ verticalAlign: "-3px", marginRight: 6, color: "var(--green)" }} /> Analysis register</h3>
-            <span className="pill">{analyses.length}</span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button className="ghost small" onClick={refreshAnalyses} disabled={refreshing} title="Refresh statuses">
+                <RefreshCw size={13} /> {refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+              <span className="pill">{analyses.length}</span>
+            </div>
           </div>
           <div>
             {analyses.map((a) => {
@@ -181,6 +200,24 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
 
                   {expanded && (
                     <div className="doc-detail">
+                      {a.analysisStatus === "Failed" && (
+                        <div className="doc-risk-item" style={{ marginBottom: 16 }}>
+                          <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                          <span><strong>Analysis failed.</strong>{a.summary ? ` ${a.summary}` : " The AI could not produce a structured analysis for this document."}</span>
+                        </div>
+                      )}
+                      {a.analysisStatus === "Complete" &&
+                        !a.summary &&
+                        a.parties.length === 0 &&
+                        a.keyDates.length === 0 &&
+                        a.obligations.length === 0 &&
+                        a.riskFlags.length === 0 &&
+                        a.saLawFlags.length === 0 && (
+                        <div className="doc-risk-item" style={{ marginBottom: 16, background: "var(--gold-bg)", color: "var(--gold)" }}>
+                          <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                          <span>Analysis completed but returned no extracted data. The document may be too short or unclear, or the AI model may not have a configured key. Retry with a longer extract, or ask your administrator to check the OpenAI configuration.</span>
+                        </div>
+                      )}
                       {a.summary && (
                         <div style={{ marginBottom: 16 }}>
                           <h4 style={{ margin: "0 0 6px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
