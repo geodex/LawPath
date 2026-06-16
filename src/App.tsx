@@ -45,7 +45,8 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, getVerifyNowUsage, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
-import { appointments as appointmentSeed, contracts as contractSeed, invoices as invoiceSeed, matters as matterSeed, research as researchSeed, tasks as taskSeed } from "./data";
+// Seed data from ./data is intentionally not imported here. Each tenant
+// starts with empty workspaces and populates real data via the API.
 import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 import { FicaKyc } from "./FicaKyc";
 import { PopiaCompliance } from "./PopiaCompliance";
@@ -214,12 +215,12 @@ export function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [activeView, setActiveView] = useState<ViewKey>("overview");
   const [portalMode, setPortalMode] = useState<"lawyer" | "client">("lawyer");
-  const [matters, setMatters] = useState<Matter[]>(matterSeed);
-  const [contracts, setContracts] = useState<ContractDraft[]>(contractSeed);
-  const [research, setResearch] = useState<ResearchItem[]>(researchSeed);
-  const [tasks, setTasks] = useState<WorkTask[]>(taskSeed);
+  const [matters, setMatters] = useState<Matter[]>([]);
+  const [contracts, setContracts] = useState<ContractDraft[]>([]);
+  const [research, setResearch] = useState<ResearchItem[]>([]);
+  const [tasks, setTasks] = useState<WorkTask[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [appointments, setAppointments] = useState<Appointment[]>(appointmentSeed);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [smtpSettings, setSmtpSettings] = useState<SmtpSettings>(defaultSmtpSettings);
   const [tenantEmailSettings, setTenantEmailSettings] = useState<TenantEmailSettings>(defaultTenantEmailSettings);
   const [tenantProfile, setTenantProfile] = useState<TenantProfile>(defaultTenantProfile);
@@ -236,11 +237,7 @@ export function App() {
     verifyNowApiKey: "",
     lightstoneApiKey: ""
   });
-  const [ragSources, setRagSources] = useState<RagSource[]>([
-    { id: "RAG-001", name: "South African conveyancing authorities", scope: "Platform", sourceType: "Case law", status: "Indexed", documentCount: 1280, lastIndexed: "2026-06-04" },
-    { id: "RAG-002", name: "Commercial contract clause bank", scope: "Platform", sourceType: "Contract bank", status: "Indexed", documentCount: 342, lastIndexed: "2026-06-02" },
-    { id: "RAG-003", name: "Tenant precedent template pack", scope: "Tenant template", sourceType: "Firm precedent", status: "Queued", documentCount: 0, lastIndexed: "Pending" }
-  ]);
+  const [ragSources, setRagSources] = useState<RagSource[]>([]);
   const [assistantTraining, setAssistantTraining] = useState<AssistantTrainingSettings>({
     defaultAssistant: "LawPath Legal Assistant",
     retrievalMode: "Balanced",
@@ -251,126 +248,49 @@ export function App() {
     systemInstructions: "Use South African legal context, cite retrieved sources, flag uncertainty, and require attorney review before client-facing legal advice is sent."
   });
   // ─── Tier 2 state ──────────────────────────────────────────────────────────
-  const [conveyancingMatters, setConveyancingMatters] = useState<ConveyancingMatter[]>([
-    { id: "CM-001", matterRef: "M-1048/T", matterType: "transfer", sellerName: "Thabo Dlamini", buyerName: "Nomsa Sithole", propertyDescription: "Erf 1204, Sandton, Gauteng", erfNumber: "Erf 1204", purchasePriceCents: 250000000, transferDutyCents: 16155000, conveyancingFeeCents: 3750000, vatOnFeeCents: 562500, estateAgent: "Pam Golding Properties", bondBank: "FNB", currentStage: "sars_transfer_duty", ficaStatus: "Compliant", ratesClearanceStatus: "Requested", levyClearanceStatus: "Not requested", ratesClearanceExpiry: "", levyClearanceExpiry: "", targetRegistrationDate: "2026-07-15", notes: "Linked sale — buyer must sell Midrand property.", stages: [] }
-  ]);
-  const [litigationMatters, setLitigationMatters] = useState<LitigationMatter[]>([
-    { id: "LM-001", matterRef: "LIT-2026-001", caseNumber: "12345/2026", court: "Gauteng High Court, Johannesburg", courtDivision: "Commercial", plaintiff: "ABC Construction (Pty) Ltd", defendant: "XYZ Developers CC", matterType: "opposed_motion", currentStage: "pleadings", claimAmountCents: 85000000, costsRecoveredCents: 0, status: "Active", serviceDate: "2026-05-01", notes: "Opposed motion for payment of outstanding construction contract amount.", deadlines: [{ id: "DL-001", description: "Deliver answering affidavit", ruleReference: "Rule 6(5)(d)", dueDate: "2026-06-18", daysFromService: 48, completed: false, priority: "Urgent" }, { id: "DL-002", description: "Deliver replying affidavit", ruleReference: "Rule 6(5)(e)", dueDate: "2026-07-02", daysFromService: 62, completed: false, priority: "Normal" }], courtDates: [{ id: "CD-001", courtDate: "2026-08-14", courtTime: "10:00", court: "Gauteng High Court, Johannesburg", purpose: "Hearing of opposed application", rollType: "Opposed", outcome: "", postponedTo: "" }], costOrders: [] }
-  ]);
-  const [waContacts, setWaContacts] = useState<WhatsAppContact[]>([
-    { id: "WC-001", clientName: "Thabo Dlamini", phoneNumber: "+27821234567", matterRef: "M-1048/T", optIn: true, optInDate: "2026-05-10T09:00:00Z" }
-  ]);
-  const [waMessages, setWaMessages] = useState<WhatsAppMessage[]>([
-    { id: "WM-001", contactId: "WC-001", clientName: "Thabo Dlamini", phoneNumber: "+27821234567", matterRef: "M-1048/T", direction: "outbound", messageBody: "Good day Thabo, your transfer (M-1048/T) has been lodged at the Deeds Office. Registration is expected within 8-10 working days.", templateId: "transfer_lodged", status: "read", sentAt: "2026-06-04T11:30:00Z" },
-    { id: "WM-002", contactId: "WC-001", clientName: "Thabo Dlamini", phoneNumber: "+27821234567", matterRef: "M-1048/T", direction: "inbound", messageBody: "Thank you! Appreciate the update.", templateId: "", status: "read", sentAt: "2026-06-04T11:45:00Z" }
-  ]);
+  const [conveyancingMatters, setConveyancingMatters] = useState<ConveyancingMatter[]>([]);
+  const [litigationMatters, setLitigationMatters] = useState<LitigationMatter[]>([]);
+  const [waContacts, setWaContacts] = useState<WhatsAppContact[]>([]);
+  const [waMessages, setWaMessages] = useState<WhatsAppMessage[]>([]);
+  // WhatsApp templates are platform-level boilerplate available to every tenant
+  // out of the box. Keeping these is fine — they don't leak tenant data.
   const [waTemplates, setWaTemplates] = useState<WhatsAppTemplate[]>([
     { id: "WT-001", name: "Transfer lodged", category: "transfer_update", body: "Good day {{client_name}}, your transfer ({{matter_ref}}) has been lodged at the Deeds Office. Registration is expected within 8-10 working days.", variables: ["client_name", "matter_ref"] },
     { id: "WT-002", name: "FICA documents required", category: "fica_request", body: "Dear {{client_name}}, we still require FICA documents for matter {{matter_ref}}: {{documents_required}}.", variables: ["client_name", "matter_ref", "documents_required"] },
     { id: "WT-003", name: "Appointment reminder", category: "appointment_reminder", body: "Dear {{client_name}}, reminder of your appointment on {{date}} at {{time}}. Please reply to confirm.", variables: ["client_name", "date", "time"] }
   ]);
   const [documentAnalyses, setDocumentAnalyses] = useState<DocumentAnalysis[]>([]);
+  // Accounting providers are a fixed catalogue of supported integrations;
+  // the *connection state* is per-tenant and starts un-connected.
   const [accountingConnections, setAccountingConnections] = useState<AccountingConnection[]>([
     { id: "AC-001", provider: "sage_pastel", connected: false, lastSyncAt: "", syncStatus: "idle", errorMessage: "" },
     { id: "AC-002", provider: "xero", connected: false, lastSyncAt: "", syncStatus: "idle", errorMessage: "" },
     { id: "AC-003", provider: "quickbooks", connected: false, lastSyncAt: "", syncStatus: "idle", errorMessage: "" },
-    { id: "AC-004", provider: "csv_export", connected: true, lastSyncAt: "", syncStatus: "idle", errorMessage: "" }
+    { id: "AC-004", provider: "csv_export", connected: false, lastSyncAt: "", syncStatus: "idle", errorMessage: "" }
   ]);
   const [accountingExportLog, setAccountingExportLog] = useState<AccountingExportRecord[]>([]);
 
   // ─── Tier 3 state ──────────────────────────────────────────────────────────
-  const [corpusSources, setCorpusSources] = useState<LegalCorpusSource[]>([
-    { id: "CS-001", sourceName: "SAFLII — Southern African Legal Information Institute", sourceType: "case_law", courtOrBody: "All SA Courts", indexStatus: "indexed", documentCount: 184220, lastIndexedAt: "2026-06-04T02:00:00Z", isPlatformCorpus: true },
-    { id: "CS-002", sourceName: "South African Constitution, 1996", sourceType: "constitution", courtOrBody: "Parliament", indexStatus: "indexed", documentCount: 1, lastIndexedAt: "2026-01-01T00:00:00Z", isPlatformCorpus: true },
-    { id: "CS-003", sourceName: "Government Gazette — Acts of Parliament", sourceType: "legislation", courtOrBody: "Government Printer", indexStatus: "indexed", documentCount: 4812, lastIndexedAt: "2026-06-01T03:00:00Z", isPlatformCorpus: true },
-    { id: "CS-004", sourceName: "Legal Practice Council Rules & Directives", sourceType: "lpc_rules", courtOrBody: "Legal Practice Council", indexStatus: "indexed", documentCount: 48, lastIndexedAt: "2026-05-15T08:00:00Z", isPlatformCorpus: true },
-    { id: "CS-005", sourceName: "Tenant Firm Precedents", sourceType: "legislation", courtOrBody: "", indexStatus: "pending", documentCount: 0, lastIndexedAt: "", isPlatformCorpus: false }
-  ]);
-  const [corpusDocuments, setCorpusDocuments] = useState<LegalCorpusDocument[]>([
-    { id: "CD-001", sourceId: "CS-001", title: "Barkhuizen v Napier 2007 (5) SA 323 (CC)", citation: "[2007] ZACC 5", court: "Constitutional Court", decisionDate: "2007-04-04", summary: "The Constitutional Court held that contractual clauses that oust the jurisdiction of courts or limit access to courts must be tested against the Constitution.", sourceUrl: "http://www.saflii.org/za/cases/ZACC/2007/5.html", gcsUri: "", tags: ["contract law", "constitutional", "access to courts"], year: 2007 },
-    { id: "CD-002", sourceId: "CS-001", title: "Everfresh Market Virginia (Pty) Ltd v Shoprite Checkers (Pty) Ltd 2012 (1) SA 256 (CC)", citation: "[2011] ZACC 30", court: "Constitutional Court", decisionDate: "2011-11-17", summary: "The duty to negotiate in good faith in the context of lease renewals, and the interface between constitutional values and the law of contract.", sourceUrl: "http://www.saflii.org/za/cases/ZACC/2011/30.html", gcsUri: "", tags: ["contract law", "good faith", "lease"], year: 2011 },
-    { id: "CD-003", sourceId: "CS-001", title: "National Credit Regulator v Opperman 2013 (2) SA 1 (CC)", citation: "[2012] ZACC 29", court: "Constitutional Court", decisionDate: "2012-12-03", summary: "The National Credit Act and the right to equality — whether prescription runs during a credit agreement dispute.", sourceUrl: "http://www.saflii.org/za/cases/ZACC/2012/29.html", gcsUri: "", tags: ["NCA", "credit agreement", "prescription"], year: 2012 }
-  ]);
+  const [corpusSources, setCorpusSources] = useState<LegalCorpusSource[]>([]);
+  const [corpusDocuments, setCorpusDocuments] = useState<LegalCorpusDocument[]>([]);
   const [researchQueries, setResearchQueries] = useState<ResearchQuery[]>([]);
-  const [signatureRequests, setSignatureRequests] = useState<SignatureRequest[]>([
-    { id: "SR-001", documentTitle: "Offer to Purchase — Erf 1204 Sandton", documentType: "contract", matterRef: "M-1048/T", documentBody: "", status: "partially_signed", expiresAt: "2026-07-05T00:00:00Z", completedAt: "", signatories: [{ id: "SS-001", signatoryName: "Thabo Dlamini", signatoryEmail: "thabo@example.co.za", signatoryIdNumber: "8201015009087", role: "Seller", orderPosition: 1, status: "signed", signedAt: "2026-06-03T10:22:00Z", signatureMethod: "drawn" }, { id: "SS-002", signatoryName: "Nomsa Sithole", signatoryEmail: "nomsa@example.co.za", signatoryIdNumber: "8505125009083", role: "Buyer", orderPosition: 2, status: "pending", signedAt: "", signatureMethod: "" }], auditEvents: [{ id: "AE-001", eventType: "request_created", description: "Signature request created", ipAddress: "102.0.0.1", createdAt: "2026-06-03T09:00:00Z" }, { id: "AE-002", eventType: "otp_sent", description: "OTP sent to thabo@example.co.za", ipAddress: "102.0.0.1", createdAt: "2026-06-03T10:00:00Z" }, { id: "AE-003", eventType: "signed", description: "Thabo Dlamini signed using drawn signature", ipAddress: "102.0.0.1", createdAt: "2026-06-03T10:22:00Z" }] }
-  ]);
-  const [estateAgents, setEstateAgents] = useState<EstateAgent[]>([
-    { id: "EA-001", agentName: "Sandra Meyer", agencyName: "Pam Golding Properties", email: "sandra.meyer@pamgolding.co.za", phone: "+27824567890", ffcNumber: "FFC-123456", ppraRegistration: "PPRA-987654", areaOfOperation: "Sandton, Fourways, Midrand", status: "active", commissionRate: 0.05, portalAccess: true, portalToken: "LP-AGENT-7721", totalReferrals: 14, totalCommissionCents: 42500000 },
-    { id: "EA-002", agentName: "Johan van der Berg", agencyName: "RE/MAX Coastal", email: "johan@remax.co.za", phone: "+27836543210", ffcNumber: "FFC-654321", ppraRegistration: "PPRA-123789", areaOfOperation: "Cape Town Atlantic Seaboard, Sea Point", status: "active", commissionRate: 0.05, portalAccess: false, portalToken: "", totalReferrals: 7, totalCommissionCents: 18750000 }
-  ]);
-  const [agentReferrals, setAgentReferrals] = useState<AgentReferral[]>([
-    { id: "AR-001", agentId: "EA-001", agentName: "Sandra Meyer", matterRef: "M-1048/T", propertyDescription: "Erf 1204, Sandton", buyerName: "Nomsa Sithole", sellerName: "Thabo Dlamini", purchasePriceCents: 250000000, commissionCents: 12500000, commissionStatus: "pending", referralDate: "2026-05-20", paidDate: "" },
-    { id: "AR-002", agentId: "EA-001", agentName: "Sandra Meyer", matterRef: "M-2201", propertyDescription: "Unit 3B, Somerset West", buyerName: "Zanele Khumalo", sellerName: "Pierre du Toit", purchasePriceCents: 185000000, commissionCents: 9250000, commissionStatus: "approved", referralDate: "2026-04-15", paidDate: "" }
-  ]);
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsSnapshot | null>({
-    id: "AN-001", periodMonth: "2026-06",
-    totalMattersActive: 12, totalMattersClosed: 4,
-    wipTotalCents: 184500000, billedTotalCents: 92300000, collectedTotalCents: 78600000, writtenOffCents: 3200000,
-    trustBalanceCents: 295000000,
-    debtors30Cents: 38500000, debtors60Cents: 18200000, debtors90Cents: 9100000, debtors120PlusCents: 4800000,
-    realisationRate: 0.82, collectionRate: 0.91,
-    feeEarnerStats: [
-      { name: "T. Mokoena", wipCents: 95000000, billedCents: 48000000, collectedCents: 42000000, realisationRate: 0.84, collectionRate: 0.89, matterCount: 7 },
-      { name: "A. Sithole", wipCents: 56000000, billedCents: 29000000, collectedCents: 24000000, realisationRate: 0.79, collectionRate: 0.93, matterCount: 4 },
-      { name: "N. Khumalo", wipCents: 33500000, billedCents: 15300000, collectedCents: 12600000, realisationRate: 0.76, collectionRate: 0.87, matterCount: 1 }
-    ],
-    matterTypeStats: [
-      { matterType: "Conveyancing", count: 8, avgCycleTimeDays: 62, totalFeeCents: 95000000 },
-      { matterType: "Litigation", count: 3, avgCycleTimeDays: 180, totalFeeCents: 48000000 },
-      { matterType: "Commercial", count: 1, avgCycleTimeDays: 45, totalFeeCents: 18500000 }
-    ]
-  });
+  const [signatureRequests, setSignatureRequests] = useState<SignatureRequest[]>([]);
+  const [estateAgents, setEstateAgents] = useState<EstateAgent[]>([]);
+  const [agentReferrals, setAgentReferrals] = useState<AgentReferral[]>([]);
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsSnapshot | null>(null);
 
   // ─── Tier 1 state ──────────────────────────────────────────────────────────
-  const [trustTransactions, setTrustTransactions] = useState<TrustTransaction[]>([
-    { id: "TT-001", clientName: "Dlamini, T", description: "Transfer deposit received – Erf 1204 Sandton", reference: "M-1048/DEP", entryType: "receipt", amountCents: 25000000, runningBalanceCents: 25000000, valueDate: "2026-06-02", reconciled: false },
-    { id: "TT-002", clientName: "Mokoena & Partners", description: "SARS Transfer Duty payment – M-1048", reference: "M-1048/SARS", entryType: "payment", amountCents: 3750000, runningBalanceCents: 21250000, valueDate: "2026-06-04", reconciled: false },
-    { id: "TT-003", clientName: "Sithole, N", description: "Bond registration deposit – Unit 3B Somerset West", reference: "M-2201/BOND", entryType: "receipt", amountCents: 8500000, runningBalanceCents: 29750000, valueDate: "2026-06-05", reconciled: false }
-  ]);
-  const [trustBalanceCents, setTrustBalanceCents] = useState(29750000);
-  const [trustReconciliations, setTrustReconciliations] = useState<TrustReconciliation[]>([
-    { id: "TR-001", periodMonth: "2026-05", bankStatementBalanceCents: 18200000, ledgerBalanceCents: 18200000, clientCreditTotalCents: 18200000, status: "Submitted" }
-  ]);
+  const [trustTransactions, setTrustTransactions] = useState<TrustTransaction[]>([]);
+  const [trustBalanceCents, setTrustBalanceCents] = useState(0);
+  const [trustReconciliations, setTrustReconciliations] = useState<TrustReconciliation[]>([]);
 
-  const [ficaClients, setFicaClients] = useState<FicaClient[]>([
-    {
-      id: "FC-001", clientName: "Thabo Dlamini", clientType: "natural_person", idNumber: "8201015009087",
-      riskRating: "Low", ficaStatus: "Compliant", ficaExpiryDate: "2027-06-01", sourceOfFunds: "Employment income",
-      sanctionsChecked: true,
-      documents: [
-        { id: "FD-001", documentType: "identity", documentName: "Certified ID / Passport copy", status: "Verified", expiryDate: "" },
-        { id: "FD-002", documentType: "proof_of_address", documentName: "Proof of residence (not older than 3 months)", status: "Verified", expiryDate: "2026-09-01" },
-        { id: "FD-003", documentType: "source_of_funds", documentName: "Source of funds declaration", status: "Verified", expiryDate: "" }
-      ]
-    },
-    {
-      id: "FC-002", clientName: "Sithole Investments (Pty) Ltd", clientType: "legal_entity", idNumber: "",
-      riskRating: "Medium", ficaStatus: "In Progress", ficaExpiryDate: "", sourceOfFunds: "Business operations",
-      sanctionsChecked: false,
-      documents: [
-        { id: "FD-004", documentType: "cipc_cert", documentName: "CIPC registration certificate", status: "Uploaded", expiryDate: "" },
-        { id: "FD-005", documentType: "moi", documentName: "Memorandum of Incorporation", status: "Required", expiryDate: "" },
-        { id: "FD-006", documentType: "directors", documentName: "Certified ID copies of all directors/members", status: "Required", expiryDate: "" }
-      ]
-    }
-  ]);
+  const [ficaClients, setFicaClients] = useState<FicaClient[]>([]);
 
-  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([
-    { id: "TE-001", clientName: "Dlamini, T", matterRef: "M-1048", feeEarnerName: "T. Mokoena", entryDate: "2026-06-05", activityType: "professional_fee", description: "Reviewing title deed and preparing transfer documents", durationMinutes: 90, rateCents: 350000, amountCents: 525000, vatAmountCents: 78750, status: "WIP", isDisbursement: false },
-    { id: "TE-002", clientName: "Dlamini, T", matterRef: "M-1048", feeEarnerName: "T. Mokoena", entryDate: "2026-06-04", activityType: "correspondence", description: "Correspondence with estate agent re: suspensive conditions", durationMinutes: 30, rateCents: 350000, amountCents: 175000, vatAmountCents: 26250, status: "WIP", isDisbursement: false },
-    { id: "TE-003", clientName: "Dlamini, T", matterRef: "M-1048", feeEarnerName: "T. Mokoena", entryDate: "2026-06-03", activityType: "disbursement", description: "Deeds Office search fee", durationMinutes: 0, rateCents: 0, amountCents: 18000, vatAmountCents: 2700, status: "WIP", isDisbursement: true },
-    { id: "TE-004", clientName: "Sithole, N", matterRef: "M-2201", feeEarnerName: "A. Sithole", entryDate: "2026-06-02", activityType: "drafting", description: "Drafting bond cancellation documents and instructions to bank", durationMinutes: 60, rateCents: 320000, amountCents: 320000, vatAmountCents: 48000, status: "WIP", isDisbursement: false }
-  ]);
-  const [timeWipCents, setTimeWipCents] = useState(1038000);
+  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
+  const [timeWipCents, setTimeWipCents] = useState(0);
 
-  const [popiaProcessingRecords, setPopiaProcessingRecords] = useState<PopiaProcessingRecord[]>([
-    { id: "PR-001", processingActivity: "Client onboarding and FICA verification", purpose: "Compliance with FICA and POCA obligations", legalBasis: "Legal obligation (FICA Act 38 of 2001)", dataSubjects: ["Clients", "Beneficial owners"], personalInfoTypes: ["Identity numbers", "Addresses", "Financial information"], retentionPeriod: "5 years after matter close", thirdPartyRecipients: "FIC (if suspicious transaction report filed)", crossBorderTransfer: false, reviewDate: "2027-01-01", active: true },
-    { id: "PR-002", processingActivity: "Matter and legal correspondence files", purpose: "Delivery of legal services under mandate", legalBasis: "Contract (mandate agreement)", dataSubjects: ["Clients", "Opposing parties", "Witnesses"], personalInfoTypes: ["Identity numbers", "Addresses", "Financial information", "Legal correspondence"], retentionPeriod: "7 years after matter close", thirdPartyRecipients: "Courts, SARS, Deeds Registry, Sheriff", crossBorderTransfer: false, reviewDate: "2027-01-01", active: true }
-  ]);
-  const [popiaDsrRequests, setPopiaDsrRequests] = useState<PopiaDsrRequest[]>([
-    { id: "DSR-001", requestType: "Access", requestorName: "Thabo Dlamini", requestorEmail: "thabo@example.co.za", description: "Request for copy of all personal information held on file for M-1048", status: "In Progress", receivedAt: "2026-05-28T09:00:00Z", dueAt: "2026-06-27T09:00:00Z", completedAt: "", responseNotes: "" }
-  ]);
+  const [popiaProcessingRecords, setPopiaProcessingRecords] = useState<PopiaProcessingRecord[]>([]);
+  const [popiaDsrRequests, setPopiaDsrRequests] = useState<PopiaDsrRequest[]>([]);
   const [popiaBreachIncidents, setPopiaBreachIncidents] = useState<PopiaBreachIncident[]>([]);
 
   const [emailStatus, setEmailStatus] = useState("SMTP settings not tested in this session.");
@@ -382,12 +302,7 @@ export function App() {
   const [aiConversationId, setAiConversationId] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiContextSummary, setAiContextSummary] = useState("Tenant context will appear after the first AI response.");
-  const [activity, setActivity] = useState<string[]>([
-    "Portal access granted for estate agent on M-1048",
-    "Draft shareholder agreement updated",
-    "Invoice INV-2409 payment captured",
-    "Case-law bundle indexed for conveyancing delays"
-  ]);
+  const [activity, setActivity] = useState<string[]>([]);
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
   const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
@@ -3040,6 +2955,7 @@ function AdminSettings({
       </section>
 
       <section className="settings-grid">
+        {isPlatformSuperAdmin && (
         <Panel title="Platform SMTP transport" badge="Super admin only">
           <form className="form" onSubmit={saveSettings}>
             <label>Provider name<input value={settings.providerName} onChange={(event) => update("providerName", event.target.value)} /></label>
@@ -3062,6 +2978,7 @@ function AdminSettings({
             <button className="primary" type="submit" disabled={settingsBusy === "smtp"}><ServerCog size={18} /> {settingsBusy === "smtp" ? "Saving..." : "Save SMTP settings"}</button>
           </form>
         </Panel>
+        )}
 
         <Panel title="Tenant sender identity" badge="Tenant admin">
           <form className="form" onSubmit={saveTenantEmailSettings}>
@@ -3105,6 +3022,7 @@ function AdminSettings({
         </Panel>
       </section>
 
+      {isPlatformSuperAdmin && (
       <section className="scope-grid">
         <article className="scope-card">
           <ShieldCheck size={20} />
@@ -3122,7 +3040,9 @@ function AdminSettings({
           <p>Portal links appear to clients as tenant-branded email, but delivery is sent through the shared LawPath SMTP transport with tenant metadata applied.</p>
         </article>
       </section>
+      )}
 
+      {isPlatformSuperAdmin && (
       <section className="integrations-shell">
         <div className="panel-head">
           <div>
@@ -3236,8 +3156,10 @@ function AdminSettings({
           </div>
         </form>
       </section>
+      )}
 
       {/* WhatsApp Business API settings */}
+      {isPlatformSuperAdmin && (
       <section className="settings-grid">
         <Panel title="WhatsApp Business (Meta Cloud API)" badge="Super admin only">
           <form className="form" onSubmit={async (e) => {
@@ -3297,10 +3219,12 @@ function AdminSettings({
           </div>
         </Panel>
       </section>
+      )}
 
       {/* VerifyNow Usage Monitoring */}
-      <VerifyNowMonitor showToast={showToast} />
+      {isPlatformSuperAdmin && <VerifyNowMonitor showToast={showToast} />}
 
+      {isPlatformSuperAdmin && (
       <section className="rag-shell">
         <div className="panel-head">
           <div>
@@ -3382,6 +3306,7 @@ function AdminSettings({
           ))}
         </div>
       </section>
+      )}
     </>
   );
 }
