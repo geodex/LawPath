@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, Printer, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createInvoice, downloadInvoicePdf, getInvoicePdfUrl, getInvoices, recordInvoicePayment, saveTenantProfile, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
-import type { InvoiceHeaderField, Invoice, InvoicePayment, TenantProfile, TimeEntry } from "./types";
+import type { InvoiceHeaderField, Invoice, InvoicePayment, TenantProfile, TimeEntry, ViewKey } from "./types";
 
 interface Props {
   entries: TimeEntry[];
@@ -12,7 +12,7 @@ interface Props {
   setTenantProfile: React.Dispatch<React.SetStateAction<TenantProfile>>;
   log: (msg: string) => void;
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
-  setActiveView: (view: string) => void;
+  setActiveView: (view: ViewKey) => void;
 }
 
 const ALL_HEADER_FIELDS: { key: InvoiceHeaderField; label: string }[] = [
@@ -690,7 +690,7 @@ function InvoiceDetail({ invoice, payingId, payForm, paySubmitting, syncingId, P
   onSyncAccounting: (id: string) => void;
   rands: (c: number) => string;
   fmtDate: (s: string) => string;
-  payFormRef?: React.RefObject<HTMLDivElement>;
+  payFormRef?: React.RefObject<HTMLDivElement | null>;
   onPayFormScroll?: (top: number) => void;
 }) {
   return (
@@ -812,7 +812,7 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
   onSubmit: () => void;
   onClose: () => void;
   rands: (c: number) => string;
-  modalRef?: React.RefObject<HTMLDivElement>;
+  modalRef?: React.RefObject<HTMLDivElement | null>;
   onScrollSave?: (top: number) => void;
 }) {
   function toggleWip(id: string) {
@@ -896,7 +896,7 @@ function EmailModal({ invoice, emailForm, setEmailForm, sending, onSubmit, onClo
   onSubmit: () => void;
   onClose: () => void;
   rands: (c: number) => string;
-  modalRef?: React.RefObject<HTMLDivElement>;
+  modalRef?: React.RefObject<HTMLDivElement | null>;
   onScrollSave?: (top: number) => void;
 }) {
   return (
