@@ -2439,14 +2439,26 @@ function decodeDataUrl(dataUrl) {
   }
 }
 
-// Extract text from common SA legal document uploads. PDF / DOCX text
-// extraction would require pdf-parse / mammoth (not installed) — for now
-// those return null and the caller falls back to a helpful "unsupported
-// format" status instead of producing an empty Complete analysis.
-function extractDocumentText(buffer, mimeType, fileName) {
+// Bypass pdf-parse's index.js, which tries to read a bundled test PDF at
+// require-time and crashes the whole server with ENOENT in production
+// (the test fixture isn't shipped in node_modules). Pulling from the lib
+// path goes straight to the actual extractor.
+const pdfParse = require("pdf-parse/lib/pdf-parse.js");
+const mammoth = require("mammoth");
+
+// Extract text from common SA legal document uploads. Returns up to 80 KB
+// of plain text — that's deep enough to give the AI a substantial chunk
+// of a typical contract / pleading / opinion without blowing the prompt
+// budget. Unsupported formats return reason: "unsupported_format".
+async function extractDocumentText(buffer, mimeType, fileName) {
   if (!buffer) return { text: "", reason: "no_buffer" };
   const name = (fileName || "").toLowerCase();
   const mt = (mimeType || "").toLowerCase();
+
+  const isPdf = mt === "application/pdf" || name.endsWith(".pdf");
+  const isDocx =
+    mt === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    name.endsWith(".docx");
   const isTextLike =
     mt.startsWith("text/") ||
     mt === "application/json" ||
@@ -2455,14 +2467,31 @@ function extractDocumentText(buffer, mimeType, fileName) {
     name.endsWith(".csv") ||
     name.endsWith(".html") ||
     name.endsWith(".htm");
-  if (isTextLike) {
-    let text = buffer.toString("utf8");
-    if (mt.includes("html") || name.endsWith(".html") || name.endsWith(".htm")) {
-      text = htmlToText(text);
+
+  try {
+    if (isPdf) {
+      const parsed = await pdfParse(buffer);
+      const text = (parsed?.text || "").trim();
+      if (!text) return { text: "", reason: "pdf_empty" };
+      return { text: text.slice(0, 80_000), reason: "ok" };
     }
-    return { text: text.slice(0, 80_000), reason: "ok" };
+    if (isDocx) {
+      const result = await mammoth.extractRawText({ buffer });
+      const text = (result?.value || "").trim();
+      if (!text) return { text: "", reason: "docx_empty" };
+      return { text: text.slice(0, 80_000), reason: "ok" };
+    }
+    if (isTextLike) {
+      let text = buffer.toString("utf8");
+      if (mt.includes("html") || name.endsWith(".html") || name.endsWith(".htm")) {
+        text = htmlToText(text);
+      }
+      return { text: text.slice(0, 80_000), reason: "ok" };
+    }
+    return { text: "", reason: "unsupported_format" };
+  } catch (err) {
+    return { text: "", reason: `extraction_failed: ${err.message || "unknown error"}` };
   }
-  return { text: "", reason: "unsupported_format" };
 }
 
 app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
@@ -2489,12 +2518,30 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // Decode and extract text up front so we can give the user a useful
     // error before we even spend an AI call on an unanalysable file.
     const decoded = decodeDataUrl(fileDataUrl);
-    const { text, reason } = extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
+    const { text, reason } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
 
     if (reason === "unsupported_format") {
       await pool.query(
         "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
-        [analysis.id, "PDF and DOCX text extraction is not yet enabled on the server. Convert the document to TXT or MD and upload it again."]
+        [analysis.id, "Unsupported file format. Supported types: PDF, DOCX, TXT, MD, CSV, HTML."]
+      );
+      const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+      return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
+    }
+
+    if (reason === "pdf_empty" || reason === "docx_empty") {
+      await pool.query(
+        "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+        [analysis.id, "The file opened correctly but contained no extractable text. Scanned PDFs need OCR (not yet enabled) — re-upload as a text-based PDF or DOCX."]
+      );
+      const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+      return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
+    }
+
+    if (reason && reason.startsWith("extraction_failed")) {
+      await pool.query(
+        "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+        [analysis.id, `Could not parse the uploaded file: ${reason.replace("extraction_failed: ", "")}.`]
       );
       const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
       return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
