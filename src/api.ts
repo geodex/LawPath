@@ -150,6 +150,10 @@ export async function queueRagSource(input: {
   });
 }
 
+export async function deleteRagSource(id: string) {
+  return request<{ ok: boolean }>(`/api/rag/sources/${id}`, { method: "DELETE" });
+}
+
 export async function sendTestEmail(input: {
   recipientEmail: string;
   tenantFromName: string;

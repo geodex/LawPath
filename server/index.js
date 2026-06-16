@@ -852,10 +852,23 @@ app.put("/api/platform/assistant-training", authMiddleware, async (req, res, nex
 });
 
 app.post("/api/rag/sources", authMiddleware, async (req, res, next) => {
-  const { name, scope, sourceType, documentCount, sourceUrl, fileName, mimeType, extractedText, fileDataUrl } = req.body;
+  const { name, sourceType, documentCount, sourceUrl, fileName, mimeType, extractedText, fileDataUrl } = req.body;
+  let { scope } = req.body;
 
   if (!name || !scope || !sourceType) {
     return res.status(400).json({ error: "Source name, scope and source type are required." });
+  }
+
+  // Non-super-admin uploads are forced to the tenant-private scope. This
+  // is the security boundary that keeps a firm's training material out of
+  // any other tenant's retrieval namespace, regardless of what the client
+  // tries to send.
+  const isPlatformSuperAdmin = req.user.role === "platform_super_admin";
+  if (!isPlatformSuperAdmin) {
+    if (!req.user.tenantId) {
+      return res.status(403).json({ error: "Tenant context required." });
+    }
+    scope = "Tenant private";
   }
 
   const tenantId = scope === "Tenant private" ? req.user.tenantId : null;
@@ -998,6 +1011,33 @@ app.post("/api/rag/sources", authMiddleware, async (req, res, next) => {
     );
 
     res.status(201).json({ source: ragSourceFromRow(source.rows[0]) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Tenants can only delete their own private RAG sources; platform super
+// admins can delete platform-scoped ones too. The FK cascade on
+// rag_sources → rag_documents → storage_objects → rag_index_jobs takes
+// care of the dependent rows; the underlying GCS objects are left in
+// place and can be reaped by an offline sweep job.
+app.delete("/api/rag/sources/:id", authMiddleware, async (req, res, next) => {
+  const isPlatformSuperAdmin = req.user.role === "platform_super_admin";
+  try {
+    const row = await pool.query(
+      "select id, tenant_id, scope from rag_sources where id = $1",
+      [req.params.id]
+    );
+    if (!row.rowCount) return res.status(404).json({ error: "Source not found." });
+    const source = row.rows[0];
+    if (!isPlatformSuperAdmin) {
+      if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+      if (source.tenant_id !== req.user.tenantId || source.scope !== "Tenant private") {
+        return res.status(403).json({ error: "You can only delete your own private training sources." });
+      }
+    }
+    await pool.query("delete from rag_sources where id = $1", [req.params.id]);
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }

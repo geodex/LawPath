@@ -69,6 +69,7 @@ import { StripeBilling } from "./StripeBilling";
 import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
 import { HelpPanel } from "./HelpPanel";
+import { TenantTraining } from "./TenantTraining";
 
 const nav: NavItem[] = [
   { key: "overview",  label: "Overview", icon: Home },
@@ -96,6 +97,7 @@ const nav: NavItem[] = [
   { key: "booking", label: "Bookings", icon: CalendarDays },
   { key: "portal", label: "Portal", icon: UsersRound },
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
+  { key: "ai-library", label: "AI Library", icon: BookOpenCheck },
   { key: "settings", label: "Settings", icon: Settings }
 ];
 
@@ -125,6 +127,7 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   booking: "secretary",
   portal: "portal",
   "training-guide": "research",
+  "ai-library": "research",
   settings: "settings"
 };
 
@@ -749,6 +752,15 @@ export function App() {
         {activeView === "booking" && <Booking appointments={appointments} setAppointments={setAppointments} log={log} />}
         {activeView === "portal" && <Portal matters={matters} setMatters={setMatters} portalMode={portalMode} setPortalMode={setPortalMode} log={log} />}
         {activeView === "training-guide" && isPlatformSuperAdmin && <AITrainingGuide setActiveView={setActiveView} />}
+        {activeView === "ai-library" && hasTenantContext && (
+          <TenantTraining
+            ragSources={ragSources}
+            setRagSources={setRagSources}
+            tenantId={authUser.tenantId ?? null}
+            log={log}
+            showToast={showToast}
+          />
+        )}
         {activeView === "settings" && (
           <AdminSettings
             settings={smtpSettings}
@@ -1179,7 +1191,13 @@ function SalesCard({ icon: Icon, title, text }: { icon: typeof FilePenLine; titl
 function Sidebar({ activeView, setActiveView, isPlatformSuperAdmin }: { activeView: ViewKey; setActiveView: (view: ViewKey) => void; isPlatformSuperAdmin: boolean }) {
   // training-guide walks an admin through populating the shared RAG corpus
   // and is not a tenant-facing feature.
-  const visibleNav = nav.filter((item) => item.key !== "training-guide" || isPlatformSuperAdmin);
+  // ai-library is the tenant-facing private training upload; super admins
+  // use the platform RAG panel in Settings instead.
+  const visibleNav = nav.filter((item) => {
+    if (item.key === "training-guide") return isPlatformSuperAdmin;
+    if (item.key === "ai-library") return !isPlatformSuperAdmin;
+    return true;
+  });
   return (
     <aside className="sidebar">
       <div className="brand">

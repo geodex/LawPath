@@ -334,4 +334,45 @@ export const CORE_TOPICS: HelpTopic[] = [
       },
     ],
   },
+  {
+    id: "ai-library",
+    title: "AI Library (firm training)",
+    icon: "BookOpenCheck",
+    summary: "Upload firm precedents and clause banks so the AI answers in your house style.",
+    sections: [
+      {
+        heading: "What this feature is",
+        body: [
+          "The AI Library is the place where your firm teaches the AI its own way of doing things. Anything you upload here — sale agreements, lease templates, opinion-letter precedents, internal practice manuals, your firm clause bank — becomes part of a private retrieval namespace that only your tenant can query.",
+          "Content uploaded here never crosses into another firm's results. The retrieval layer is scoped strictly to your tenant_id, so a competitor firm running the same AI assistant on the same platform will get answers from the platform-shared corpus only, never from your private material.",
+        ],
+      },
+      {
+        heading: "How to upload",
+        steps: [
+          "Open AI Library from the sidebar (tenant admins only).",
+          "Give the source a descriptive name — \"Firm Sale Agreement v3\" beats \"document1.pdf\".",
+          "Pick a source type: Firm precedent, Practice manual, Contract bank, or Document upload.",
+          "Choose the file (PDF, DOCX, TXT or MD up to 50 MB).",
+          "Click Add to training library. The source appears with status Queued; indexing runs in the background and the status flips to Indexed once embeddings are ready.",
+        ],
+        tip: "Upload your top five firm precedents first. That's enough to noticeably tighten the AI assistant's drafting voice.",
+      },
+      {
+        heading: "POPIA hygiene before you upload",
+        body: [
+          "Personal information in training material is processed under a new purpose (model retrieval) that may not be covered by the original consent given by the data subject. The safest position is to upload templates and precedents that have been stripped of identifying details before they're added to the library.",
+          "Redact ID numbers, contact details, financial account numbers and any commercially sensitive opposing-party information from precedents before upload. The AI does not need real personal information to learn your house style; it only needs the structure, clauses and tone.",
+        ],
+        tip: "If you genuinely need to upload material that includes personal information, document the lawful basis under POPIA section 9 in your processing register before you do — your POPIA panel is the right place to capture that.",
+      },
+      {
+        heading: "Removing a source",
+        body: [
+          "Each source has a trash-can icon on its row. Removing a source deletes the database record and detaches it from retrieval immediately. The underlying file remains in Google Cloud Storage for a short retention window in case the deletion was accidental, and is then purged by an offline sweep.",
+          "If you need a confirmed audit-trail deletion (for example to respond to a Data Subject Erasure request under POPIA section 24), open the POPIA DSR view and link the deletion request to the source removal — the audit log entries are timestamped and signed.",
+        ],
+      },
+    ],
+  },
 ];
