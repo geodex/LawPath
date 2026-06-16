@@ -2518,7 +2518,7 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // Decode and extract text up front so we can give the user a useful
     // error before we even spend an AI call on an unanalysable file.
     const decoded = decodeDataUrl(fileDataUrl);
-    const { text, reason } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
+    let { text, reason } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
 
     if (reason === "unsupported_format") {
       await pool.query(
@@ -2529,10 +2529,39 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
       return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
     }
 
-    if (reason === "pdf_empty" || reason === "docx_empty") {
+    // OCR fallback for image-only PDFs. DOCX has no equivalent (DOCX is
+    // by definition text-bearing — an empty DOCX is genuinely empty).
+    let ocrText = "";
+    let ocrError = "";
+    if (reason === "pdf_empty") {
+      try {
+        const { ocrPdfWithVision } = require("./ocr");
+        ocrText = await ocrPdfWithVision({
+          buffer: decoded.buffer,
+          tenantId: req.user.tenantId,
+          fileName
+        });
+      } catch (err) {
+        ocrError = err?.message || "OCR error";
+      }
+    }
+
+    // If OCR succeeded, treat the OCR output as the document text from
+    // here on. The AI prompt downstream just sees text — it doesn't need
+    // to know whether it came from a text layer or from Vision.
+    if (reason === "pdf_empty" && ocrText.trim()) {
+      text = ocrText.slice(0, 80_000);
+    }
+
+    if (reason === "docx_empty" || (reason === "pdf_empty" && !ocrText.trim())) {
+      const msg = reason === "docx_empty"
+        ? "The DOCX opened correctly but contained no extractable text."
+        : ocrError
+          ? `Scanned PDF detected but OCR failed: ${ocrError}. Verify that the Cloud Vision API is enabled on the GCP project and that the service account has cloudvision.user.`
+          : "Scanned PDF detected but OCR returned no text. The scan quality may be too poor to recognise — try a higher-resolution scan.";
       await pool.query(
         "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
-        [analysis.id, "The file opened correctly but contained no extractable text. Scanned PDFs need OCR (not yet enabled) — re-upload as a text-based PDF or DOCX."]
+        [analysis.id, msg]
       );
       const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
       return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
