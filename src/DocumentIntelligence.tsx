@@ -10,7 +10,6 @@ type Props = {
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
 };
 
-const uid = (p: string) => `${p}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
 const maxBytes = 8 * 1024 * 1024;
 
 async function fileToDataUrl(file: File): Promise<string> {
@@ -22,31 +21,13 @@ async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-function StatusBadge({ status }: { status: DocumentAnalysis["analysisStatus"] }) {
-  if (status === "Complete") {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-        <CheckCircle2 size={11} />
-        Complete
-      </span>
-    );
-  }
-  if (status === "Failed") {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-800 border border-rose-200">
-        Failed
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
-      <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
-        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-      </svg>
-      {status}
-    </span>
-  );
+function StatusPill({ status }: { status: DocumentAnalysis["analysisStatus"] }) {
+  const key = status.toLowerCase();
+  const cls =
+    status === "Complete" ? "doc-analysis-status-complete" :
+    status === "Failed" ? "doc-analysis-status-failed" :
+    "doc-analysis-status-analysing";
+  return <span className={cls} data-status={key}>{status}</span>;
 }
 
 export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: Props) {
@@ -98,262 +79,207 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
   }
 
   return (
-    <div className="space-y-5">
-      {/* Hero Notice */}
-      <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 flex gap-3">
-        <Sparkles className="text-indigo-600 mt-0.5 shrink-0" size={20} />
-        <p className="text-sm text-indigo-800 leading-relaxed">
+    <>
+      <div className="doc-notice">
+        <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.5 }}>
+          <Sparkles size={16} style={{ verticalAlign: "-3px", marginRight: 8, color: "var(--green)" }} />
           Upload any South African contract, deed, order or agreement. The AI extracts parties, key dates, obligations
           and flags SA-specific legal risks (voetstoots, CPA cooling-off, NCA compliance, POPIA obligations).{" "}
-          <span className="font-semibold">Attorney review required before acting on any AI analysis.</span>
+          <strong>Attorney review required before acting on any AI analysis.</strong>
         </p>
       </div>
 
-      {/* Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[
-          { label: "Total documents", value: analyses.length, icon: <FileText size={16} className="text-gray-500" /> },
-          { label: "Complete analyses", value: completeCount, icon: <CheckCircle2 size={16} className="text-green-500" /> },
-          { label: "Risk flags found", value: totalRiskFlags, icon: <AlertTriangle size={16} className="text-rose-500" /> },
-          { label: "SA law flags found", value: totalSaFlags, icon: <Scale size={16} className="text-amber-500" /> },
-        ].map(({ label, value, icon }) => (
-          <div key={label} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm flex items-center gap-3">
-            <div>{icon}</div>
-            <div>
-              <div className="text-xl font-bold text-gray-900">{value}</div>
-              <div className="text-xs text-gray-500">{label}</div>
-            </div>
+      <section className="metrics">
+        <div className="metric">
+          <span>Total documents</span>
+          <strong>{analyses.length}</strong>
+          <small>Submitted for analysis</small>
+        </div>
+        <div className="metric">
+          <span>Complete analyses</span>
+          <strong>{completeCount}</strong>
+          <small>Ready to review</small>
+        </div>
+        <div className="metric">
+          <span>Risk flags found</span>
+          <strong style={{ color: totalRiskFlags > 0 ? "var(--rose)" : undefined }}>{totalRiskFlags}</strong>
+          <small>Across all documents</small>
+        </div>
+        <div className="metric">
+          <span>SA law flags found</span>
+          <strong style={{ color: totalSaFlags > 0 ? "var(--gold)" : undefined }}>{totalSaFlags}</strong>
+          <small>Voetstoots / CPA / NCA / POPIA</small>
+        </div>
+      </section>
+
+      <div className="panel" style={{ marginBottom: 20 }}>
+        <div className="panel-head">
+          <h3><Upload size={16} style={{ verticalAlign: "-3px", marginRight: 6, color: "var(--green)" }} /> Analyse a document</h3>
+        </div>
+        <form className="form" onSubmit={handleSubmit}>
+          <div className="form-row">
+            <label>
+              <span>Document file <em style={{ color: "var(--muted)", fontStyle: "normal", fontWeight: 400 }}>(PDF, DOCX, TXT, MD — max 8 MB)</em></span>
+              <input
+                id="doc-file-input"
+                type="file"
+                accept=".pdf,.docx,.txt,.md"
+                disabled={uploading}
+                onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <label>
+              <span>Matter reference <em style={{ color: "var(--muted)", fontStyle: "normal", fontWeight: 400 }}>(optional)</em></span>
+              <input
+                type="text"
+                placeholder="e.g. MAT-2024-001"
+                value={matterRef}
+                onChange={(e) => setMatterRef(e.target.value)}
+                disabled={uploading}
+              />
+            </label>
           </div>
-        ))}
+          <button className="primary" type="submit" disabled={uploading || !selectedFile}>
+            {uploading ? "Analysing…" : <><FileSearch size={16} /> Analyse document</>}
+          </button>
+        </form>
       </div>
 
-      {/* Upload Form */}
-      <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm space-y-4">
-        <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
-          <Upload size={17} className="text-indigo-600" />
-          Analyse a document
-        </h2>
-
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              Document file <span className="text-gray-400 font-normal">(PDF, DOCX, TXT, MD — max 8 MB)</span>
-            </label>
-            <input
-              id="doc-file-input"
-              type="file"
-              accept=".pdf,.docx,.txt,.md"
-              disabled={uploading}
-              onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-              className="block w-full text-sm text-gray-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer border border-gray-300 rounded-lg py-1.5 px-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              Matter reference <span className="text-gray-400 font-normal">(optional)</span>
-            </label>
-            <input
-              type="text"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder-gray-400"
-              placeholder="e.g. MAT-2024-001"
-              value={matterRef}
-              onChange={(e) => setMatterRef(e.target.value)}
-              disabled={uploading}
-            />
-          </div>
-        </div>
-
-        <button
-          type="submit"
-          disabled={uploading || !selectedFile}
-          className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-        >
-          {uploading ? (
-            <>
-              <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-              </svg>
-              Analysing…
-            </>
-          ) : (
-            <>
-              <FileSearch size={16} />
-              Analyse document
-            </>
-          )}
-        </button>
-      </form>
-
-      {/* Analysis Register */}
       {analyses.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
-            <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-              <FileText size={15} className="text-indigo-500" />
-              Analysis register
-            </h2>
+        <div className="panel">
+          <div className="panel-head">
+            <h3><FileText size={16} style={{ verticalAlign: "-3px", marginRight: 6, color: "var(--green)" }} /> Analysis register</h3>
+            <span className="pill">{analyses.length}</span>
           </div>
-
-          <div className="divide-y divide-gray-100">
-            {analyses.map((a) => (
-              <div key={a.id}>
-                {/* Row */}
-                <button
-                  onClick={() => toggleExpand(a.id)}
-                  className="w-full text-left px-5 py-3 hover:bg-gray-50 transition-colors flex items-center gap-4"
-                >
-                  <FileText size={16} className="text-indigo-400 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm text-gray-800 truncate">{a.fileName}</div>
-                    <div className="text-xs text-gray-400 mt-0.5">
-                      {a.documentType || "Detecting…"} &middot;{" "}
-                      {a.analysedAt ? new Date(a.analysedAt).toLocaleString() : "—"}
-                    </div>
-                  </div>
-                  <StatusBadge status={a.analysisStatus} />
-                  <span className="text-xs text-gray-400 ml-2">{expandedId === a.id ? "▲" : "▼"}</span>
-                </button>
-
-                {/* Expanded detail */}
-                {expandedId === a.id && (
-                  <div className="px-5 pb-5 pt-2 bg-gray-50 border-t border-gray-100 space-y-5">
-                    {/* Summary */}
-                    {a.summary && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                          <Sparkles size={12} />
-                          Summary
-                        </h4>
-                        <p className="text-sm text-gray-700 leading-relaxed">{a.summary}</p>
-                      </div>
-                    )}
-
-                    {/* Parties */}
-                    {a.parties.length > 0 && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                          Parties detected
-                        </h4>
-                        <div className="flex flex-wrap gap-2">
-                          {a.parties.map((p, i) => (
-                            <span
-                              key={i}
-                              className="px-2.5 py-1 bg-indigo-50 border border-indigo-100 text-indigo-800 text-xs rounded-full font-medium"
-                            >
-                              {p}
-                            </span>
-                          ))}
+          <div>
+            {analyses.map((a) => {
+              const expanded = expandedId === a.id;
+              return (
+                <div key={a.id}>
+                  <div
+                    className={`doc-analysis-row${expanded ? " expanded" : ""}`}
+                    onClick={() => toggleExpand(a.id)}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <FileText size={16} style={{ color: "var(--green)", flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: "0.92rem", color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {a.fileName}
+                        </div>
+                        <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: 2 }}>
+                          {a.documentType || "Detecting…"} · {a.analysedAt ? new Date(a.analysedAt).toLocaleString() : "—"}
                         </div>
                       </div>
-                    )}
+                      <StatusPill status={a.analysisStatus} />
+                      <span style={{ color: "var(--muted)", fontSize: "0.85rem", marginLeft: 6 }}>
+                        {expanded ? "▲" : "▼"}
+                      </span>
+                    </div>
+                  </div>
 
-                    {/* Key Dates */}
-                    {a.keyDates.length > 0 && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                          Key dates
-                        </h4>
-                        <table className="w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
-                          <thead className="bg-gray-100">
-                            <tr>
-                              <th className="text-left px-3 py-2 text-xs font-medium text-gray-500">Event</th>
-                              <th className="text-left px-3 py-2 text-xs font-medium text-gray-500">Date</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100 bg-white">
-                            {a.keyDates.map((kd, i) => (
-                              <tr key={i} className="hover:bg-gray-50">
-                                <td className="px-3 py-2 text-gray-700">{kd.label}</td>
-                                <td className="px-3 py-2 text-gray-600 font-mono text-xs">{kd.date}</td>
-                              </tr>
+                  {expanded && (
+                    <div className="doc-detail">
+                      {a.summary && (
+                        <div style={{ marginBottom: 16 }}>
+                          <h4 style={{ margin: "0 0 6px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                            <Sparkles size={12} /> Summary
+                          </h4>
+                          <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.55 }}>{a.summary}</p>
+                        </div>
+                      )}
+
+                      {a.parties.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <h4 style={{ margin: "0 0 8px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
+                            Parties detected
+                          </h4>
+                          <div>
+                            {a.parties.map((p, i) => (
+                              <span key={i} className="doc-party-chip">{p}</span>
                             ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                          </div>
+                        </div>
+                      )}
 
-                    {/* Obligations */}
-                    {a.obligations.length > 0 && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                          Obligations
-                        </h4>
-                        <ol className="space-y-1 list-decimal list-inside text-sm text-gray-700">
-                          {a.obligations.map((o, i) => (
-                            <li key={i} className="leading-relaxed">
-                              {o}
-                            </li>
-                          ))}
-                        </ol>
-                      </div>
-                    )}
+                      {a.keyDates.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <h4 style={{ margin: "0 0 8px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
+                            Key dates
+                          </h4>
+                          <div className="doc-key-dates">
+                            {a.keyDates.map((kd, i) => (
+                              <div key={i} className="doc-key-date">
+                                <strong>{kd.label}</strong>
+                                <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.88rem" }}>{kd.date}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
-                    {/* Risk Flags */}
-                    {a.riskFlags.length > 0 && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-rose-600 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                          <AlertTriangle size={12} />
-                          Risk flags
-                        </h4>
-                        <ul className="space-y-2">
+                      {a.obligations.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <h4 style={{ margin: "0 0 8px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
+                            Obligations
+                          </h4>
+                          <ol className="doc-obligation-list">
+                            {a.obligations.map((o, i) => (
+                              <li key={i}><span>{o}</span></li>
+                            ))}
+                          </ol>
+                        </div>
+                      )}
+
+                      {a.riskFlags.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <h4 style={{ margin: "0 0 8px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--rose)", display: "flex", alignItems: "center", gap: 6 }}>
+                            <AlertTriangle size={12} /> Risk flags
+                          </h4>
                           {a.riskFlags.map((flag, i) => (
-                            <li
-                              key={i}
-                              className="risk-flag-item flex items-start gap-2 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2 text-sm text-rose-800"
-                            >
-                              <span className="mt-0.5 shrink-0">⚠</span>
+                            <div key={i} className="doc-risk-item">
+                              <span style={{ flexShrink: 0 }}>⚠</span>
                               <span>{flag}</span>
-                            </li>
+                            </div>
                           ))}
-                        </ul>
-                      </div>
-                    )}
+                        </div>
+                      )}
 
-                    {/* SA Law Flags */}
-                    {a.saLawFlags.length > 0 && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-amber-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                          <Scale size={12} />
-                          SA law flags
-                        </h4>
-                        <ul className="space-y-2">
+                      {a.saLawFlags.length > 0 && (
+                        <div style={{ marginBottom: 16 }}>
+                          <h4 style={{ margin: "0 0 8px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--gold)", display: "flex", alignItems: "center", gap: 6 }}>
+                            <Scale size={12} /> SA law flags
+                          </h4>
                           {a.saLawFlags.map((flag, i) => (
-                            <li
-                              key={i}
-                              className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-sm text-amber-800"
-                            >
-                              <span className="mt-0.5 shrink-0">⚖</span>
+                            <div key={i} className="doc-sa-law-item">
+                              <span style={{ flexShrink: 0 }}>⚖</span>
                               <span>{flag}</span>
-                            </li>
+                            </div>
                           ))}
-                        </ul>
-                      </div>
-                    )}
+                        </div>
+                      )}
 
-                    {/* Attorney review watermark */}
-                    <div className="border-t border-gray-200 pt-4">
-                      <p className="text-xs text-gray-400 italic text-center">
+                      <p className="doc-attorney-review">
                         This analysis is AI-generated. All findings must be verified by a qualified attorney before
                         advising a client or taking any action.
                       </p>
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
       {analyses.length === 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg p-10 text-center text-gray-400 shadow-sm">
-          <FileSearch size={36} className="mx-auto mb-3 text-gray-300" />
-          <p className="font-medium text-gray-500">No documents analysed yet</p>
-          <p className="text-sm mt-1">Upload a document above to begin AI-powered analysis.</p>
+        <div className="panel" style={{ textAlign: "center", padding: "40px 20px" }}>
+          <FileSearch size={36} style={{ color: "var(--muted)", marginBottom: 8 }} />
+          <p style={{ margin: "8px 0 4px", fontWeight: 600 }}>No documents analysed yet</p>
+          <small style={{ color: "var(--muted)" }}>Upload a document above to begin AI-powered analysis.</small>
         </div>
       )}
-    </div>
+    </>
   );
 }

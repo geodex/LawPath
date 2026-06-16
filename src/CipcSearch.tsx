@@ -15,18 +15,12 @@ function maskId(id: string): string {
 }
 
 function StatusBadge({ status }: { status: CipcSearchResult["status"] }) {
-  const map: Record<CipcSearchResult["status"], { label: string; cls: string }> = {
-    Active: { label: "Active", cls: "bg-green-100 text-green-800 border border-green-200" },
-    Deregistered: { label: "Deregistered", cls: "bg-rose-100 text-rose-800 border border-rose-200" },
-    "In liquidation": { label: "In liquidation", cls: "bg-amber-100 text-amber-800 border border-amber-200" },
-    "Final deregistration": { label: "Final deregistration", cls: "bg-rose-100 text-rose-800 border border-rose-200" },
-  };
-  const { label, cls } = map[status] ?? { label: status, cls: "bg-gray-100 text-gray-700" };
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-      {label}
-    </span>
-  );
+  const cls =
+    status === "Active" ? "cipc-status-active" :
+    status === "In liquidation" ? "cipc-status-liquidation" :
+    status === "Final deregistration" ? "cipc-status-final" :
+    "cipc-status-deregistered";
+  return <span className={cls}>{status}</span>;
 }
 
 const SUFFIX_GUIDE = [
@@ -79,172 +73,131 @@ export function CipcSearch({ log, showToast, onImportToFica }: Props) {
   }
 
   return (
-    <div className="space-y-5">
-      {/* CIPC Notice */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex gap-3">
-        <Building2 className="text-blue-600 mt-0.5 shrink-0" size={20} />
-        <p className="text-sm text-blue-800 leading-relaxed">
+    <>
+      <div className="cipc-notice">
+        <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.5 }}>
+          <Building2 size={16} style={{ verticalAlign: "-3px", marginRight: 8, color: "var(--blue)" }} />
           The Companies and Intellectual Property Commission (CIPC) maintains the official register of South African
-          companies. Results shown include registration status and directorship information. Live CIPC data requires a
-          registered data provider (Lightstone, LexisNexis DataSec). Currently operating in{" "}
-          <span className="font-semibold">simulation mode</span>.
+          companies. Live CIPC data requires a registered data provider (Lightstone, LexisNexis DataSec).
+          Currently operating in <strong>simulation mode</strong>.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Main search area */}
-        <div className="lg:col-span-2 space-y-5">
-          {/* Search Form */}
-          <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm space-y-3">
-            <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
-              <Search size={18} className="text-indigo-600" />
-              Search CIPC Register
-            </h2>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                className="flex-1 border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder-gray-400"
-                placeholder="e.g. Acme Trading or 2019/123456/07"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                disabled={loading}
-              />
-              <button
-                type="submit"
-                disabled={loading || !query.trim()}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-5 py-3 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                {loading ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                    </svg>
-                    Searching…
-                  </>
-                ) : (
-                  <>
-                    <Search size={16} />
-                    Search
-                  </>
-                )}
+      <div className="split">
+        <section>
+          <div className="panel">
+            <div className="panel-head">
+              <h3><Search size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} /> Search CIPC Register</h3>
+            </div>
+            <form className="form" onSubmit={handleSubmit}>
+              <label>
+                <span>Company name or registration number</span>
+                <input
+                  type="text"
+                  placeholder="e.g. Acme Trading or 2019/123456/07"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  disabled={loading}
+                />
+              </label>
+              <button className="primary" type="submit" disabled={loading || !query.trim()}>
+                {loading ? "Searching…" : <><Search size={16} /> Search</>}
               </button>
-            </div>
-          </form>
+            </form>
+          </div>
 
-          {/* API Note */}
           {apiNote && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-              {apiNote}
+            <div className="cipc-notice" style={{ borderLeftColor: "var(--gold)", background: "var(--gold-bg)", marginTop: 18 }}>
+              <p style={{ margin: 0, fontSize: "0.88rem", color: "var(--gold)" }}>{apiNote}</p>
             </div>
           )}
 
-          {/* No Results */}
           {searched && results.length === 0 && (
-            <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-gray-500 shadow-sm">
-              <X size={32} className="mx-auto mb-2 text-gray-300" />
-              <p className="font-medium">No results found</p>
-              <p className="text-xs mt-1">Try a different company name or registration number.</p>
+            <div className="panel" style={{ marginTop: 18, textAlign: "center" }}>
+              <X size={28} style={{ color: "var(--muted)", marginBottom: 8 }} />
+              <p style={{ margin: 0, fontWeight: 600 }}>No results found</p>
+              <small style={{ color: "var(--muted)" }}>Try a different company name or registration number.</small>
             </div>
           )}
 
-          {/* Results */}
           {results.map((r) => (
-            <div key={r.registrationNumber} className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-              {/* Header */}
-              <div className="p-5 border-b border-gray-100">
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div>
-                    <h3 className="text-base font-bold text-gray-900">{r.companyName}</h3>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-sm text-gray-500">
-                      <span className="font-mono">{r.registrationNumber}</span>
-                      <span>{r.companyType}</span>
-                      <span>Registered: {r.registrationDate}</span>
-                    </div>
+            <div key={r.registrationNumber} className="cipc-result-card" style={{ marginTop: 18 }}>
+              <div className="cipc-result-head">
+                <div>
+                  <h3 style={{ margin: 0, fontFamily: "var(--font-serif)", fontSize: "1.1rem" }}>{r.companyName}</h3>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", marginTop: 4, fontSize: "0.85rem", color: "var(--muted)" }}>
+                    <span style={{ fontFamily: "var(--font-mono)" }}>{r.registrationNumber}</span>
+                    <span>{r.companyType}</span>
+                    <span>Registered: {r.registrationDate}</span>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <StatusBadge status={r.status} />
-                    <button
-                      onClick={() => handleImport(r)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg transition-colors"
-                    >
-                      <UserCheck size={13} />
-                      Import to FICA
-                    </button>
-                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                  <StatusBadge status={r.status} />
+                  <button className="ghost small" onClick={() => handleImport(r)}>
+                    <UserCheck size={14} /> Import to FICA
+                  </button>
                 </div>
               </div>
 
-              {/* Directors */}
-              <div className="p-5">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <CheckCircle2 size={13} />
-                  Directors / Officers
+              <div>
+                <h4 style={{ margin: "0 0 10px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <CheckCircle2 size={13} /> Directors / Officers
                 </h4>
                 {r.directors.length === 0 ? (
-                  <p className="text-sm text-gray-400 italic">No director information available.</p>
+                  <p style={{ margin: 0, color: "var(--muted)", fontStyle: "italic", fontSize: "0.88rem" }}>
+                    No director information available.
+                  </p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
-                          <th className="pb-2 font-medium pr-4">Name</th>
-                          <th className="pb-2 font-medium pr-4">ID Number</th>
-                          <th className="pb-2 font-medium pr-4">Appointment Date</th>
-                          <th className="pb-2 font-medium">Status</th>
+                  <table className="cipc-directors-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>ID Number</th>
+                        <th>Appointment Date</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {r.directors.map((d, i) => (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 600 }}>{d.name}</td>
+                          <td style={{ fontFamily: "var(--font-mono)", color: "var(--muted)" }}>{maskId(d.idNumber)}</td>
+                          <td style={{ color: "var(--muted)" }}>{d.appointmentDate}</td>
+                          <td>
+                            <span className={d.status === "Active" ? "cipc-status-active" : "pill"} style={d.status !== "Active" ? { background: "var(--surface)", color: "var(--muted)" } : {}}>
+                              {d.status}
+                            </span>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {r.directors.map((d, i) => (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="py-2 pr-4 font-medium text-gray-800">{d.name}</td>
-                            <td className="py-2 pr-4 font-mono text-gray-600">{maskId(d.idNumber)}</td>
-                            <td className="py-2 pr-4 text-gray-600">{d.appointmentDate}</td>
-                            <td className="py-2">
-                              {d.status === "Active" ? (
-                                <span className="text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">
-                                  Active
-                                </span>
-                              ) : (
-                                <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                                  Resigned
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </div>
             </div>
           ))}
-        </div>
+        </section>
 
-        {/* Suffix Guide Panel */}
-        <div className="lg:col-span-1">
-          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5 sticky top-4">
-            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
-              <Building2 size={15} className="text-indigo-500" />
-              Registration number suffix guide
-            </h3>
-            <ul className="space-y-2">
+        <aside>
+          <div className="panel" style={{ position: "sticky", top: 16 }}>
+            <div className="panel-head">
+              <h3><Building2 size={15} style={{ verticalAlign: "-3px", marginRight: 6, color: "var(--green)" }} /> Suffix guide</h3>
+            </div>
+            <dl className="cipc-suffix-guide" style={{ margin: 0 }}>
               {SUFFIX_GUIDE.map(({ suffix, label }) => (
-                <li key={suffix} className="flex items-center gap-3 text-sm">
-                  <span className="font-mono text-xs bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 rounded font-semibold min-w-[44px] text-center">
-                    {suffix}
-                  </span>
-                  <span className="text-gray-600">{label}</span>
-                </li>
+                <div key={suffix} style={{ marginBottom: 8 }}>
+                  <dt style={{ fontFamily: "var(--font-mono)" }}>{suffix}</dt>
+                  <dd>— {label}</dd>
+                </div>
               ))}
-            </ul>
-            <p className="mt-4 text-xs text-gray-400 leading-relaxed">
-              The suffix appears at the end of the CIPC registration number, e.g. <span className="font-mono">2019/123456/07</span>.
+            </dl>
+            <p style={{ marginTop: 14, fontSize: "0.8rem", color: "var(--muted)", lineHeight: 1.5 }}>
+              The suffix appears at the end of the CIPC registration number, e.g.{" "}
+              <span style={{ fontFamily: "var(--font-mono)" }}>2019/123456/07</span>.
             </p>
           </div>
-        </div>
+        </aside>
       </div>
-    </div>
+    </>
   );
 }
