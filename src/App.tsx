@@ -44,7 +44,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getBootstrapSettings, getCurrentUser, getFicaClients, getPopiaRecords, getTimeEntries, getTrustLedger, getVerifyNowUsage, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
+import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getAccountingData, getAgentNetwork, getAnalytics, getBootstrapSettings, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getPopiaRecords, getSignatureRequests, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 // Seed data from ./data is intentionally not imported here. Each tenant
 // starts with empty workspaces and populates real data via the API.
 import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
@@ -313,7 +313,57 @@ export function App() {
     if (!authUser) return;
 
     loadWorkspaceSettings(authUser);
+    loadWorkspaceData();
   }, [authUser?.id]);
+
+  // Hydrate every tenant-scoped feature from the backend in parallel after
+  // login. Each loader is independent — Promise.allSettled lets one failing
+  // endpoint not block the rest. Individual failures are swallowed; the
+  // user still gets a usable workspace populated with whatever did load.
+  async function loadWorkspaceData() {
+    const results = await Promise.allSettled([
+      getInvoices({ limit: 100 }),                  // 0
+      getTimeEntries(),                             // 1
+      getTrustLedger(),                             // 2
+      getTrustReconciliations(),                    // 3
+      getFicaClients(),                             // 4
+      getPopiaRecords(),                            // 5
+      getConveyancingMatters(),                     // 6
+      getLitigationMatters(),                       // 7
+      getWhatsAppData(),                            // 8
+      getDocumentAnalyses(),                        // 9
+      getAccountingData(),                          // 10
+      getLegalCorpus(),                             // 11
+      getSignatureRequests(),                       // 12
+      getAgentNetwork(),                            // 13
+      getAnalytics(),                               // 14
+    ]);
+
+    const ok = <T,>(i: number): T | null =>
+      results[i].status === "fulfilled" ? (results[i] as PromiseFulfilledResult<T>).value : null;
+
+    const inv  = ok<{ invoices: Invoice[] }>(0);                                                      if (inv)  setInvoices(inv.invoices);
+    const time = ok<{ entries: TimeEntry[]; wipCents: number }>(1);                                   if (time) { setTimeEntries(time.entries); setTimeWipCents(time.wipCents); }
+    const tl   = ok<{ transactions: TrustTransaction[]; balanceCents: number }>(2);                   if (tl)   { setTrustTransactions(tl.transactions); setTrustBalanceCents(tl.balanceCents); }
+    const tr   = ok<{ reconciliations: TrustReconciliation[] }>(3);                                   if (tr)   setTrustReconciliations(tr.reconciliations);
+    const fica = ok<{ clients: FicaClient[] }>(4);                                                    if (fica) setFicaClients(fica.clients);
+    const pop  = ok<{ processingRecords: PopiaProcessingRecord[]; dsrRequests: PopiaDsrRequest[]; breachIncidents: PopiaBreachIncident[] }>(5);
+    if (pop) { setPopiaProcessingRecords(pop.processingRecords); setPopiaDsrRequests(pop.dsrRequests); setPopiaBreachIncidents(pop.breachIncidents); }
+    const cm   = ok<{ matters: ConveyancingMatter[] }>(6);                                            if (cm)   setConveyancingMatters(cm.matters);
+    const lm   = ok<{ matters: LitigationMatter[] }>(7);                                              if (lm)   setLitigationMatters(lm.matters);
+    const wa   = ok<{ contacts: WhatsAppContact[]; messages: WhatsAppMessage[]; templates: WhatsAppTemplate[] }>(8);
+    if (wa) { setWaContacts(wa.contacts); setWaMessages(wa.messages); if (wa.templates.length) setWaTemplates(wa.templates); }
+    const da   = ok<{ analyses: DocumentAnalysis[] }>(9);                                             if (da)   setDocumentAnalyses(da.analyses);
+    const ac   = ok<{ connections: AccountingConnection[]; exportLog: AccountingExportRecord[] }>(10);
+    if (ac) { if (ac.connections.length) setAccountingConnections(ac.connections); setAccountingExportLog(ac.exportLog); }
+    const lc   = ok<{ sources: LegalCorpusSource[]; recentDocuments: LegalCorpusDocument[]; recentQueries: ResearchQuery[] }>(11);
+    if (lc) { setCorpusSources(lc.sources); setCorpusDocuments(lc.recentDocuments); setResearchQueries(lc.recentQueries); }
+    const sig  = ok<{ requests: SignatureRequest[] }>(12);                                            if (sig)  setSignatureRequests(sig.requests);
+    const ag   = ok<{ agents: EstateAgent[]; referrals: AgentReferral[] }>(13);
+    if (ag) { setEstateAgents(ag.agents); setAgentReferrals(ag.referrals); }
+    const an   = ok<{ snapshots: AnalyticsSnapshot[]; current: AnalyticsSnapshot | null }>(14);
+    if (an) setAnalyticsData(an.current);
+  }
 
   async function loadWorkspaceSettings(user: AuthUser) {
     try {
