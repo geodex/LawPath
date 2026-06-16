@@ -176,7 +176,7 @@ async function ensureSourceRecord(courtId, courtLabel) {
   return result.rows[0].id;
 }
 
-async function indexCourt({ courtId, courtLabel, path, limitPerYear = 50, yearsBack = 5 }) {
+async function indexCourt({ id: courtId, label: courtLabel, path, limitPerYear = 50, yearsBack = 5 }) {
   const sourceId = await ensureSourceRecord(courtId.toLowerCase(), courtLabel);
   const currentYear = new Date().getFullYear();
   let totalIndexed = 0;
