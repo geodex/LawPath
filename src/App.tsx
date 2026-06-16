@@ -548,7 +548,7 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar activeView={activeView} setActiveView={setActiveView} />
+      <Sidebar activeView={activeView} setActiveView={setActiveView} isPlatformSuperAdmin={isPlatformSuperAdmin} />
       <main className="main">
         <header className="topbar">
           <div>
@@ -748,7 +748,7 @@ export function App() {
         )}
         {activeView === "booking" && <Booking appointments={appointments} setAppointments={setAppointments} log={log} />}
         {activeView === "portal" && <Portal matters={matters} setMatters={setMatters} portalMode={portalMode} setPortalMode={setPortalMode} log={log} />}
-        {activeView === "training-guide" && <AITrainingGuide setActiveView={setActiveView} />}
+        {activeView === "training-guide" && isPlatformSuperAdmin && <AITrainingGuide setActiveView={setActiveView} />}
         {activeView === "settings" && (
           <AdminSettings
             settings={smtpSettings}
@@ -1176,7 +1176,10 @@ function SalesCard({ icon: Icon, title, text }: { icon: typeof FilePenLine; titl
   );
 }
 
-function Sidebar({ activeView, setActiveView }: { activeView: ViewKey; setActiveView: (view: ViewKey) => void }) {
+function Sidebar({ activeView, setActiveView, isPlatformSuperAdmin }: { activeView: ViewKey; setActiveView: (view: ViewKey) => void; isPlatformSuperAdmin: boolean }) {
+  // training-guide walks an admin through populating the shared RAG corpus
+  // and is not a tenant-facing feature.
+  const visibleNav = nav.filter((item) => item.key !== "training-guide" || isPlatformSuperAdmin);
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -1187,7 +1190,7 @@ function Sidebar({ activeView, setActiveView }: { activeView: ViewKey; setActive
         </div>
       </div>
       <nav className="nav" aria-label="Main navigation">
-        {nav.map((item) => {
+        {visibleNav.map((item) => {
           const Icon = item.icon;
           return (
             <button key={item.key} className={activeView === item.key ? "active" : ""} onClick={() => setActiveView(item.key)}>
