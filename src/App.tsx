@@ -33,6 +33,7 @@ import {
   Split,
   Sun,
   Moon,
+  HelpCircle,
   Timer,
   UserCheck,
   UserCircle,
@@ -67,6 +68,7 @@ import { Clients } from "./Clients";
 import { StripeBilling } from "./StripeBilling";
 import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
+import { HelpPanel } from "./HelpPanel";
 
 const nav: NavItem[] = [
   { key: "overview",  label: "Overview", icon: Home },
@@ -205,6 +207,7 @@ export function App() {
     const saved = localStorage.getItem("lawpath.theme");
     return saved === "light" ? "light" : "dark";
   });
+  const [helpOpen, setHelpOpen] = useState(false);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("lawpath.theme", theme);
@@ -562,6 +565,14 @@ export function App() {
             >
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>
+            <button
+              className="ghost theme-toggle"
+              onClick={() => setHelpOpen(true)}
+              title="Help & documentation"
+              aria-label="Open help"
+            >
+              <HelpCircle size={18} />
+            </button>
             <button className="ghost" onClick={() => setActiveView("research")}>
               <BookOpenCheck size={18} /> Research pack
             </button>
@@ -777,6 +788,7 @@ export function App() {
         />
       )}
       <ToastStack toasts={toasts} dismissToast={dismissToast} />
+      <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }
