@@ -44,7 +44,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getAccountingData, getAgentNetwork, getAnalytics, getBootstrapSettings, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getPopiaRecords, getSignatureRequests, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
+import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getAccountingData, getActivity, getAgentNetwork, getAnalytics, getAppointments, getBootstrapSettings, getContracts, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getMatters, getPopiaRecords, getSignatureRequests, getTasks, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 // Seed data from ./data is intentionally not imported here. Each tenant
 // starts with empty workspaces and populates real data via the API.
 import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
@@ -337,6 +337,11 @@ export function App() {
       getSignatureRequests(),                       // 12
       getAgentNetwork(),                            // 13
       getAnalytics(),                               // 14
+      getMatters(),                                 // 15
+      getContracts(),                               // 16
+      getTasks(),                                   // 17
+      getAppointments(),                            // 18
+      getActivity(),                                // 19
     ]);
 
     const ok = <T,>(i: number): T | null =>
@@ -363,6 +368,11 @@ export function App() {
     if (ag) { setEstateAgents(ag.agents); setAgentReferrals(ag.referrals); }
     const an   = ok<{ snapshots: AnalyticsSnapshot[]; current: AnalyticsSnapshot | null }>(14);
     if (an) setAnalyticsData(an.current);
+    const mt   = ok<{ matters: Matter[] }>(15);                                                       if (mt)   setMatters(mt.matters);
+    const co   = ok<{ contracts: ContractDraft[] }>(16);                                              if (co)   setContracts(co.contracts);
+    const tk   = ok<{ tasks: WorkTask[] }>(17);                                                       if (tk)   setTasks(tk.tasks);
+    const ap   = ok<{ appointments: Appointment[] }>(18);                                             if (ap)   setAppointments(ap.appointments);
+    const av   = ok<{ activity: string[] }>(19);                                                      if (av)   setActivity(av.activity);
   }
 
   async function loadWorkspaceSettings(user: AuthUser) {

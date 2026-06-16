@@ -1,4 +1,4 @@
-import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AgentReferral, AiAgentKey, AnalyticsSnapshot, ApiProviderSettings, AssistantTrainingSettings, AuthUser, CipcSearchResult, Client, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, EstateAgent, FicaClient, Invoice, InvoicePayment, LegalCorpusDocument, LegalCorpusSource, LitigationDeadline, LitigationMatter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchQuery, SignatureRequest, SignatureSignatory, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AccountingProvider, AgentReferral, AiAgentKey, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, CipcSearchResult, Client, ContractDraft, ConveyancingMatter, ConveyancingStage, CourtDate, CostOrder, DocumentAnalysis, EstateAgent, FicaClient, Invoice, InvoicePayment, LegalCorpusDocument, LegalCorpusSource, LitigationDeadline, LitigationMatter, Matter, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchQuery, SignatureRequest, SignatureSignatory, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const TOKEN_KEY = "lawpath.auth.token";
@@ -725,4 +725,50 @@ export async function updateClient(id: string, data: Partial<Client>) {
 
 export async function archiveClient(id: string) {
   return request<{ client: Client }>(`/api/clients/${id}/archive`, { method: "POST" });
+}
+
+// ─── MATTERS / CONTRACTS / TASKS / APPOINTMENTS / ACTIVITY / STAFF ───────────
+
+export async function getMatters() {
+  return request<{ matters: Matter[] }>("/api/matters");
+}
+
+export async function createMatter(input: Omit<Matter, "id">) {
+  return request<{ matter: Matter }>("/api/matters", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function getContracts() {
+  return request<{ contracts: ContractDraft[] }>("/api/contracts");
+}
+
+export async function createContract(input: Omit<ContractDraft, "id" | "updated">) {
+  return request<{ contract: ContractDraft }>("/api/contracts", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function getTasks() {
+  return request<{ tasks: WorkTask[] }>("/api/tasks");
+}
+
+export async function createTask(input: Omit<WorkTask, "id" | "done">) {
+  return request<{ task: WorkTask }>("/api/tasks", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function toggleTaskDone(id: string, done: boolean) {
+  return request<{ task: WorkTask }>(`/api/tasks/${id}/done`, { method: "PUT", body: JSON.stringify({ done }) });
+}
+
+export async function getAppointments() {
+  return request<{ appointments: Appointment[] }>("/api/appointments");
+}
+
+export async function createAppointment(input: Omit<Appointment, "id">) {
+  return request<{ appointment: Appointment }>("/api/appointments", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function getActivity() {
+  return request<{ activity: string[] }>("/api/activity");
+}
+
+export async function getStaff() {
+  return request<{ staff: any[]; pendingInvites: any[] }>("/api/staff");
 }

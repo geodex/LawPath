@@ -1853,6 +1853,200 @@ app.post("/api/litigation/matters/:id/cost-orders", authMiddleware, async (req, 
   } catch (error) { next(error); }
 });
 
+// ─── MATTERS / CONTRACTS / TASKS / APPOINTMENTS / ACTIVITY ───────────────────
+
+function matterFromRow(r) {
+  return {
+    id: r.matter_number,
+    title: r.title || "",
+    client: r.client_name || "",
+    matterType: r.matter_type || "",
+    role: r.client_role || "",
+    property: r.property_address || "",
+    estateAgent: r.estate_agent_name || "",
+    stage: r.stage || "Intake",
+    progress: Number(r.progress || 0),
+    nextStep: r.next_step || "",
+    due: r.due_date ? new Date(r.due_date).toISOString().slice(0, 10) : "",
+    portalAccess: Boolean(r.portal_access_enabled),
+    risk: r.risk || "Low"
+  };
+}
+
+app.get("/api/matters", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      "select * from matters where tenant_id = $1 order by updated_at desc limit 200",
+      [req.user.tenantId]
+    );
+    res.json({ matters: result.rows.map(matterFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/matters", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { title, client, matterType, role, property, estateAgent, stage, progress, nextStep, due, portalAccess, risk } = req.body;
+  if (!title) return res.status(400).json({ error: "Title is required." });
+  try {
+    const matterNumber = `M-${Math.floor(100000 + Math.random() * 900000)}`;
+    const result = await pool.query(
+      `insert into matters
+        (tenant_id, matter_number, title, client_name, client_role, matter_type, property_address, estate_agent_name,
+         stage, progress, next_step, due_date, risk, portal_access_enabled, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
+      [req.user.tenantId, matterNumber, title, client || null, role || null, matterType || null,
+       property || null, estateAgent || null, stage || "Intake", Number(progress || 0),
+       nextStep || null, due || null, risk || "Low", Boolean(portalAccess), req.user.sub]
+    );
+    res.status(201).json({ matter: matterFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+function contractFromRow(r) {
+  return {
+    id: r.id,
+    name: r.name || "",
+    category: r.category || "",
+    partyA: r.party_a || "",
+    partyB: r.party_b || "",
+    status: r.status || "Draft",
+    updated: r.updated_at ? new Date(r.updated_at).toISOString().slice(0, 10) : "",
+    body: r.body || ""
+  };
+}
+
+app.get("/api/contracts", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      "select * from contract_drafts where tenant_id = $1 order by updated_at desc limit 200",
+      [req.user.tenantId]
+    );
+    res.json({ contracts: result.rows.map(contractFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/contracts", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { name, category, partyA, partyB, status, body } = req.body;
+  if (!name) return res.status(400).json({ error: "Name is required." });
+  try {
+    const result = await pool.query(
+      `insert into contract_drafts (tenant_id, name, category, party_a, party_b, status, body, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [req.user.tenantId, name, category || null, partyA || null, partyB || null,
+       status || "Draft", body || null, req.user.sub]
+    );
+    res.status(201).json({ contract: contractFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+function taskFromRow(r) {
+  return {
+    id: r.id,
+    title: r.title || "",
+    owner: r.owner_label || "",
+    due: r.due_at ? new Date(r.due_at).toISOString().slice(0, 10) : "",
+    done: Boolean(r.done),
+    priority: r.priority || "Normal"
+  };
+}
+
+app.get("/api/tasks", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      "select * from work_tasks where tenant_id = $1 order by created_at desc limit 200",
+      [req.user.tenantId]
+    );
+    res.json({ tasks: result.rows.map(taskFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/tasks", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { title, owner, due, priority } = req.body;
+  if (!title) return res.status(400).json({ error: "Title is required." });
+  try {
+    const result = await pool.query(
+      `insert into work_tasks (tenant_id, title, owner_label, due_at, priority, created_by)
+       values ($1,$2,$3,$4,$5,$6) returning *`,
+      [req.user.tenantId, title, owner || null, due || null, priority || "Normal", req.user.sub]
+    );
+    res.status(201).json({ task: taskFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/tasks/:id/done", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { done } = req.body;
+  try {
+    const result = await pool.query(
+      `update work_tasks set done = $3, completed_at = case when $3 then now() else null end, updated_at = now()
+       where id = $1 and tenant_id = $2 returning *`,
+      [req.params.id, req.user.tenantId, Boolean(done)]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Task not found." });
+    res.json({ task: taskFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+function appointmentFromRow(r) {
+  return {
+    id: r.id,
+    title: r.title || "",
+    person: r.person_name || "",
+    time: r.starts_at ? new Date(r.starts_at).toISOString() : "",
+    mode: r.mode || "Office"
+  };
+}
+
+app.get("/api/appointments", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      "select * from appointments where tenant_id = $1 order by starts_at desc nulls last limit 200",
+      [req.user.tenantId]
+    );
+    res.json({ appointments: result.rows.map(appointmentFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/appointments", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { title, person, time, mode } = req.body;
+  if (!title) return res.status(400).json({ error: "Title is required." });
+  try {
+    let startsAt = null;
+    if (time) {
+      const d = new Date(time);
+      if (!Number.isNaN(d.getTime())) startsAt = d.toISOString();
+    }
+    const result = await pool.query(
+      `insert into appointments (tenant_id, title, person_name, starts_at, mode, created_by)
+       values ($1,$2,$3,$4,$5,$6) returning *`,
+      [req.user.tenantId, title, person || null, startsAt, mode || "Office", req.user.sub]
+    );
+    res.status(201).json({ appointment: appointmentFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/activity", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      `select action, entity_type, created_at from activity_log
+       where tenant_id = $1 order by created_at desc limit 20`,
+      [req.user.tenantId]
+    );
+    const activity = result.rows.map(r =>
+      r.entity_type ? `${r.action} on ${r.entity_type}` : String(r.action || "")
+    );
+    res.json({ activity });
+  } catch (error) { next(error); }
+});
+
 // ─── WHATSAPP ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_WA_TEMPLATES = [
