@@ -31,6 +31,8 @@ import {
   ShieldCheck,
   Sparkles,
   Split,
+  Sun,
+  Moon,
   Timer,
   UserCheck,
   UserCircle,
@@ -198,6 +200,14 @@ function fileToDataUrl(file: File) {
 }
 
 export function App() {
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    const saved = localStorage.getItem("lawpath.theme");
+    return saved === "light" ? "light" : "dark";
+  });
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("lawpath.theme", theme);
+  }, [theme]);
   const [authMode, setAuthMode] = useState<"landing" | "login" | "register" | "forgot">("landing");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authMessage, setAuthMessage] = useState("Start with the demo workspace or register a firm account.");
@@ -569,6 +579,14 @@ export function App() {
           </div>
           <div className="top-actions">
             <span className="tenant-chip"><Building2 size={16} /> {authUser.companyName}</span>
+            <button
+              className="ghost theme-toggle"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
             <button className="ghost" onClick={() => setActiveView("research")}>
               <BookOpenCheck size={18} /> Research pack
             </button>
