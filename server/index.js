@@ -316,7 +316,7 @@ async function getGeminiSettings() {
   const row = result.rows[0];
   return {
     apiKey: row?.api_key_secret_ref || process.env.GEMINI_API_KEY || "",
-    model: row?.default_model || process.env.GEMINI_MODEL || "gemini-2.5-flash"
+    model: row?.default_model || process.env.GEMINI_MODEL || "gemini-3.5-flash"
   };
 }
 
