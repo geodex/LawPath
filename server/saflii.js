@@ -374,7 +374,7 @@ async function indexResult(item) {
   const year = extractYearFromText(title + " " + content);
   const citation = extractCitationFromText(title + " " + content);
   const summary = content.slice(0, 600).trim();
-  const fullTextSnippet = content.slice(0, 2000).trim();
+  const fullTextSnippet = content.trim();
 
   const sourceId = await ensureSourceRecord(court);
 

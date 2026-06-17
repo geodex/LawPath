@@ -502,7 +502,7 @@ export async function indexCorpusSource(sourceId: string) {
 }
 
 export async function getCorpusDocumentText(docId: string) {
-  return request<{ title: string; citation: string; text: string; source: "gcs" | "snippet" | "none" }>(`/api/research-db/documents/${docId}/text`);
+  return request<{ title: string; citation: string; text: string; source: "gcs" | "snippet" | "none"; sourceUrl?: string }>(`/api/research-db/documents/${docId}/text`);
 }
 
 // ─── LIGHTSTONE PROPERTY API ─────────────────────────────────────────────────

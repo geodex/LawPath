@@ -38,7 +38,7 @@ export function LegalResearchDB({
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [indexing, setIndexing] = useState<string | null>(null);
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
-  const [fullTextDoc, setFullTextDoc] = useState<{ title: string; citation: string; text: string; source: string } | null>(null);
+  const [fullTextDoc, setFullTextDoc] = useState<{ title: string; citation: string; text: string; source: string; sourceUrl?: string } | null>(null);
   const [loadingFullText, setLoadingFullText] = useState<string | null>(null);
 
   const totalDocs = sources.reduce((s, src) => s + src.documentCount, 0);
@@ -139,12 +139,18 @@ export function LegalResearchDB({
               <div>
                 <h3 style={{ margin: 0, fontSize: "1rem" }}>{fullTextDoc.title}</h3>
                 <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>{fullTextDoc.citation}
-                  {fullTextDoc.source === "gcs" && <span style={{ marginLeft: 8, color: "var(--green)", fontSize: "0.78rem" }}>● Cloud storage</span>}
-                  {fullTextDoc.source === "snippet" && <span style={{ marginLeft: 8, color: "var(--gold)", fontSize: "0.78rem" }}>● Indexed snippet</span>}
+                  {fullTextDoc.source === "gcs" && <span style={{ marginLeft: 8, color: "var(--green)", fontSize: "0.78rem" }}>● Full text from cloud</span>}
+                  {fullTextDoc.source === "snippet" && <span style={{ marginLeft: 8, color: "var(--gold)", fontSize: "0.78rem" }}>● Indexed extract</span>}
                 </span>
               </div>
               <button className="ghost small" onClick={() => setFullTextDoc(null)}><X size={16} /></button>
             </div>
+            {fullTextDoc.sourceUrl && (
+              <a href={fullTextDoc.sourceUrl} target="_blank" rel="noopener noreferrer"
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 10, fontSize: "0.84rem", color: "var(--accent)" }}>
+                Read full judgment on source site ↗
+              </a>
+            )}
             <div style={{ overflowY: "auto", flex: 1, background: "var(--panel)", borderRadius: 8, padding: "14px 16px" }}>
               <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.86rem", lineHeight: 1.7, fontFamily: "inherit" }}>
                 {fullTextDoc.text || "Full text not available for this judgment."}

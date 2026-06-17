@@ -2801,17 +2801,18 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
 app.get("/api/research-db/documents/:id/text", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
-    const result = await pool.query("select gcs_uri, full_text_snippet, title, citation from legal_corpus_documents where id = $1 limit 1", [req.params.id]);
+    const result = await pool.query("select gcs_uri, full_text_snippet, title, citation, source_url from legal_corpus_documents where id = $1 limit 1", [req.params.id]);
     if (!result.rowCount) return res.status(404).json({ error: "Document not found." });
     const row = result.rows[0];
+    const base = { title: row.title, citation: row.citation || "", sourceUrl: row.source_url || "" };
     if (row.gcs_uri) {
       const text = await downloadText(row.gcs_uri);
-      return res.json({ title: row.title, citation: row.citation || "", text, source: "gcs" });
+      return res.json({ ...base, text, source: "gcs" });
     }
     if (row.full_text_snippet) {
-      return res.json({ title: row.title, citation: row.citation || "", text: row.full_text_snippet, source: "snippet" });
+      return res.json({ ...base, text: row.full_text_snippet, source: "snippet" });
     }
-    res.json({ title: row.title, citation: row.citation || "", text: "", source: "none" });
+    res.json({ ...base, text: "", source: "none" });
   } catch (error) { next(error); }
 });
 
