@@ -439,8 +439,12 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
   });
   let legislationKb = kbs.find(k => {
     const code = (k.code || k.id || "").toLowerCase();
+    return code === "legislation-za";
+  }) || kbs.find(k => {
+    const code = (k.code || k.id || "").toLowerCase();
     const name = (k.name || k.title || "").toLowerCase();
-    return code.includes("za") && (name.includes("legislation") || code.includes("legislation"));
+    return code.includes("za") && !code.includes("municipal") && !code.includes("provincial")
+      && (name.includes("legislation") || code.includes("legislation"));
   });
 
   if (!judgmentKb && !legislationKb) {
