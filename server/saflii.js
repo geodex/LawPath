@@ -1,167 +1,254 @@
 // server/saflii.js
-// SAFLII (Southern African Legal Information Institute) corpus indexer.
-// SAFLII is public domain — no API key required, but please respect robots.txt
-// and add delays between requests. Run as a scheduled PM2 cron job.
+// SA Legal Corpus indexer — powered by the Laws.Africa Knowledge Base API.
+// SAFLII is behind Cloudflare bot protection so direct scraping no longer works.
+// Laws.Africa free tier: 100 API calls/day (one call returns up to 20 results).
 //
-// Usage: node server/saflii.js [--limit 50] [--court zacc] [--years 5]
+// Usage: node server/saflii.js [--queries 50] [--top-k 20]
 //
-// Full judgment HTML + plain text are uploaded to GCS at:
-//   saflii/{courtId}/{year}/{caseNumber}.html  (raw HTML)
-//   saflii/{courtId}/{year}/{caseNumber}.txt   (plain text for RAG)
-// The GCS URI of the .txt file is stored in legal_corpus_documents.gcs_uri.
+// Environment:
+//   LAWS_AFRICA_API_KEY  — Bearer token from https://platform.laws.africa/api-keys/
+//   DATABASE_URL         — PostgreSQL connection string
+//
+// Each run picks a batch of legal-topic queries, retrieves matching judgments
+// from the Knowledge Base, and upserts them into legal_corpus_documents.
+// Re-running is safe — duplicates are skipped via source_url uniqueness.
 
 require("dotenv").config();
 
 const { pool } = require("./db");
-const { uploadBuffer, safeObjectPart, configuredBucketName } = require("./gcs");
 
-const SAFLII_BASE = "https://www.saflii.org";
-const GCS_PREFIX = "saflii";
-
-const SA_COURTS = [
-  { id: "zacc",    label: "Constitutional Court",              path: "/za/cases/ZACC/" },
-  { id: "zasca",   label: "Supreme Court of Appeal",           path: "/za/cases/ZASCA/" },
-  { id: "zagpjhc", label: "Gauteng High Court, Johannesburg",  path: "/za/cases/ZAGPJHC/" },
-  { id: "zagpphc", label: "Gauteng High Court, Pretoria",      path: "/za/cases/ZAGPPHC/" },
-  { id: "zawchc",  label: "Western Cape High Court",           path: "/za/cases/ZAWCHC/" },
-  { id: "zakzdhc", label: "KwaZulu-Natal High Court, Durban",  path: "/za/cases/ZAKZDHC/" },
-  { id: "zafshc",  label: "Free State High Court",             path: "/za/cases/ZAFSHC/" },
-  { id: "zalcc",   label: "Labour Court",                      path: "/za/cases/ZALCC/" },
-  { id: "zalac",   label: "Labour Appeal Court",               path: "/za/cases/ZALAC/" },
-  { id: "zact",    label: "Competition Tribunal",              path: "/za/cases/ZACT/" }
-];
+const API_BASE = "https://api.laws.africa/ai/v1";
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-const gcsEnabled = () => Boolean(configuredBucketName());
 
-// ─── HTTP ─────────────────────────────────────────────────────────────────────
+// ─── QUERY TOPICS ────────────────────────────────────────────────────────────
+// Each query is sent to the Knowledge Base to pull diverse SA case law.
 
-async function fetchWithRetry(url, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "LawPath-SA-Legal-Index/1.0 (research; contact: admin@lawpath.co.za)",
-          "Accept": "text/html,application/xhtml+xml"
-        }
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.text();
-    } catch (err) {
-      if (i === retries - 1) throw err;
-      await delay(2000 * (i + 1));
-    }
-  }
-}
+const QUERY_TOPICS = [
+  // Constitutional & human rights
+  "right to equality South Africa",
+  "freedom of expression constitutional court",
+  "right to housing eviction",
+  "right to dignity South Africa",
+  "right to life death penalty",
+  "freedom of religion South Africa",
+  "right to access to information",
+  "right to just administrative action PAJA",
+  "children's rights best interests",
+  "right to education South Africa",
+  "property rights expropriation",
+  "right to privacy South Africa",
+  "freedom of association South Africa",
+  "limitation of rights section 36",
 
-// ─── HTML / TEXT EXTRACTION ───────────────────────────────────────────────────
+  // Contract law
+  "breach of contract damages South Africa",
+  "specific performance contract",
+  "cancellation of contract repudiation",
+  "voetstoots clause defects",
+  "restraint of trade enforceability",
+  "cession and delegation",
+  "contractual interpretation South Africa",
+  "misrepresentation contract voidable",
+  "impossibility of performance supervening",
+  "penalty clause conventional penalty",
 
-function extractCasesFromHtml(html, courtLabel) {
-  const cases = [];
-  const linkRegex = /href="(\/za\/cases\/[A-Z]+\/(\d{4})\/(\d+)\.html)"/gi;
-  const titleRegex = /<a[^>]*href="[^"]*\/(\d{4})\/(\d+)\.html"[^>]*>([^<]+)<\/a>/gi;
-  let match;
+  // Delict
+  "negligence duty of care South Africa",
+  "wrongfulness delict aquilian action",
+  "pure economic loss delict",
+  "defamation South Africa",
+  "medical negligence malpractice",
+  "product liability manufacturer",
+  "vicarious liability employer",
+  "nuisance neighbour law",
+  "emotional shock nervous shock",
+  "contributory negligence apportionment",
 
-  const titleMap = {};
-  while ((match = titleRegex.exec(html)) !== null) {
-    const key = `${match[1]}/${match[2]}`;
-    titleMap[key] = match[3].trim();
-  }
+  // Property law
+  "transfer of immovable property",
+  "sectional title body corporate",
+  "servitude right of way",
+  "prescription acquisitive 30 years",
+  "landlord tenant eviction PIE Act",
+  "mortgage bond foreclosure",
+  "mineral rights MPRDA",
+  "expropriation compensation",
 
-  const seen = new Set();
-  while ((match = linkRegex.exec(html)) !== null) {
-    const path = match[1];
-    const caseYear = match[2];
-    const caseNum = match[3];
-    const key = `${caseYear}/${caseNum}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+  // Family law
+  "divorce division matrimonial property",
+  "maintenance defaulting spouse",
+  "custody best interests child",
+  "domestic violence protection order",
+  "adoption South Africa",
+  "recognition customary marriage",
+  "accrual system marriage",
+  "parental rights responsibilities",
 
-    const rawTitle = titleMap[key] || `${courtLabel} ${caseYear} (${caseNum})`;
-    cases.push({
-      path,
-      year: parseInt(caseYear),
-      caseNumber: caseNum,
-      title: rawTitle.replace(/\s+/g, " ").trim()
-    });
-  }
-  return cases;
-}
+  // Company law
+  "director fiduciary duty Companies Act",
+  "business rescue practitioner",
+  "winding up liquidation company",
+  "shareholder oppression remedy",
+  "piercing corporate veil",
+  "derivative action section 165",
+  "delinquent director declaration",
 
-function extractTextFromHtml(html) {
-  return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s{3,}/g, "\n\n")
-    .trim();
-}
+  // Employment / Labour
+  "unfair dismissal CCMA",
+  "constructive dismissal Labour Court",
+  "automatically unfair dismissal",
+  "equal pay discrimination workplace",
+  "retrenchment operational requirements",
+  "transfer of undertaking section 197",
+  "strike action protected unprotected",
+  "sexual harassment workplace",
+  "fixed term contract employee",
 
-function extractSummaryFromText(text) {
-  const lines = text.split("\n\n").filter(l => l.trim().length > 80);
-  return (lines[0] || text.slice(0, 600)).slice(0, 600).trim();
-}
+  // Criminal law
+  "murder dolus eventualis",
+  "robbery aggravating circumstances",
+  "fraud misrepresentation criminal",
+  "corruption Prevention Combating Act",
+  "sexual offences SORMA",
+  "bail appeal factors",
+  "minimum sentencing schedule",
+  "self-defence private defence",
 
-function generateCitation(courtId, year, caseNumber) {
-  const courtCodes = {
-    zacc: "ZACC", zasca: "ZASCA", zagpjhc: "ZAGPJHC", zagpphc: "ZAGPPHC",
-    zawchc: "ZAWCHC", zakzdhc: "ZAKZDHC", zafshc: "ZAFSHC",
-    zalcc: "ZALCC", zalac: "ZALAC", zact: "ZACT"
-  };
-  return `[${year}] ${courtCodes[courtId] || courtId.toUpperCase()} ${caseNumber}`;
-}
+  // Banking & finance
+  "National Credit Act affordability",
+  "reckless credit agreement",
+  "in duplum rule interest",
+  "bank client relationship duty",
+  "suretyship married person",
+  "prescription debt three years",
 
-function extractTagsFromTitle(title) {
-  const tags = [];
+  // Tax
+  "income tax general anti-avoidance GAAR",
+  "capital gains tax disposal",
+  "VAT zero-rated supply",
+  "SARS assessment objection appeal",
+  "tax residence South Africa",
+
+  // Administrative law
+  "judicial review administrative action",
+  "PAJA review grounds",
+  "rationality review executive decision",
+  "legitimate expectation procedural fairness",
+  "rule of law principle",
+  "Promotion of Access to Information Act",
+
+  // Consumer protection
+  "Consumer Protection Act unfair terms",
+  "product liability CPA",
+  "consumer rights cooling off period",
+  "marketing direct marketing unsolicited",
+
+  // Environmental
+  "NEMA environmental authorisation",
+  "environmental impact assessment appeal",
+  "water use licence National Water Act",
+  "waste management NEMWA",
+
+  // Insolvency
+  "sequestration voluntary surrender",
+  "rehabilitation insolvent estate",
+  "voidable preference insolvency",
+  "concurrent creditors distribution",
+
+  // Intellectual property
+  "trademark infringement passing off",
+  "copyright infringement reproduction",
+  "patent validity South Africa",
+  "unlawful competition goodwill",
+];
+
+// ─── COURT MAPPING ───────────────────────────────────────────────────────────
+
+function guessCourtFromTitle(title) {
   const t = title.toLowerCase();
+  if (t.includes("constitutional court") || t.includes("zacc")) return "Constitutional Court";
+  if (t.includes("supreme court of appeal") || t.includes("zasca")) return "Supreme Court of Appeal";
+  if (t.includes("labour appeal") || t.includes("zalac")) return "Labour Appeal Court";
+  if (t.includes("labour court") || t.includes("zalcc")) return "Labour Court";
+  if (t.includes("competition")) return "Competition Tribunal";
+  if (t.includes("land claims")) return "Land Claims Court";
+  if (t.includes("western cape") || t.includes("zawchc")) return "Western Cape High Court";
+  if (t.includes("kwazulu") || t.includes("zakzdhc") || t.includes("durban")) return "KwaZulu-Natal High Court, Durban";
+  if (t.includes("free state") || t.includes("zafshc") || t.includes("bloemfontein")) return "Free State High Court";
+  if (t.includes("pretoria") || t.includes("zagpphc")) return "Gauteng High Court, Pretoria";
+  if (t.includes("johannesburg") || t.includes("zagpjhc")) return "Gauteng High Court, Johannesburg";
+  if (t.includes("high court") || t.includes("gauteng")) return "High Court";
+  return "South African Court";
+}
 
-  if (t.includes("constitution") || t.includes("right"))                     tags.push("constitutional");
-  if (t.includes("contract") || t.includes("agreement"))                     tags.push("contract law");
-  if (t.includes("property") || t.includes("transfer") || t.includes("deed")) tags.push("property law");
-  if (t.includes("employ") || t.includes("labour") || t.includes("dismissal")) tags.push("employment");
-  if (t.includes("company") || t.includes("director") || t.includes("share")) tags.push("company law");
-  if (t.includes("criminal") || t.includes("murder") || t.includes("robbery")) tags.push("criminal");
-  if (t.includes("divorce") || t.includes("marriage") || t.includes("custody")) tags.push("family law");
-  if (t.includes("tax") || t.includes("sars") || t.includes("revenue"))      tags.push("tax");
-  if (t.includes("bank") || t.includes("credit") || t.includes("nca"))       tags.push("banking");
-  if (t.includes("negligence") || t.includes("delict") || t.includes("damages")) tags.push("delict");
-
+function extractTagsFromText(text) {
+  const tags = [];
+  const t = text.toLowerCase();
+  if (t.includes("constitution") || t.includes("bill of rights")) tags.push("constitutional");
+  if (t.includes("contract") || t.includes("agreement") || t.includes("breach")) tags.push("contract law");
+  if (t.includes("property") || t.includes("transfer") || t.includes("deed") || t.includes("eviction")) tags.push("property law");
+  if (t.includes("employ") || t.includes("labour") || t.includes("dismissal") || t.includes("ccma")) tags.push("employment");
+  if (t.includes("company") || t.includes("director") || t.includes("shareholder")) tags.push("company law");
+  if (t.includes("criminal") || t.includes("murder") || t.includes("robbery") || t.includes("bail")) tags.push("criminal");
+  if (t.includes("divorce") || t.includes("marriage") || t.includes("custody") || t.includes("maintenance")) tags.push("family law");
+  if (t.includes("tax") || t.includes("sars") || t.includes("revenue") || t.includes("vat")) tags.push("tax");
+  if (t.includes("bank") || t.includes("credit") || t.includes("nca") || t.includes("surety")) tags.push("banking");
+  if (t.includes("negligence") || t.includes("delict") || t.includes("damages") || t.includes("defamation")) tags.push("delict");
+  if (t.includes("consumer") || t.includes("cpa")) tags.push("consumer");
+  if (t.includes("environment") || t.includes("nema") || t.includes("water")) tags.push("environmental");
+  if (t.includes("insolvency") || t.includes("sequestration") || t.includes("liquidation")) tags.push("insolvency");
+  if (t.includes("trademark") || t.includes("copyright") || t.includes("patent")) tags.push("intellectual property");
+  if (t.includes("administrative") || t.includes("paja") || t.includes("judicial review")) tags.push("administrative");
   return [...new Set(tags)];
 }
 
-// ─── GCS ──────────────────────────────────────────────────────────────────────
-
-async function uploadCaseToGcs(courtId, year, caseNumber, html) {
-  const base = `${GCS_PREFIX}/${courtId}/${year}/${safeObjectPart(caseNumber)}`;
-  const plainText = extractTextFromHtml(html);
-
-  const [htmlResult, txtResult] = await Promise.all([
-    uploadBuffer({
-      buffer: Buffer.from(html, "utf8"),
-      contentType: "text/html",
-      objectName: `${base}.html`,
-      metadata: { source: "saflii", court: courtId, year: String(year), caseNumber }
-    }),
-    uploadBuffer({
-      buffer: Buffer.from(plainText, "utf8"),
-      contentType: "text/plain",
-      objectName: `${base}.txt`,
-      metadata: { source: "saflii", court: courtId, year: String(year), caseNumber }
-    })
-  ]);
-
-  return { gcsUri: txtResult.gcsUri, gcsHtmlUri: htmlResult.gcsUri };
+function extractYearFromText(text) {
+  const match = text.match(/\[(\d{4})\]/);
+  if (match) return parseInt(match[1]);
+  const dateMatch = text.match(/\b(19|20)\d{2}\b/);
+  if (dateMatch) return parseInt(dateMatch[0]);
+  return null;
 }
 
-// ─── INDEXER ──────────────────────────────────────────────────────────────────
+function extractCitationFromText(text) {
+  const match = text.match(/\[\d{4}\]\s+[A-Z]+\s+\d+/);
+  return match ? match[0] : null;
+}
 
-async function ensureSourceRecord(courtId, courtLabel) {
+// ─── API ─────────────────────────────────────────────────────────────────────
+
+async function fetchKnowledgeBases(apiKey) {
+  const res = await fetch(`${API_BASE}/knowledge-bases`, {
+    headers: { Authorization: `Bearer ${apiKey}` }
+  });
+  if (!res.ok) throw new Error(`Knowledge bases list failed: HTTP ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+async function queryKnowledgeBase(apiKey, kbCode, text, topK = 20) {
+  const res = await fetch(`${API_BASE}/knowledge-bases/${kbCode}/retrieve`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      text,
+      top_k: topK,
+      filters: { frbr_country: "za" }
+    })
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`KB retrieve failed: HTTP ${res.status} ${body}`);
+  }
+  return res.json();
+}
+
+// ─── INDEXER ─────────────────────────────────────────────────────────────────
+
+async function ensureSourceRecord(courtLabel) {
   const existing = await pool.query(
     "select id from legal_corpus_sources where court_or_body = $1 and source_type = 'case_law' limit 1",
     [courtLabel]
@@ -170,143 +257,175 @@ async function ensureSourceRecord(courtId, courtLabel) {
 
   const result = await pool.query(
     `insert into legal_corpus_sources (source_name, source_type, court_or_body, base_url, index_status, is_platform_corpus)
-     values ($1, 'case_law', $2, $3, 'indexing', true) returning id`,
-    [`SAFLII — ${courtLabel}`, courtLabel, `${SAFLII_BASE}/za/cases/${courtId.toUpperCase()}/`]
+     values ($1, 'case_law', $2, 'https://lawlibrary.org.za', 'indexed', true) returning id`,
+    [`Laws.Africa — ${courtLabel}`, courtLabel]
   );
   return result.rows[0].id;
 }
 
-async function indexCourt({ id: courtId, label: courtLabel, path, limitPerYear = 50, yearsBack = 5 }) {
-  const sourceId = await ensureSourceRecord(courtId.toLowerCase(), courtLabel);
-  const currentYear = new Date().getFullYear();
-  let totalIndexed = 0;
+async function indexResult(item) {
+  const content = item.content?.text || item.text || "";
+  const publicUrl = item.public_url || item.url || "";
+  const title = item.title || content.slice(0, 120).split("\n")[0] || "Untitled judgment";
 
-  console.info(`[saflii] Indexing ${courtLabel} (${courtId})...`);
-  if (gcsEnabled()) {
-    console.info(`[saflii] GCS bucket: ${configuredBucketName()} — full judgments will be stored under ${GCS_PREFIX}/${courtId}/`);
-  } else {
-    console.warn("[saflii] GCS_BUCKET_NAME not set — PostgreSQL-only mode (no cloud storage).");
+  if (!publicUrl && !content) return false;
+
+  // Skip if already indexed by URL
+  if (publicUrl) {
+    const exists = await pool.query(
+      "select id from legal_corpus_documents where source_url = $1 limit 1",
+      [publicUrl]
+    );
+    if (exists.rowCount) return false;
   }
 
-  for (let year = currentYear; year >= currentYear - yearsBack; year--) {
-    try {
-      const listUrl = `${SAFLII_BASE}${path}${year}/`;
-      console.info(`[saflii] Fetching listing: ${listUrl}`);
-      const listHtml = await fetchWithRetry(listUrl);
-      await delay(1500);
+  const court = guessCourtFromTitle(title + " " + content);
+  const tags = extractTagsFromText(title + " " + content);
+  const year = extractYearFromText(title + " " + content);
+  const citation = extractCitationFromText(title + " " + content);
+  const summary = content.slice(0, 600).trim();
+  const fullTextSnippet = content.slice(0, 2000).trim();
 
-      const cases = extractCasesFromHtml(listHtml, courtLabel).slice(0, limitPerYear);
-      console.info(`[saflii]   ${cases.length} cases found for ${year}`);
-
-      for (const c of cases) {
-        const citation = generateCitation(courtId, c.year, c.caseNumber);
-        const sourceUrl = `${SAFLII_BASE}${c.path}`;
-
-        const exists = await pool.query(
-          "select id from legal_corpus_documents where source_url = $1 limit 1",
-          [sourceUrl]
-        );
-        if (exists.rowCount) continue;
-
-        let summary = `${courtLabel} judgment ${citation}.`;
-        let fullTextSnippet = "";
-        let gcsUri = null;
-        let gcsHtmlUri = null;
-
-        try {
-          const caseHtml = await fetchWithRetry(sourceUrl);
-          const plainText = extractTextFromHtml(caseHtml);
-          summary = extractSummaryFromText(plainText);
-          fullTextSnippet = plainText.slice(0, 2000);
-          await delay(1000);
-
-          if (gcsEnabled()) {
-            try {
-              const uploaded = await uploadCaseToGcs(courtId, c.year, c.caseNumber, caseHtml);
-              gcsUri = uploaded.gcsUri;
-              gcsHtmlUri = uploaded.gcsHtmlUri;
-            } catch (gcsErr) {
-              console.warn(`[saflii]   GCS upload failed for ${citation}: ${gcsErr.message}`);
-            }
-          }
-        } catch (fetchErr) {
-          console.warn(`[saflii]   Fetch failed for ${citation}: ${fetchErr.message}`);
-        }
-
-        const tags = extractTagsFromTitle(c.title);
-
-        await pool.query(
-          `insert into legal_corpus_documents
-            (source_id, title, citation, court, decision_date, jurisdiction, document_type,
-             summary, full_text_snippet, source_url, gcs_uri, gcs_html_uri, tags, year)
-           values ($1,$2,$3,$4,$5,'South Africa','judgment',$6,$7,$8,$9,$10,$11,$12)
-           on conflict do nothing`,
-          [
-            sourceId, c.title, citation, courtLabel, `${c.year}-01-01`,
-            summary, fullTextSnippet, sourceUrl,
-            gcsUri, gcsHtmlUri, tags, c.year
-          ]
-        );
-        totalIndexed++;
-
-        if (gcsUri) {
-          console.info(`[saflii]   ✓ ${citation} → ${gcsUri}`);
-        } else {
-          console.info(`[saflii]   ✓ ${citation} (DB only)`);
-        }
-      }
-    } catch (err) {
-      console.error(`[saflii] Error indexing ${courtLabel} ${year}:`, err.message);
-    }
-  }
+  const sourceId = await ensureSourceRecord(court);
 
   await pool.query(
-    "update legal_corpus_sources set index_status='indexed', last_indexed_at=now(), document_count=document_count+$2 where id=$1",
-    [sourceId, totalIndexed]
+    `insert into legal_corpus_documents
+      (source_id, title, citation, court, decision_date, jurisdiction, document_type,
+       summary, full_text_snippet, source_url, tags, year)
+     values ($1,$2,$3,$4,$5,'South Africa','judgment',$6,$7,$8,$9,$10)
+     on conflict do nothing`,
+    [
+      sourceId,
+      title.slice(0, 500),
+      citation,
+      court,
+      year ? `${year}-01-01` : null,
+      summary,
+      fullTextSnippet,
+      publicUrl || null,
+      tags,
+      year
+    ]
   );
-
-  console.info(`[saflii] ${courtLabel}: ${totalIndexed} new decisions indexed`);
-  return totalIndexed;
+  return true;
 }
 
-async function runIndexer({ limitPerYear = 30, yearsBack = 3, courtFilter = null } = {}) {
-  console.info("[saflii] Starting SAFLII corpus indexer...");
+async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
+  const apiKey = process.env.LAWS_AFRICA_API_KEY;
+  if (!apiKey) {
+    console.error("[indexer] LAWS_AFRICA_API_KEY is not set.");
+    console.error("[indexer] Get a free API key at https://platform.laws.africa/api-keys/");
+    process.exit(1);
+  }
+
+  console.info("[indexer] Starting Laws.Africa corpus indexer...");
+  console.info(`[indexer] Will run up to ${maxQueries} queries, ${topK} results each.`);
   const start = Date.now();
   let totalNew = 0;
+  let apiCalls = 0;
 
-  const courts = courtFilter
-    ? SA_COURTS.filter(c => c.id === courtFilter)
-    : SA_COURTS;
+  // 1. Discover available knowledge bases
+  console.info("[indexer] Fetching knowledge bases...");
+  let kbList;
+  try {
+    kbList = await fetchKnowledgeBases(apiKey);
+    apiCalls++;
+  } catch (err) {
+    console.error(`[indexer] Failed to list knowledge bases: ${err.message}`);
+    process.exit(1);
+  }
 
-  for (const court of courts) {
+  const kbs = kbList.results || kbList || [];
+  console.info(`[indexer] Found ${kbs.length} knowledge base(s):`);
+  for (const kb of kbs) {
+    console.info(`[indexer]   ${kb.code || kb.id}: ${kb.name || kb.title || "—"}`);
+  }
+
+  // Pick the best KB — prefer one with "judgment" or "case" in the name, else first
+  let kb = kbs.find(k => {
+    const n = (k.name || k.title || "").toLowerCase();
+    return n.includes("judgment") || n.includes("case") || n.includes("decision");
+  }) || kbs[0];
+
+  if (!kb) {
+    console.error("[indexer] No knowledge bases available. Check your API key permissions.");
+    process.exit(1);
+  }
+
+  const kbCode = kb.code || kb.id;
+  console.info(`[indexer] Using knowledge base: ${kbCode} (${kb.name || kb.title})`);
+
+  // 2. Shuffle queries for variety across runs
+  const queries = [...QUERY_TOPICS].sort(() => Math.random() - 0.5).slice(0, maxQueries);
+
+  for (let i = 0; i < queries.length; i++) {
+    const query = queries[i];
+    console.info(`[indexer] [${i + 1}/${queries.length}] Querying: "${query}"`);
+
     try {
-      totalNew += await indexCourt({ ...court, limitPerYear, yearsBack });
-      await delay(3000); // Respectful delay between courts
+      const results = await queryKnowledgeBase(apiKey, kbCode, query, topK);
+      apiCalls++;
+      const items = results.results || results.items || results || [];
+      let batchNew = 0;
+
+      for (const item of items) {
+        try {
+          const isNew = await indexResult(item);
+          if (isNew) {
+            batchNew++;
+            totalNew++;
+          }
+        } catch (err) {
+          console.warn(`[indexer]   DB insert error: ${err.message}`);
+        }
+      }
+
+      console.info(`[indexer]   ${items.length} results, ${batchNew} new → DB`);
+
+      // Respect rate limits — 1 second between calls
+      await delay(1000);
     } catch (err) {
-      console.error(`[saflii] Failed to index ${court.label}:`, err.message);
+      if (err.message.includes("429")) {
+        console.warn("[indexer] Rate limited — stopping. Re-run tomorrow to continue.");
+        break;
+      }
+      console.error(`[indexer]   Query failed: ${err.message}`);
+      await delay(2000);
     }
+  }
+
+  // 3. Update source record counts
+  const countResult = await pool.query(
+    "select court, count(*) as cnt from legal_corpus_documents group by court"
+  );
+  for (const row of countResult.rows) {
+    await pool.query(
+      "update legal_corpus_sources set document_count = $2, last_indexed_at = now() where court_or_body = $1",
+      [row.court, parseInt(row.cnt)]
+    ).catch(() => {});
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-  console.info(`[saflii] Indexing complete — ${totalNew} new documents in ${elapsed}s`);
+  console.info(`[indexer] Complete — ${totalNew} new documents indexed in ${elapsed}s (${apiCalls} API calls used).`);
+  console.info(`[indexer] Free tier: 100 calls/day. Used ${apiCalls}. ${Math.max(0, 100 - apiCalls)} remaining today.`);
 
   await pool.end().catch(() => {});
 }
 
+// ─── CLI ─────────────────────────────────────────────────────────────────────
+
 if (require.main === module) {
   const args = process.argv.slice(2);
-  const limitIdx = args.indexOf("--limit");
-  const courtIdx = args.indexOf("--court");
-  const yearsIdx = args.indexOf("--years");
+  const queriesIdx = args.indexOf("--queries");
+  const topKIdx = args.indexOf("--top-k");
 
   runIndexer({
-    limitPerYear: limitIdx >= 0 ? parseInt(args[limitIdx + 1]) : 30,
-    yearsBack:    yearsIdx >= 0 ? parseInt(args[yearsIdx + 1]) : 3,
-    courtFilter:  courtIdx >= 0 ? args[courtIdx + 1] : null
+    maxQueries: queriesIdx >= 0 ? parseInt(args[queriesIdx + 1]) : 50,
+    topK:       topKIdx >= 0 ? parseInt(args[topKIdx + 1]) : 20
   }).catch(err => {
-    console.error("[saflii] Fatal error:", err);
+    console.error("[indexer] Fatal error:", err);
     process.exit(1);
   });
 }
 
-module.exports = { runIndexer, SA_COURTS };
+module.exports = { runIndexer, QUERY_TOPICS };
