@@ -305,7 +305,7 @@ function buildContextSummary(context) {
   ].join(" ");
 }
 
-const AI_PROVIDERS = ["openai", "gemini", "grok"];
+const AI_PROVIDERS = ["gemini", "openai", "grok"];
 const AI_ENV_DEFAULTS = {
   openai:  { keyEnv: "OPENAI_API_KEY",  modelEnv: "OPENAI_MODEL",  fallbackModel: "gpt-5.4-mini" },
   gemini:  { keyEnv: "GEMINI_API_KEY",  modelEnv: "GEMINI_MODEL",  fallbackModel: "gemini-3.5-flash" },
@@ -346,14 +346,12 @@ async function getAiForFeature(featureName) {
 
 async function callGeminiApi(apiKey, model, systemPrompt, userPrompt) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const body = { contents: [{ parts: [{ text: userPrompt }] }], generationConfig: { temperature: 0.3 } };
+  if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ parts: [{ text: userPrompt }] }],
-      generationConfig: { temperature: 0.3 }
-    })
+    body: JSON.stringify(body)
   });
   const payload = await res.json();
   if (!res.ok) throw new Error(payload?.error?.message || `Gemini HTTP ${res.status}`);
