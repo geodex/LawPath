@@ -2521,6 +2521,9 @@ async function extractDocumentText(buffer, mimeType, fileName) {
       const parsed = await pdfParse(buffer);
       const text = (parsed?.text || "").trim();
       if (!text) return { text: "", reason: "pdf_empty" };
+      const pageCount = parsed?.numpages || 1;
+      const charsPerPage = text.length / pageCount;
+      if (charsPerPage < 200) return { text, reason: "pdf_sparse" };
       return { text: text.slice(0, 80_000), reason: "ok" };
     }
     if (isDocx) {
@@ -2581,7 +2584,7 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // by definition text-bearing — an empty DOCX is genuinely empty).
     let ocrText = "";
     let ocrError = "";
-    if (reason === "pdf_empty") {
+    if (reason === "pdf_empty" || reason === "pdf_sparse") {
       try {
         const { ocrPdfWithVision } = require("./ocr");
         ocrText = await ocrPdfWithVision({
@@ -2594,11 +2597,17 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
       }
     }
 
-    // If OCR succeeded, treat the OCR output as the document text from
-    // here on. The AI prompt downstream just sees text — it doesn't need
-    // to know whether it came from a text layer or from Vision.
-    if (reason === "pdf_empty" && ocrText.trim()) {
+    // If OCR succeeded, use it. For sparse PDFs, prefer OCR over the
+    // thin text-layer fragments that pdf-parse found.
+    if ((reason === "pdf_empty" || reason === "pdf_sparse") && ocrText.trim()) {
       text = ocrText.slice(0, 80_000);
+      reason = "ok";
+    }
+
+    // For sparse PDFs where OCR also failed, fall back to whatever
+    // pdf-parse extracted — better than nothing.
+    if (reason === "pdf_sparse") {
+      reason = "ok";
     }
 
     if (reason === "docx_empty" || (reason === "pdf_empty" && !ocrText.trim())) {
