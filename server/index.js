@@ -311,6 +311,15 @@ async function getOpenAiSettings() {
   };
 }
 
+async function getGeminiSettings() {
+  const result = await pool.query("select * from platform_api_provider_settings where provider = 'gemini' and active = true limit 1");
+  const row = result.rows[0];
+  return {
+    apiKey: row?.api_key_secret_ref || process.env.GEMINI_API_KEY || "",
+    model: row?.default_model || process.env.GEMINI_MODEL || "gemini-2.5-flash"
+  };
+}
+
 async function callOpenAiAssistant({ message, agentKey, context }) {
   const { apiKey, model } = await getOpenAiSettings();
 
@@ -2504,12 +2513,16 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
       [req.user.tenantId, fileName, req.user.sub]
     );
     const analysis = result.rows[0];
-    const { apiKey, model } = await getOpenAiSettings();
+    const gemini = await getGeminiSettings();
+    const openai = await getOpenAiSettings();
+    const useGemini = Boolean(gemini.apiKey);
+    const apiKey = gemini.apiKey || openai.apiKey;
+    const model = useGemini ? gemini.model : openai.model;
 
     if (!apiKey) {
       await pool.query(
         "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
-        [analysis.id, "No OpenAI API key configured on the platform. Ask your administrator to add one under Settings → API keys."]
+        [analysis.id, "No AI API key configured. Add a Gemini or OpenAI key under Settings → API keys."]
       );
       const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
       return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
@@ -2605,21 +2618,41 @@ Document content:
 """
 ${text}
 """`;
-        const aiRes = await fetch("https://api.openai.com/v1/responses", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model, input: [{ role: "user", content: prompt }] })
-        });
-        const payload = await aiRes.json();
-        if (!aiRes.ok) {
-          const apiMsg = payload?.error?.message || `HTTP ${aiRes.status}`;
-          await pool.query(
-            "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
-            [analysis.id, `AI request failed: ${apiMsg}. Check the model name (${model}) and API key under Settings → API keys.`]
-          );
-          return;
+        let aiText = "";
+        if (useGemini) {
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+          const aiRes = await fetch(geminiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2 } })
+          });
+          const payload = await aiRes.json();
+          if (!aiRes.ok) {
+            const apiMsg = payload?.error?.message || `HTTP ${aiRes.status}`;
+            await pool.query(
+              "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+              [analysis.id, `Gemini request failed: ${apiMsg}. Check the model (${model}) and API key under Settings → API keys.`]
+            );
+            return;
+          }
+          aiText = payload.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+        } else {
+          const aiRes = await fetch("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ model, input: [{ role: "user", content: prompt }] })
+          });
+          const payload = await aiRes.json();
+          if (!aiRes.ok) {
+            const apiMsg = payload?.error?.message || `HTTP ${aiRes.status}`;
+            await pool.query(
+              "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+              [analysis.id, `AI request failed: ${apiMsg}. Check the model (${model}) and API key under Settings → API keys.`]
+            );
+            return;
+          }
+          aiText = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || "";
         }
-        const aiText = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || "";
         const jsonMatch = aiText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
           await pool.query(
@@ -2793,12 +2826,24 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
     }
     let aiSummary = `${docs.rowCount} results found in the SA legal corpus for "${query}". Attorney review required before relying on any AI research summary.`;
     const citations = docs.rows.map(d => ({ title: d.title, citation: d.citation || "", url: d.source_url || "" }));
-    const { apiKey, model } = await getOpenAiSettings();
-    if (apiKey && docs.rowCount > 0) {
+    const geminiS = await getGeminiSettings();
+    const openaiS = await getOpenAiSettings();
+    const searchApiKey = geminiS.apiKey || openaiS.apiKey;
+    const searchModel = geminiS.apiKey ? geminiS.model : openaiS.model;
+    const searchUseGemini = Boolean(geminiS.apiKey);
+    if (searchApiKey && docs.rowCount > 0) {
+      const searchPrompt = `Summarise the following South African legal research results for the query "${query}" in 2-3 sentences. Cite the most relevant authority. Attorney review required:\n${docs.rows.map(d => `${d.title} ${d.citation}: ${d.summary}`).join("\n")}`;
       try {
-        const res2 = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, input: [{ role: "user", content: `Summarise the following South African legal research results for the query "${query}" in 2-3 sentences. Cite the most relevant authority. Attorney review required:\n${docs.rows.map(d => `${d.title} ${d.citation}: ${d.summary}`).join("\n")}` }] }) });
-        const payload = await res2.json();
-        aiSummary = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || aiSummary;
+        if (searchUseGemini) {
+          const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/${searchModel}:generateContent?key=${searchApiKey}`;
+          const gRes = await fetch(gUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ parts: [{ text: searchPrompt }] }], generationConfig: { temperature: 0.2 } }) });
+          const gPayload = await gRes.json();
+          if (gRes.ok) aiSummary = gPayload.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || aiSummary;
+        } else {
+          const res2 = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${searchApiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: searchModel, input: [{ role: "user", content: searchPrompt }] }) });
+          const payload = await res2.json();
+          aiSummary = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || aiSummary;
+        }
       } catch { /* fallback to default summary */ }
     }
     await pool.query("insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)", [req.user.tenantId, query, docs.rowCount, aiSummary, JSON.stringify(citations), req.user.sub]);

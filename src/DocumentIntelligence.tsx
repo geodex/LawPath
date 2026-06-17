@@ -235,7 +235,7 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                         a.saLawFlags.length === 0 && (
                         <div className="doc-risk-item" style={{ marginBottom: 16, background: "var(--gold-bg)", color: "var(--gold)" }}>
                           <AlertTriangle size={16} style={{ flexShrink: 0 }} />
-                          <span>Analysis completed but returned no extracted data. The document may be too short or unclear, or the AI model may not have a configured key. Retry with a longer extract, or ask your administrator to check the OpenAI configuration.</span>
+                          <span>Analysis completed but returned no extracted data. The document may be too short or unclear, or the AI model may not have a configured key. Retry with a longer extract, or ask your administrator to check the AI provider configuration under Settings.</span>
                         </div>
                       )}
                       {a.summary && (
