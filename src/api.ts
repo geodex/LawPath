@@ -356,6 +356,10 @@ export async function submitDocumentForAnalysis(input: { fileName: string; fileD
   return request<{ analysis: DocumentAnalysis }>("/api/documents/analyse", { method: "POST", body: JSON.stringify(input) });
 }
 
+export async function deleteDocumentAnalysis(id: string) {
+  return request<{ ok: true }>(`/api/documents/analyses/${id}`, { method: "DELETE" });
+}
+
 // ─── ACCOUNTING ───────────────────────────────────────────────────────────────
 
 export async function getAccountingData() {

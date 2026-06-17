@@ -247,13 +247,13 @@ export const COMPLIANCE_TOPICS: HelpTopic[] = [
         heading: "What this feature is",
         body: [
           "Document Intelligence is an AI review layer for contracts and memoranda. Upload a file and the model extracts the parties, key dates, payment terms, termination triggers and a list of risk flags for attorney attention.",
-          "Supported formats are PDF, DOCX, TXT and Markdown, up to 8 MB per document. Larger files should be split or summarised before upload.",
+          "Supported formats are PDF, DOCX, TXT and Markdown, up to 50 MB per document. Larger files should be split or summarised before upload.",
         ],
       },
       {
         heading: "Running an analysis",
         steps: [
-          "Open Document Intelligence and upload the file (PDF, DOCX, TXT, MD up to 8 MB). Scanned image-only PDFs are automatically OCR'd via Google Cloud Vision before analysis.",
+          "Open Document Intelligence and upload the file (PDF, DOCX, TXT, MD up to 50 MB). Scanned image-only PDFs are automatically OCR'd via Google Cloud Vision before analysis.",
           "Choose the analysis profile: commercial contract, lease, employment, or general review.",
           "Wait for the extraction summary; expand each finding to see the supporting clause and page reference.",
           "Export the review as a memo to the matter file or copy specific flags into your advice note.",

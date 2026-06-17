@@ -19,7 +19,7 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",") : true,
   credentials: true
 }));
-app.use(express.json({ limit: "12mb" }));
+app.use(express.json({ limit: "55mb" }));
 
 function slugify(value) {
   return value
@@ -2660,6 +2660,15 @@ ${text}
     })();
 
     res.status(201).json({ analysis: docAnalysisFromRow(analysis) });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/documents/analyses/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query("delete from document_analyses where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]);
+    if (!result.rowCount) return res.status(404).json({ error: "Analysis not found." });
+    res.json({ ok: true });
   } catch (error) { next(error); }
 });
 

@@ -1,6 +1,6 @@
-import { AlertTriangle, CheckCircle2, FileSearch, FileText, RefreshCw, Scale, Sparkles, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileSearch, FileText, RefreshCw, Scale, Sparkles, Trash2, Upload } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { getDocumentAnalyses, submitDocumentForAnalysis } from "./api";
+import { deleteDocumentAnalysis, getDocumentAnalyses, submitDocumentForAnalysis } from "./api";
 import type { DocumentAnalysis } from "./types";
 
 type Props = {
@@ -10,7 +10,7 @@ type Props = {
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
 };
 
-const maxBytes = 8 * 1024 * 1024;
+const maxBytes = 50 * 1024 * 1024;
 
 async function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -59,7 +59,7 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
     if (!selectedFile) return;
 
     if (selectedFile.size > maxBytes) {
-      showToast("error", "File too large", "Maximum file size is 8 MB.");
+      showToast("error", "File too large", "Maximum file size is 50 MB.");
       return;
     }
 
@@ -90,6 +90,18 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
 
   function toggleExpand(id: string) {
     setExpandedId((prev) => (prev === id ? null : id));
+  }
+
+  async function handleDelete(id: string, fileName: string) {
+    if (!confirm(`Delete analysis for "${fileName}"?`)) return;
+    try {
+      await deleteDocumentAnalysis(id);
+      setAnalyses((prev) => prev.filter((a) => a.id !== id));
+      showToast("success", "Analysis deleted", fileName);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Delete failed";
+      showToast("error", "Delete failed", msg);
+    }
   }
 
   return (
@@ -133,7 +145,7 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
         <form className="form" onSubmit={handleSubmit}>
           <div className="form-row">
             <label>
-              <span>Document file <em style={{ color: "var(--muted)", fontStyle: "normal", fontWeight: 400 }}>(PDF, DOCX, TXT, MD — max 8 MB)</em></span>
+              <span>Document file <em style={{ color: "var(--muted)", fontStyle: "normal", fontWeight: 400 }}>(PDF, DOCX, TXT, MD — max 50 MB)</em></span>
               <input
                 id="doc-file-input"
                 type="file"
@@ -192,7 +204,15 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                         </div>
                       </div>
                       <StatusPill status={a.analysisStatus} />
-                      <span style={{ color: "var(--muted)", fontSize: "0.85rem", marginLeft: 6 }}>
+                      <button
+                        className="ghost small"
+                        title="Delete analysis"
+                        onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.fileName); }}
+                        style={{ padding: "4px 6px", color: "var(--muted)" }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <span style={{ color: "var(--muted)", fontSize: "0.85rem", marginLeft: 2 }}>
                         {expanded ? "▲" : "▼"}
                       </span>
                     </div>
