@@ -1,9 +1,10 @@
 // server/saflii.js
 // SA Legal Corpus indexer — powered by the Laws.Africa Knowledge Base API.
-// SAFLII is behind Cloudflare bot protection so direct scraping no longer works.
-// Laws.Africa free tier: 100 API calls/day (one call returns up to 20 results).
+// Sandbox plan: 30 calls/min, 100 calls/day. Each call returns up to 20 results.
+// Queries both SA Judgments and SA Legislation KBs (80/20 split).
+// Run daily to grow the corpus — shuffled topics ensure variety across runs.
 //
-// Usage: node server/saflii.js [--queries 50] [--top-k 20]
+// Usage: node server/saflii.js [--queries 95] [--top-k 20]
 //
 // Environment:
 //   LAWS_AFRICA_API_KEY  — Bearer token from https://platform.laws.africa/api-keys/
@@ -161,6 +162,79 @@ const QUERY_TOPICS = [
   "copyright infringement reproduction",
   "patent validity South Africa",
   "unlawful competition goodwill",
+
+  // Customary law
+  "customary law succession inheritance",
+  "customary marriage recognition",
+  "traditional leadership succession dispute",
+  "indigenous land rights community",
+  "lobola bride price customary",
+
+  // Land reform & restitution
+  "land restitution claim dispossession",
+  "ESTA farm eviction occupier",
+  "land reform redistribution",
+  "labour tenant rights security tenure",
+
+  // Social security & health
+  "social grants SASSA payment",
+  "right to health care treatment",
+  "medical negligence hospital birth injury",
+  "HIV AIDS discrimination treatment",
+
+  // Procurement & municipal
+  "tender award irregular procurement",
+  "MFMA supply chain management",
+  "municipal rates services disconnection",
+  "municipal planning zoning rezoning",
+
+  // Insurance & suretyship
+  "insurance claim repudiation indemnity",
+  "suretyship liability guarantor",
+  "short-term insurance motor vehicle",
+  "life insurance beneficiary nomination",
+
+  // Trusts & estates
+  "trust beneficiary trustee duties",
+  "will validity formalities attestation",
+  "estate administration executor",
+  "fideicommissum trust substitution",
+
+  // Road Accident Fund
+  "Road Accident Fund claim damages",
+  "RAF loss of support dependant",
+  "RAF future medical expenses",
+
+  // Shipping & admiralty
+  "admiralty arrest vessel maritime",
+  "shipping cargo damage carriage",
+  "salvage maritime law",
+
+  // Competition additional
+  "cartel price fixing horizontal",
+  "abuse of dominance excessive pricing",
+  "merger approval conditions competition",
+
+  // Mining additional
+  "mining right application MPRDA",
+  "mine closure rehabilitation environmental",
+  "community consultation mining prospecting",
+
+  // Media & data protection
+  "POPIA data protection personal information",
+  "media freedom press reporting",
+  "access to information PAIA request",
+  "cyber crime electronic communications",
+
+  // Elections & political
+  "election dispute electoral court",
+  "political party funding disclosure",
+  "freedom of assembly gathering protest",
+
+  // Arbitration
+  "arbitration award review set aside",
+  "international arbitration enforcement",
+  "mediation settlement agreement",
 ];
 
 // ─── COURT MAPPING ───────────────────────────────────────────────────────────
@@ -357,26 +431,52 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
     console.info(`[indexer]   ${kb.code || kb.id}: ${kb.name || kb.title || "—"}`);
   }
 
-  // Pick the best KB — prefer one with "judgment" or "case" in the name, else first
-  let kb = kbs.find(k => {
-    const n = (k.name || k.title || "").toLowerCase();
-    return n.includes("judgment") || n.includes("case") || n.includes("decision");
-  }) || kbs[0];
+  // Pick the SA Judgments KB explicitly — must contain "za" and "judgment"
+  let judgmentKb = kbs.find(k => {
+    const code = (k.code || k.id || "").toLowerCase();
+    const name = (k.name || k.title || "").toLowerCase();
+    return code.includes("za") && (name.includes("judgment") || code.includes("judgment"));
+  });
+  let legislationKb = kbs.find(k => {
+    const code = (k.code || k.id || "").toLowerCase();
+    const name = (k.name || k.title || "").toLowerCase();
+    return code.includes("za") && (name.includes("legislation") || code.includes("legislation"));
+  });
 
-  if (!kb) {
-    console.error("[indexer] No knowledge bases available. Check your API key permissions.");
+  if (!judgmentKb && !legislationKb) {
+    // Fallback: any SA KB
+    judgmentKb = kbs.find(k => (k.code || k.id || "").toLowerCase().includes("za")) || kbs[0];
+  }
+  if (!judgmentKb && !legislationKb) {
+    console.error("[indexer] No SA knowledge bases available. Check your API key permissions.");
     process.exit(1);
   }
 
-  const kbCode = kb.code || kb.id;
-  console.info(`[indexer] Using knowledge base: ${kbCode} (${kb.name || kb.title})`);
+  if (judgmentKb) console.info(`[indexer] Judgments KB: ${judgmentKb.code || judgmentKb.id} (${judgmentKb.name || judgmentKb.title})`);
+  if (legislationKb) console.info(`[indexer] Legislation KB: ${legislationKb.code || legislationKb.id} (${legislationKb.name || legislationKb.title})`);
 
-  // 2. Shuffle queries for variety across runs
-  const queries = [...QUERY_TOPICS].sort(() => Math.random() - 0.5).slice(0, maxQueries);
+  // 2. Build work items: pair each query with a KB
+  //    Split budget: 80% judgments, 20% legislation (legislation KB is optional)
+  const shuffled = [...QUERY_TOPICS].sort(() => Math.random() - 0.5);
+  const workItems = [];
 
-  for (let i = 0; i < queries.length; i++) {
-    const query = queries[i];
-    console.info(`[indexer] [${i + 1}/${queries.length}] Querying: "${query}"`);
+  if (judgmentKb) {
+    const jCode = judgmentKb.code || judgmentKb.id;
+    const jCount = legislationKb ? Math.ceil(maxQueries * 0.8) : maxQueries;
+    shuffled.slice(0, jCount).forEach(q => workItems.push({ query: q, kbCode: jCode, kbLabel: "judgments" }));
+  }
+  if (legislationKb) {
+    const lCode = legislationKb.code || legislationKb.id;
+    const lCount = Math.floor(maxQueries * 0.2);
+    shuffled.slice(0, lCount).forEach(q => workItems.push({ query: q, kbCode: lCode, kbLabel: "legislation" }));
+  }
+
+  // Re-shuffle so judgment and legislation queries interleave
+  workItems.sort(() => Math.random() - 0.5);
+
+  for (let i = 0; i < workItems.length; i++) {
+    const { query, kbCode, kbLabel } = workItems[i];
+    console.info(`[indexer] [${i + 1}/${workItems.length}] (${kbLabel}) "${query}"`);
 
     try {
       const results = await queryKnowledgeBase(apiKey, kbCode, query, topK);
@@ -398,12 +498,16 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
 
       console.info(`[indexer]   ${items.length} results, ${batchNew} new → DB`);
 
-      // Respect rate limits — 1 second between calls
-      await delay(1000);
+      // Respect rate limits — 2 seconds between calls (30/min limit)
+      await delay(2100);
     } catch (err) {
       if (err.message.includes("429")) {
         console.warn("[indexer] Rate limited — stopping. Re-run tomorrow to continue.");
         break;
+      }
+      if (err.message.includes("403")) {
+        console.warn(`[indexer]   403 on ${kbLabel} KB — skipping. Check plan permissions.`);
+        continue;
       }
       console.error(`[indexer]   Query failed: ${err.message}`);
       await delay(2000);
@@ -436,7 +540,7 @@ if (require.main === module) {
   const topKIdx = args.indexOf("--top-k");
 
   runIndexer({
-    maxQueries: queriesIdx >= 0 ? parseInt(args[queriesIdx + 1]) : 50,
+    maxQueries: queriesIdx >= 0 ? parseInt(args[queriesIdx + 1]) : 95,
     topK:       topKIdx >= 0 ? parseInt(args[topKIdx + 1]) : 20
   }).catch(err => {
     console.error("[indexer] Fatal error:", err);
