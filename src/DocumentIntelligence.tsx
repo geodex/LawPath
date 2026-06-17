@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, FileSearch, FileText, RefreshCw, Scale, Sparkles, Trash2, Upload } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { deleteDocumentAnalysis, getDocumentAnalyses, submitDocumentForAnalysis } from "./api";
 import type { DocumentAnalysis } from "./types";
 
@@ -49,6 +49,25 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
       setRefreshing(false);
     }
   }
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasPending = analyses.some(a => a.analysisStatus === "Queued" || a.analysisStatus === "Analysing");
+
+  useEffect(() => {
+    if (hasPending && !pollRef.current) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await getDocumentAnalyses();
+          setAnalyses(res.analyses);
+        } catch { /* silent — will retry next tick */ }
+      }, 4000);
+    }
+    if (!hasPending && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [hasPending, setAnalyses]);
 
   const totalRiskFlags = analyses.reduce((acc, a) => acc + a.riskFlags.length, 0);
   const totalSaFlags = analyses.reduce((acc, a) => acc + a.saLawFlags.length, 0);
