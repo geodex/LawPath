@@ -263,12 +263,28 @@ async function ensureSourceRecord(courtLabel) {
   return result.rows[0].id;
 }
 
+function isSouthAfrican(item) {
+  const text = `${item.title || ""} ${item.content?.text || item.text || ""} ${item.public_url || item.url || ""}`.toLowerCase();
+  const saSignals = [
+    "south africa", "zacc", "zasca", "zagpjhc", "zagpphc", "zawchc", "zakzdhc",
+    "zafshc", "zalcc", "zalac", "zact", "saflii.org/za/", "lawlibrary.org.za",
+    "africanlii.org/za/", "/akn/za/", "constitutional court", "supreme court of appeal",
+    "high court", "labour court", "labour appeal", "competition tribunal",
+    "land claims court", "gauteng", "western cape", "kwazulu", "free state",
+    "ccma", "paja", "bcea", "lra", "companies act 71", "nca 34", "fica 38",
+    "consumer protection act 68", "popia", "constitution of the republic"
+  ];
+  return saSignals.some(s => text.includes(s));
+}
+
 async function indexResult(item) {
   const content = item.content?.text || item.text || "";
   const publicUrl = item.public_url || item.url || "";
   const title = item.title || content.slice(0, 120).split("\n")[0] || "Untitled judgment";
 
   if (!publicUrl && !content) return false;
+
+  if (!isSouthAfrican(item)) return false;
 
   // Skip if already indexed by URL
   if (publicUrl) {
