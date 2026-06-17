@@ -153,11 +153,14 @@ function apiSettingsFromRows(rows) {
     exchangeRatesApiKey: byProvider.exchangerates?.api_key_secret_ref || "",
     exchangeRatesBaseCurrency: byProvider.exchangerates?.base_currency || "ZAR",
     openAiApiKey: byProvider.openai?.api_key_secret_ref || "",
-    openAiModel: byProvider.openai?.default_model || "gpt-5.2",
+    openAiModel: byProvider.openai?.default_model || "gpt-5.4-mini",
+    openAiFeatures: byProvider.openai?.features || [],
     geminiApiKey: byProvider.gemini?.api_key_secret_ref || "",
     geminiModel: byProvider.gemini?.default_model || "gemini-3.5-flash",
+    geminiFeatures: byProvider.gemini?.features || [],
     grokApiKey: byProvider.grok?.api_key_secret_ref || "",
-    grokModel: byProvider.grok?.default_model || "grok-4",
+    grokModel: byProvider.grok?.default_model || "grok-4.3",
+    grokFeatures: byProvider.grok?.features || [],
     verifyNowApiKey: byProvider.verifynow?.api_key_secret_ref || "",
     lightstoneApiKey: byProvider.lightstone?.api_key_secret_ref || ""
   };
@@ -302,88 +305,125 @@ function buildContextSummary(context) {
   ].join(" ");
 }
 
-async function getOpenAiSettings() {
-  const result = await pool.query("select * from platform_api_provider_settings where provider = 'openai' and active = true limit 1");
-  const row = result.rows[0];
-  return {
-    apiKey: row?.api_key_secret_ref || process.env.OPENAI_API_KEY || "",
-    model: row?.default_model || process.env.OPENAI_MODEL || "gpt-4.1-mini"
-  };
+const AI_PROVIDERS = ["openai", "gemini", "grok"];
+const AI_ENV_DEFAULTS = {
+  openai:  { keyEnv: "OPENAI_API_KEY",  modelEnv: "OPENAI_MODEL",  fallbackModel: "gpt-5.4-mini" },
+  gemini:  { keyEnv: "GEMINI_API_KEY",  modelEnv: "GEMINI_MODEL",  fallbackModel: "gemini-3.5-flash" },
+  grok:    { keyEnv: "GROK_API_KEY",    modelEnv: "GROK_MODEL",    fallbackModel: "grok-4.3" }
+};
+
+async function getAiForFeature(featureName) {
+  const rows = (await pool.query(
+    "select * from platform_api_provider_settings where provider = any($1) and active = true",
+    [AI_PROVIDERS]
+  )).rows;
+
+  const assigned = rows.find(r => Array.isArray(r.features) && r.features.includes(featureName));
+  if (assigned) {
+    const env = AI_ENV_DEFAULTS[assigned.provider] || {};
+    return {
+      provider: assigned.provider,
+      apiKey: assigned.api_key_secret_ref || process.env[env.keyEnv] || "",
+      model: assigned.default_model || process.env[env.modelEnv] || env.fallbackModel || ""
+    };
+  }
+
+  for (const provider of AI_PROVIDERS) {
+    const row = rows.find(r => r.provider === provider);
+    const env = AI_ENV_DEFAULTS[provider];
+    const key = row?.api_key_secret_ref || process.env[env.keyEnv] || "";
+    if (key) {
+      return {
+        provider,
+        apiKey: key,
+        model: row?.default_model || process.env[env.modelEnv] || env.fallbackModel
+      };
+    }
+  }
+
+  return { provider: "none", apiKey: "", model: "" };
 }
 
-async function getGeminiSettings() {
-  const result = await pool.query("select * from platform_api_provider_settings where provider = 'gemini' and active = true limit 1");
-  const row = result.rows[0];
-  return {
-    apiKey: row?.api_key_secret_ref || process.env.GEMINI_API_KEY || "",
-    model: row?.default_model || process.env.GEMINI_MODEL || "gemini-3.5-flash"
-  };
+async function callGeminiApi(apiKey, model, systemPrompt, userPrompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: userPrompt }] }],
+      generationConfig: { temperature: 0.3 }
+    })
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload?.error?.message || `Gemini HTTP ${res.status}`);
+  return payload.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
 }
 
-async function callOpenAiAssistant({ message, agentKey, context }) {
-  const { apiKey, model } = await getOpenAiSettings();
+async function callGrokApi(apiKey, model, systemPrompt, userPrompt) {
+  const res = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] })
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload?.error?.message || `Grok HTTP ${res.status}`);
+  return payload.choices?.[0]?.message?.content || "";
+}
+
+async function callOpenAiApi(apiKey, model, systemPrompt, userPrompt) {
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, input: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] })
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload?.error?.message || `OpenAI HTTP ${res.status}`);
+  return payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("\n") || "";
+}
+
+async function callAiProvider(provider, apiKey, model, systemPrompt, userPrompt) {
+  if (provider === "gemini") return callGeminiApi(apiKey, model, systemPrompt, userPrompt);
+  if (provider === "grok") return callGrokApi(apiKey, model, systemPrompt, userPrompt);
+  return callOpenAiApi(apiKey, model, systemPrompt, userPrompt);
+}
+
+async function callAiAssistant({ message, agentKey, context }) {
+  const { provider, apiKey, model } = await getAiForFeature("ai-chat");
 
   if (!apiKey) {
     return {
       provider: "local",
       model: "fallback",
       content: [
-        `${context.agent.title} is ready, but no OpenAI API key is configured yet.`,
+        `${context.agent.title} is ready, but no AI API key is configured yet.`,
         "",
         "I can still show the tenant context I would use:",
         buildContextSummary(context),
         "",
-        `Next step: configure the OpenAI key under Settings, then ask again: "${message}".`
+        `Next step: configure an AI provider key under Settings → API keys, then ask again: "${message}".`
       ].join("\n")
     };
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      input: [
-        {
-          role: "system",
-          content: [
-            "You are LawPath SA, an AI-native legal practice assistant for South African law firms.",
-            "Use only the tenant-scoped context supplied. Do not invent database facts. Keep attorney review requirements explicit.",
-            context.agent.instruction,
-            `Current agent key: ${agentKey}.`
-          ].join("\n")
-        },
-        {
-          role: "user",
-          content: [
-            "Tenant-scoped context JSON:",
-            JSON.stringify(context).slice(0, 18000),
-            "",
-            "User request:",
-            message
-          ].join("\n")
-        }
-      ]
-    })
-  });
+  const systemPrompt = [
+    "You are LawPath SA, an AI-native legal practice assistant for South African law firms.",
+    "Use only the tenant-scoped context supplied. Do not invent database facts. Keep attorney review requirements explicit.",
+    context.agent.instruction,
+    `Current agent key: ${agentKey}.`
+  ].join("\n");
 
-  const payload = await response.json();
+  const userPrompt = [
+    "Tenant-scoped context JSON:",
+    JSON.stringify(context).slice(0, 18000),
+    "",
+    "User request:",
+    message
+  ].join("\n");
 
-  if (!response.ok) {
-    throw new Error(payload.error?.message || "OpenAI request failed.");
-  }
+  const content = await callAiProvider(provider, apiKey, model, systemPrompt, userPrompt);
 
-  const content = payload.output_text || payload.output?.flatMap((item) => item.content || []).map((part) => part.text || "").join("\n") || "No assistant response returned.";
-
-  return {
-    provider: "openai",
-    model,
-    content,
-    usage: payload.usage
-  };
+  return { provider, model, content };
 }
 
 app.get("/api/health", async (_req, res) => {
@@ -798,28 +838,29 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
 
   const settings = req.body;
   const providers = [
-    ["exchangerates", settings.exchangeRatesApiKey || "", null, settings.exchangeRatesBaseCurrency || "ZAR"],
-    ["openai", settings.openAiApiKey || "", settings.openAiModel || "gpt-5.2", null],
-    ["gemini", settings.geminiApiKey || "", settings.geminiModel || "gemini-3.5-flash", null],
-    ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4", null],
-    ["verifynow",    settings.verifyNowApiKey    || "", null, null],
-    ["lightstone",   settings.lightstoneApiKey   || "", null, null]
+    ["exchangerates", settings.exchangeRatesApiKey || "", null, settings.exchangeRatesBaseCurrency || "ZAR", []],
+    ["openai", settings.openAiApiKey || "", settings.openAiModel || "gpt-5.4-mini", null, settings.openAiFeatures || []],
+    ["gemini", settings.geminiApiKey || "", settings.geminiModel || "gemini-3.5-flash", null, settings.geminiFeatures || []],
+    ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4.3", null, settings.grokFeatures || []],
+    ["verifynow",    settings.verifyNowApiKey    || "", null, null, []],
+    ["lightstone",   settings.lightstoneApiKey   || "", null, null, []]
   ];
 
   try {
     for (const provider of providers) {
       await pool.query(
         `insert into platform_api_provider_settings
-          (provider, api_key_secret_ref, default_model, base_currency, active, created_by)
-         values ($1, $2, $3, $4, true, $5)
+          (provider, api_key_secret_ref, default_model, base_currency, active, created_by, features)
+         values ($1, $2, $3, $4, true, $5, $6)
          on conflict (provider) do update set
           api_key_secret_ref = excluded.api_key_secret_ref,
           default_model = excluded.default_model,
           base_currency = excluded.base_currency,
           active = true,
           created_by = excluded.created_by,
+          features = excluded.features,
           updated_at = now()`,
-        [...provider, req.user.sub]
+        [provider[0], provider[1], provider[2], provider[3], req.user.sub, provider[4]]
       );
     }
 
@@ -1102,7 +1143,7 @@ app.post("/api/ai/chat", authMiddleware, async (req, res, next) => {
 
     const context = await buildTenantAiContext(req, agentKey);
     const contextSummary = buildContextSummary(context);
-    const ai = await callOpenAiAssistant({ message: String(message), agentKey, context });
+    const ai = await callAiAssistant({ message: String(message), agentKey, context });
 
     await pool.query(
       `insert into ai_messages (conversation_id, tenant_id, role, content, model, context_summary)
@@ -2513,11 +2554,7 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
       [req.user.tenantId, fileName, req.user.sub]
     );
     const analysis = result.rows[0];
-    const gemini = await getGeminiSettings();
-    const openai = await getOpenAiSettings();
-    const useGemini = Boolean(gemini.apiKey);
-    const apiKey = gemini.apiKey || openai.apiKey;
-    const model = useGemini ? gemini.model : openai.model;
+    const { provider: docProvider, apiKey, model } = await getAiForFeature("document-intelligence");
 
     if (!apiKey) {
       await pool.query(
@@ -2619,39 +2656,14 @@ Document content:
 ${text}
 """`;
         let aiText = "";
-        if (useGemini) {
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-          const aiRes = await fetch(geminiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2 } })
-          });
-          const payload = await aiRes.json();
-          if (!aiRes.ok) {
-            const apiMsg = payload?.error?.message || `HTTP ${aiRes.status}`;
-            await pool.query(
-              "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
-              [analysis.id, `Gemini request failed: ${apiMsg}. Check the model (${model}) and API key under Settings → API keys.`]
-            );
-            return;
-          }
-          aiText = payload.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-        } else {
-          const aiRes = await fetch("https://api.openai.com/v1/responses", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ model, input: [{ role: "user", content: prompt }] })
-          });
-          const payload = await aiRes.json();
-          if (!aiRes.ok) {
-            const apiMsg = payload?.error?.message || `HTTP ${aiRes.status}`;
-            await pool.query(
-              "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
-              [analysis.id, `AI request failed: ${apiMsg}. Check the model (${model}) and API key under Settings → API keys.`]
-            );
-            return;
-          }
-          aiText = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || "";
+        try {
+          aiText = await callAiProvider(docProvider, apiKey, model, "", prompt);
+        } catch (aiErr) {
+          await pool.query(
+            "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+            [analysis.id, `${docProvider} request failed: ${aiErr.message}. Check the model (${model}) and API key under Settings → API keys.`]
+          );
+          return;
         }
         const jsonMatch = aiText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
@@ -2826,24 +2838,11 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
     }
     let aiSummary = `${docs.rowCount} results found in the SA legal corpus for "${query}". Attorney review required before relying on any AI research summary.`;
     const citations = docs.rows.map(d => ({ title: d.title, citation: d.citation || "", url: d.source_url || "" }));
-    const geminiS = await getGeminiSettings();
-    const openaiS = await getOpenAiSettings();
-    const searchApiKey = geminiS.apiKey || openaiS.apiKey;
-    const searchModel = geminiS.apiKey ? geminiS.model : openaiS.model;
-    const searchUseGemini = Boolean(geminiS.apiKey);
-    if (searchApiKey && docs.rowCount > 0) {
+    const searchAi = await getAiForFeature("research-summaries");
+    if (searchAi.apiKey && docs.rowCount > 0) {
       const searchPrompt = `Summarise the following South African legal research results for the query "${query}" in 2-3 sentences. Cite the most relevant authority. Attorney review required:\n${docs.rows.map(d => `${d.title} ${d.citation}: ${d.summary}`).join("\n")}`;
       try {
-        if (searchUseGemini) {
-          const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/${searchModel}:generateContent?key=${searchApiKey}`;
-          const gRes = await fetch(gUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ parts: [{ text: searchPrompt }] }], generationConfig: { temperature: 0.2 } }) });
-          const gPayload = await gRes.json();
-          if (gRes.ok) aiSummary = gPayload.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || aiSummary;
-        } else {
-          const res2 = await fetch("https://api.openai.com/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${searchApiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: searchModel, input: [{ role: "user", content: searchPrompt }] }) });
-          const payload = await res2.json();
-          aiSummary = payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("") || aiSummary;
-        }
+        aiSummary = await callAiProvider(searchAi.provider, searchAi.apiKey, searchAi.model, "", searchPrompt) || aiSummary;
       } catch { /* fallback to default summary */ }
     }
     await pool.query("insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)", [req.user.tenantId, query, docs.rowCount, aiSummary, JSON.stringify(citations), req.user.sub]);

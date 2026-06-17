@@ -2515,6 +2515,32 @@ select {
   padding-top: 4px;
 }
 
+.feature-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.feature-chip:hover {
+  border-color: var(--green);
+  color: var(--ink);
+}
+
+.feature-chip.active {
+  background: var(--green-light);
+  border-color: var(--green);
+  color: var(--green);
+}
+
 .rag-source-list {
   display: grid;
   gap: 10px;

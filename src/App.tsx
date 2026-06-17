@@ -48,7 +48,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getAccountingData, getActivity, getAgentNetwork, getAnalytics, getAppointments, getBootstrapSettings, getContracts, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getMatters, getPopiaRecords, getSignatureRequests, getTasks, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 // Seed data from ./data is intentionally not imported here. Each tenant
 // starts with empty workspaces and populates real data via the API.
-import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
+import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AiFeature, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 import { FicaKyc } from "./FicaKyc";
 import { PopiaCompliance } from "./PopiaCompliance";
 import { TimeRecording } from "./TimeRecording";
@@ -235,11 +235,14 @@ export function App() {
     exchangeRatesApiKey: "",
     exchangeRatesBaseCurrency: "ZAR",
     openAiApiKey: "",
-    openAiModel: "gpt-5.2",
+    openAiModel: "gpt-5.4-mini",
+    openAiFeatures: [],
     geminiApiKey: "",
     geminiModel: "gemini-3.5-flash",
+    geminiFeatures: [],
     grokApiKey: "",
-    grokModel: "grok-4",
+    grokModel: "grok-4.3",
+    grokFeatures: [],
     verifyNowApiKey: "",
     lightstoneApiKey: ""
   });
@@ -2856,6 +2859,27 @@ function AdminSettings({
     setApiSettings((current) => ({ ...current, [key]: value }));
   }
 
+  const AI_FEATURE_LABELS: Record<AiFeature, string> = {
+    "ai-chat": "AI Chat",
+    "document-intelligence": "Document Intelligence",
+    "research-summaries": "Research Summaries"
+  };
+
+  function toggleFeature(providerKey: "openAiFeatures" | "geminiFeatures" | "grokFeatures", feature: AiFeature) {
+    setApiSettings((prev) => {
+      const allKeys: ("openAiFeatures" | "geminiFeatures" | "grokFeatures")[] = ["openAiFeatures", "geminiFeatures", "grokFeatures"];
+      const next = { ...prev };
+      for (const k of allKeys) {
+        if (k === providerKey) {
+          next[k] = prev[k].includes(feature) ? prev[k].filter(f => f !== feature) : [...prev[k], feature];
+        } else {
+          next[k] = prev[k].filter(f => f !== feature);
+        }
+      }
+      return next;
+    });
+  }
+
   function updateTraining<K extends keyof AssistantTrainingSettings>(key: K, value: AssistantTrainingSettings[K]) {
     setAssistantTraining((current) => ({ ...current, [key]: value }));
   }
@@ -3169,18 +3193,27 @@ function AdminSettings({
               <Sparkles size={20} />
               <div>
                 <strong>OpenAI</strong>
-                <span>Contract drafting, research summaries and legal secretary automations.</span>
+                <span>GPT models for chat, drafting, research and document analysis.</span>
               </div>
             </div>
             <label>API key<input type="password" value={apiSettings.openAiApiKey} onChange={(event) => updateApi("openAiApiKey", event.target.value)} placeholder="sk-..." /></label>
             <label>Model
               <select value={apiSettings.openAiModel} onChange={(event) => updateApi("openAiModel", event.target.value)}>
-                <option value="gpt-5.2">GPT-5.2</option>
-                <option value="gpt-5.1-mini">GPT-5.1 mini</option>
-                <option value="gpt-4.1">GPT-4.1</option>
-                <option value="o3">o3</option>
+                <option value="gpt-5.5">GPT-5.5</option>
+                <option value="gpt-5.4">GPT-5.4</option>
+                <option value="gpt-5.4-mini">GPT-5.4 mini</option>
+                <option value="gpt-5.4-nano">GPT-5.4 nano</option>
               </select>
             </label>
+            <div style={{ marginTop: 6 }}>
+              <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Features using this provider</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                {(Object.keys(AI_FEATURE_LABELS) as AiFeature[]).map(f => {
+                  const active = apiSettings.openAiFeatures.includes(f);
+                  return <button type="button" key={f} className={active ? "feature-chip active" : "feature-chip"} onClick={() => toggleFeature("openAiFeatures", f)}>{active && <CheckCircle2 size={12} />}{AI_FEATURE_LABELS[f]}</button>;
+                })}
+              </div>
+            </div>
           </article>
 
           <article className="integration-card">
@@ -3188,17 +3221,29 @@ function AdminSettings({
               <Sparkles size={20} />
               <div>
                 <strong>Google Gemini</strong>
-                <span>Alternative drafting, matter analysis and client-update generation.</span>
+                <span>Gemini models for chat, document analysis and research summaries.</span>
               </div>
             </div>
             <label>API key<input type="password" value={apiSettings.geminiApiKey} onChange={(event) => updateApi("geminiApiKey", event.target.value)} placeholder="AIza..." /></label>
             <label>Model
-              <select value={apiSettings.geminiModel} onChange={(event) => updateApi("geminiModel", event.target.value as ApiProviderSettings["geminiModel"])}>
-                <option value="gemini-3.1-pro">Gemini 3.1 Pro</option>
+              <select value={apiSettings.geminiModel} onChange={(event) => updateApi("geminiModel", event.target.value)}>
                 <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
+                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+                <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
+                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
               </select>
             </label>
+            <div style={{ marginTop: 6 }}>
+              <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Features using this provider</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                {(Object.keys(AI_FEATURE_LABELS) as AiFeature[]).map(f => {
+                  const active = apiSettings.geminiFeatures.includes(f);
+                  return <button type="button" key={f} className={active ? "feature-chip active" : "feature-chip"} onClick={() => toggleFeature("geminiFeatures", f)}>{active && <CheckCircle2 size={12} />}{AI_FEATURE_LABELS[f]}</button>;
+                })}
+              </div>
+            </div>
           </article>
 
           <article className="integration-card">
@@ -3206,18 +3251,24 @@ function AdminSettings({
               <Sparkles size={20} />
               <div>
                 <strong>xAI Grok</strong>
-                <span>Optional model route for drafting support and research cross-checking.</span>
+                <span>Grok models for chat, drafting support and research cross-checking.</span>
               </div>
             </div>
             <label>API key<input type="password" value={apiSettings.grokApiKey} onChange={(event) => updateApi("grokApiKey", event.target.value)} placeholder="xai-..." /></label>
             <label>Model
               <select value={apiSettings.grokModel} onChange={(event) => updateApi("grokModel", event.target.value)}>
-                <option value="grok-4">Grok 4</option>
-                <option value="grok-3">Grok 3</option>
-                <option value="grok-3-mini">Grok 3 mini</option>
-                <option value="grok-2-vision">Grok 2 vision</option>
+                <option value="grok-4.3">Grok 4.3</option>
               </select>
             </label>
+            <div style={{ marginTop: 6 }}>
+              <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Features using this provider</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                {(Object.keys(AI_FEATURE_LABELS) as AiFeature[]).map(f => {
+                  const active = apiSettings.grokFeatures.includes(f);
+                  return <button type="button" key={f} className={active ? "feature-chip active" : "feature-chip"} onClick={() => toggleFeature("grokFeatures", f)}>{active && <CheckCircle2 size={12} />}{AI_FEATURE_LABELS[f]}</button>;
+                })}
+              </div>
+            </div>
           </article>
 
           <article className="integration-card" style={{ gridColumn: "1 / -1" }}>

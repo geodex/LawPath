@@ -159,15 +159,20 @@ export type TenantProfile = {
   invoiceHeaderFields: InvoiceHeaderField[];
 };
 
+export type AiFeature = "ai-chat" | "document-intelligence" | "research-summaries";
+
 export type ApiProviderSettings = {
   exchangeRatesApiKey: string;
   exchangeRatesBaseCurrency: "ZAR" | "USD" | "EUR" | "GBP";
   openAiApiKey: string;
   openAiModel: string;
+  openAiFeatures: AiFeature[];
   geminiApiKey: string;
-  geminiModel: "gemini-3.1-pro" | "gemini-3.5-flash" | "gemini-3.5-flash-lite";
+  geminiModel: string;
+  geminiFeatures: AiFeature[];
   grokApiKey: string;
   grokModel: string;
+  grokFeatures: AiFeature[];
   verifyNowApiKey: string;
   lightstoneApiKey: string;
 };
