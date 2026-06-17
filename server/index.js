@@ -2584,7 +2584,9 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // by definition text-bearing — an empty DOCX is genuinely empty).
     let ocrText = "";
     let ocrError = "";
-    if (reason === "pdf_empty" || reason === "pdf_sparse") {
+    const needsOcr = reason === "pdf_empty" || reason === "pdf_sparse";
+    if (needsOcr) {
+      console.log(`[doc-intelligence] ${fileName}: ${reason} (${text.length} chars from pdf-parse), attempting OCR…`);
       try {
         const { ocrPdfWithVision } = require("./ocr");
         ocrText = await ocrPdfWithVision({
@@ -2592,21 +2594,24 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
           tenantId: req.user.tenantId,
           fileName
         });
+        console.log(`[doc-intelligence] ${fileName}: OCR returned ${ocrText.length} chars`);
       } catch (err) {
         ocrError = err?.message || "OCR error";
+        console.error(`[doc-intelligence] ${fileName}: OCR failed: ${ocrError}`);
       }
     }
 
     // If OCR succeeded, use it. For sparse PDFs, prefer OCR over the
     // thin text-layer fragments that pdf-parse found.
-    if ((reason === "pdf_empty" || reason === "pdf_sparse") && ocrText.trim()) {
+    if (needsOcr && ocrText.trim()) {
       text = ocrText.slice(0, 80_000);
       reason = "ok";
     }
 
-    // For sparse PDFs where OCR also failed, fall back to whatever
-    // pdf-parse extracted — better than nothing.
+    // For sparse PDFs where OCR failed, fall back to pdf-parse fragments
+    // but warn in the summary so the user knows the analysis is partial.
     if (reason === "pdf_sparse") {
+      console.warn(`[doc-intelligence] ${fileName}: OCR unavailable, using sparse text (${text.length} chars)`);
       reason = "ok";
     }
 
