@@ -3386,11 +3386,60 @@ app.post("/api/esignature/requests", authMiddleware, async (req, res, next) => {
 app.post("/api/esignature/requests/:id/signatories/:sigId/send-otp", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
+    const sigRow = await pool.query("select s.*, r.document_title from signature_signatories s join signature_requests r on r.id = s.request_id where s.id=$1 and s.tenant_id=$2", [req.params.sigId, req.user.tenantId]);
+    if (!sigRow.rowCount) return res.status(404).json({ error: "Signatory not found." });
+    const signatory = sigRow.rows[0];
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
     await pool.query("update signature_signatories set otp_hash=$2, otp_expires_at=now()+interval '15 minutes', status='otp_sent' where id=$1 and tenant_id=$3", [req.params.sigId, otpHash, req.user.tenantId]);
-    await pool.query("insert into signature_audit_events (tenant_id, request_id, signatory_id, event_type, description) values ($1,$2,$3,'otp_sent','OTP sent to signatory')", [req.user.tenantId, req.params.id, req.params.sigId]);
-    console.info(`[ESignature] OTP for signatory ${req.params.sigId}: ${otp} (dev mode — send via email in production)`);
+    await pool.query("insert into signature_audit_events (tenant_id, request_id, signatory_id, event_type, description, ip_address) values ($1,$2,$3,'otp_sent',$4,$5)", [req.user.tenantId, req.params.id, req.params.sigId, `OTP sent to ${signatory.signatory_email}`, req.headers["x-forwarded-for"] || req.socket.remoteAddress || ""]);
+
+    const tenant = await pool.query("select trading_name from tenant_profiles where tenant_id=$1 limit 1", [req.user.tenantId]);
+    const firmName = tenant.rows[0]?.trading_name || "LawPath SA";
+
+    try {
+      const smtp = await pool.query("select * from platform_smtp_settings where active = true order by updated_at desc limit 1");
+      const savedSmtp = smtpFromRow(smtp.rows[0]);
+      await sendTransactionalEmail({
+        to: signatory.signatory_email,
+        subject: `${firmName} — Signature verification code`,
+        smtpSettings: savedSmtp,
+        tenantFromName: firmName,
+        text: [
+          `Dear ${signatory.signatory_name},`,
+          "",
+          `You have been asked to sign "${signatory.document_title}".`,
+          "",
+          `Your one-time verification code is: ${otp}`,
+          "",
+          "This code expires in 15 minutes. Enter it on the signature page to confirm your identity and sign the document.",
+          "",
+          "If you did not request this, you can safely ignore this email.",
+          "",
+          `${firmName}`,
+          "Powered by LawPath SA — ECTA-compliant electronic signatures"
+        ].join("\n"),
+        html: `
+          <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
+            <p>Dear <strong>${escapeHtml(signatory.signatory_name)}</strong>,</p>
+            <p>You have been asked to sign <strong>"${escapeHtml(signatory.document_title)}"</strong>.</p>
+            <p style="margin:24px 0;text-align:center">
+              <span style="display:inline-block;font-size:32px;letter-spacing:8px;font-weight:700;padding:16px 32px;background:#f0faf6;border:2px solid #22c55e;border-radius:12px;color:#10241f">${otp}</span>
+            </p>
+            <p>This code expires in <strong>15 minutes</strong>. Enter it on the signature page to confirm your identity and sign the document.</p>
+            <p style="font-size:13px;color:#888;margin-top:24px">If you did not request this, you can safely ignore this email.</p>
+            <hr style="border:none;border-top:1px solid #e5e5e5;margin:24px 0" />
+            <p style="font-size:12px;color:#aaa">${escapeHtml(firmName)} · Powered by LawPath SA · ECTA-compliant electronic signatures</p>
+          </div>
+        `
+      });
+      console.info(`[ESignature] OTP emailed to ${signatory.signatory_email} for request ${req.params.id}`);
+    } catch (emailErr) {
+      console.warn(`[ESignature] Email send failed (${emailErr.message}), OTP logged to console as fallback`);
+      console.info(`[ESignature] OTP for ${signatory.signatory_email}: ${otp}`);
+    }
+
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
