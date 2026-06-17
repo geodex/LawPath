@@ -2730,10 +2730,9 @@ function corpusDocFromRow(row) {
 }
 
 const DEFAULT_CORPUS_SOURCES = [
-  { sourceName: "SAFLII — Southern African Legal Information Institute", sourceType: "case_law", courtOrBody: "All SA Courts", baseUrl: "https://www.saflii.org", documentCount: 184220, isPlatformCorpus: true },
   { sourceName: "South African Constitution, 1996", sourceType: "constitution", courtOrBody: "Parliament", documentCount: 1, isPlatformCorpus: true },
-  { sourceName: "Government Gazette — Acts of Parliament", sourceType: "legislation", courtOrBody: "Government Printer", baseUrl: "https://www.gov.za/documents/acts", documentCount: 4812, isPlatformCorpus: true },
-  { sourceName: "Legal Practice Council Rules & Directives", sourceType: "lpc_rules", courtOrBody: "Legal Practice Council", baseUrl: "https://lpc.org.za", documentCount: 48, isPlatformCorpus: true }
+  { sourceName: "Government Gazette — Acts of Parliament", sourceType: "legislation", courtOrBody: "Government Printer", baseUrl: "https://www.gov.za/documents/acts", documentCount: 0, isPlatformCorpus: true },
+  { sourceName: "Legal Practice Council Rules & Directives", sourceType: "lpc_rules", courtOrBody: "Legal Practice Council", baseUrl: "https://lpc.org.za", documentCount: 0, isPlatformCorpus: true }
 ];
 
 app.get("/api/research-db/corpus", authMiddleware, async (req, res, next) => {
