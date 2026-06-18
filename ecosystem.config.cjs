@@ -25,7 +25,7 @@ module.exports = {
       cwd: "/home2/lawpath/app/LawPath",
       instances: 1,
       exec_mode: "fork",
-      cron_restart: "0 2 * * 0",
+      cron_restart: "0 2 * * *",
       autorestart: false,
       watch: false,
       env: {
@@ -35,7 +35,7 @@ module.exports = {
       error_file: "/home2/lawpath/app/LawPath/logs/saflii-error.log",
       out_file: "/home2/lawpath/app/LawPath/logs/saflii-out.log",
       merge_logs: true,
-      args: "--limit 30 --years 2"
+      args: "--queries 50 --top-k 20"
     },
     {
       // Notification scheduler — checks DSR deadlines and trust reconciliations daily at 07:00

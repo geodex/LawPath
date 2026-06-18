@@ -84,8 +84,8 @@ You are a senior full-stack developer (15+ years), certified UX/UI architect, an
 - `src/StaffManagement.tsx` — Staff invite/manage/deactivate
 - `src/StripeBilling.tsx` — **Yoco subscription billing** (Solo R799/Practice R2,499/Firm R5,999)
 
-### Billing Pipeline (BACKEND COMPLETE, FRONTEND INCOMPLETE)
-All backend done. **`src/Billing.tsx` must be written in the next session** (see Outstanding).
+### Billing Pipeline (COMPLETE)
+Backend + frontend both done. `src/Billing.tsx` (935 lines) — invoice list, create/send/pay/sync workflows, PDF generation, header customization.
 
 ---
 
@@ -102,6 +102,11 @@ All backend done. **`src/Billing.tsx` must be written in the next session** (see
 | `011_verifynow.sql` | ✅ Applied | `verifynow_usage_log` table |
 | `012_provider_constraint_verifynow.sql` | ✅ Applied | Extended provider CHECK to include `verifynow` |
 | `013_billing_invoices.sql` | ✅ Applied | `invoice_line_items`, `invoice_payments`, expanded `invoices`, FK on `time_entries.invoice_id` |
+| `014_clients.sql` | ✅ Applied | Clients CRM table |
+| `015_lightstone.sql` | ✅ Applied | Lightstone provider + usage log (see memory(L3).md) |
+| `016_invoice_client_email.sql` | ✅ Applied | Invoice client email field (Replit Agent, unreviewed) |
+| `017_invoice_header_fields.sql` | ✅ Applied | Invoice header customization (Replit Agent, unreviewed) |
+| `018_ai_feature_routing.sql` | ✅ Applied | AI features[] column on providers (L4 session) |
 
 ---
 
@@ -172,7 +177,7 @@ Overview · Contracts · Research · Secretary · **Billing** · Conveyancing ·
 ## BILLING ARCHITECTURE (important distinction)
 | System | View key | Component | Purpose |
 |---|---|---|---|
-| Invoice billing | `"billing"` | `src/Billing.tsx` ← **NOT YET WRITTEN** | WIP → Invoice → PDF → Email → Payment tracking → Accounting |
+| Invoice billing | `"billing"` | `src/Billing.tsx` ✅ (935 lines) | WIP → Invoice → PDF → Email → Payment tracking → Accounting |
 | Subscription billing | `"billing-portal"` | `src/StripeBilling.tsx` | Yoco ZAR plans for law firm's own LawPath subscription |
 
 ---
@@ -223,70 +228,24 @@ Primary button: `linear-gradient(160deg, #177a5f, #0f6b52)` + glow on hover.
 
 ---
 
-## 🔴 OUTSTANDING — START HERE IN NEXT SESSION
+## 🔴 OUTSTANDING — NEXT SESSION
 
-### 1. Write `src/Billing.tsx` (TOP PRIORITY)
+### ~~1. Billing.tsx~~ — ✅ DONE
+`src/Billing.tsx` (935 lines) is complete. Written by Replit Agent, TS errors fixed in L3 session. `npx tsc --noEmit` passes clean.
 
-All backend is done. This component just needs to be written.
+### ~~2. Fix TypeScript errors~~ — ✅ DONE
+All resolved. TypeScript compiles with zero errors.
 
-**Props interface:**
-```typescript
-interface Props {
-  entries: TimeEntry[];
-  setEntries: React.Dispatch<React.SetStateAction<TimeEntry[]>>;
-  pendingWipIds: string[];        // from TimeRecording "Generate invoice" button
-  onClearPendingWip: () => void;
-  tenantProfile: TenantProfile;
-  log: (msg: string) => void;
-  showToast: (type: "success"|"error"|"info", title: string, msg: string) => void;
-}
-export function Billing({...}: Props) {...}
-```
+### 3. Unreviewed Replit Agent Changes
+- `server/mailer.js` and `server/pdf.js` — modified by Replit Agent commit `416d85c`, not yet diff-reviewed
+- Migrations 016 (`invoice_client_email`) and 017 (`invoice_header_fields`) — Replit Agent origin, applied but not reviewed line-by-line
 
-**API imports from `./api`:**
-`createInvoice`, `getInvoice`, `getInvoicePdfUrl`, `getInvoices`, `recordInvoicePayment`, `sendInvoiceByEmail`, `syncInvoiceToAccounting`, `updateInvoice`
-
-**Features:**
-1. On mount: `getInvoices()` → local state
-2. When `pendingWipIds.length > 0`: auto-open create modal pre-populated, call `onClearPendingWip()`
-3. **Metrics** (4 cards): Outstanding balance, Due this month, Overdue count, Collected YTD
-4. **Filter tabs**: All / Draft / Sent / Part-paid / Overdue / Paid / Void
-5. **Invoice table**: #, Client, Matter, Issued, Due, Total, Paid, Balance, Status badge, Actions (expand/PDF/email/void)
-6. **Inline detail** (row expanded): line items table, payments list, record payment form, accounting sync button
-7. **Create Invoice modal**: select WIP entries, fill client/matter/dueDate/notes, preview totals, submit
-8. **Send Email modal**: recipient email/name/message
-
-**Money format:** `` `R ${(cents/100).toLocaleString("en-ZA",{minimumFractionDigits:2})}` ``
-
-**IMPORTANT**: Write in multiple smaller chunks using Write+Edit to avoid the 8000 output token limit that keeps hitting when agents try to generate a large file in one shot. Strategy: Write skeleton first (~150 lines), then Edit to add sections.
-
-### 2. Fix TypeScript errors (after writing Billing.tsx)
-
-**`src/data.ts`** (~line 100): `invoiceSeed` array uses old Invoice shape. Change to:
-```typescript
-export const invoiceSeed: Invoice[] = [];
-```
-
-**`src/App.tsx`** (~line 205): Change `useState<Invoice[]>(invoiceSeed)` to `useState<Invoice[]>([])`.
-
-**`src/App.tsx`** (~line 1177): Find old reference to `invoice.amount` / `invoice.paid` — update to `invoice.amountCents` / `invoice.paidCents`.
-
-**`src/App.tsx`** (~line 2571): Delete the entire `function LegacyBilling(...)` block (the old billing component, now replaced by `src/Billing.tsx`).
-
-### 3. Commit and deploy
-```bash
-git add -A
-git commit -m "Complete billing pipeline — Billing.tsx, fix TS errors"
-git push origin main
-# Server:
-PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh
-```
-
-### 4. Remaining from earlier
+### 4. Infrastructure / API Keys
 - SAFLII first run on server: `nohup node server/saflii.js --limit 50 --years 5 > logs/saflii-first-run.log 2>&1 &`
 - VerifyNow API key: add in Super Admin → Settings → API Keys
 - Yoco live keys: add `sk_live_` + `whsec_` in .env
-- Windeed/Lightstone: simulation active; needs commercial API for live data
+- Windeed/Lightstone: simulation active; needs commercial API subscriptions
+- Bake `PUPPETEER_SKIP_DOWNLOAD=true` permanently into deploy.sh or .env
 - `stage` user PM2: run `pm2 resurrect` as stage user on same server
 
 ---
@@ -294,25 +253,28 @@ PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh
 ## CODEBASE STRUCTURE (key files)
 ```
 server/
-  index.js          — Express API (~3200+ lines)
-  pdf.js            — PDFKit: contracts + trust statements + SA tax invoices
-  notifications.js  — Transactional email triggers
-  whatsapp-session.js
-  saflii.js         — SAFLII scraper + GCS uploader
-  verifynow.js      — VerifyNow SA API wrapper
-  mailer.js, auth.js, db.js, gcs.js
+  index.js              — Express API (4,255 lines, 122 endpoints)
+  pdf.js                — PDFKit: contracts + trust statements + SA tax invoices (471 lines)
+  saflii.js             — Laws.Africa KB indexer + GCS uploader (555 lines)
+  lightstone.js         — Lightstone Property API wrapper (316 lines)
+  whatsapp-session.js   — WhatsApp QR + Meta Cloud API (271 lines)
+  notifications.js      — Transactional email triggers (187 lines)
+  verifynow.js          — VerifyNow SA API wrapper (160 lines)
+  gcs.js                — Google Cloud Storage signed URLs (157 lines)
+  ocr.js                — Google Vision API batch PDF OCR (108 lines)
+  seed-corpus.js        — 504 curated SA case law seeds (86 lines)
+  mailer.js, auth.js, db.js, notification-runner.js
 
 src/
-  App.tsx           — Main shell (~3300+ lines)
-  types.ts          — All TS types (Invoice now has full billing shape)
-  api.ts            — API client (invoice + VerifyNow functions added)
-  styles.css        — ~4237 lines, Lora+Inter, dark mode
-  Billing.tsx       ← NOT YET WRITTEN
-  VerifyNowMonitor.tsx
-  [all other components]
+  App.tsx               — Main shell + router (3,530 lines)
+  types.ts              — 66 exported TS types (810 lines)
+  api.ts                — 97 API client functions (782 lines)
+  styles.css            — Design system (5,709 lines, Lora+Inter, dark/light)
+  Billing.tsx           — ✅ Complete (935 lines)
+  23 total .tsx components
 
 db/migrations/
-  001–013_*.sql
+  001–018_*.sql (all applied)
 ```
 
 ---

@@ -29,11 +29,13 @@ LawPath SA is an AI-native multi-tenant SaaS for South African law firms.
 - Server: Ubuntu 22.04, `/home2/lawpath/app/LawPath`, PM2, Apache proxy, port 3069
 - Deploy: `PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh`
 
-## DB Migrations (all applied through 017)
+## DB Migrations (all applied through 018)
 013_billing_invoices.sql — `invoice_line_items`, `invoice_payments`, expanded `invoices`, FK on `time_entries.invoice_id`
+014_clients.sql — Clients CRM table
 015_lightstone.sql — Lightstone Property API provider row + usage log table
 016_invoice_client_email.sql — Replit Agent change, not yet reviewed line-by-line
 017_invoice_header_fields.sql — Replit Agent change, not yet reviewed line-by-line
+018_ai_feature_routing.sql — AI features[] column on platform_api_provider_settings
 
 ## Billing Architecture (two separate systems)
 | key | Component | Purpose |
@@ -41,17 +43,15 @@ LawPath SA is an AI-native multi-tenant SaaS for South African law firms.
 | `"billing"` | `src/Billing.tsx` | WIP → Invoice → PDF → Email → Payment → Accounting |
 | `"billing-portal"` | `src/StripeBilling.tsx` | Yoco ZAR subscription plans |
 
-## Current Status (as of 2026-06-16)
-Lightstone Property API integration complete (see memory(L3).md for details). Two
-production deploy breaks caused by unreviewed Replit Agent commits were diagnosed and
-fixed this session — `./deploy.sh` completed successfully afterward. See memory(L3).md
-for full history.
+## Current Status (as of 2026-06-18)
+All tiers complete. Billing.tsx done (935 lines). AI feature routing system built (L4).
+TypeScript compiles clean. 122 API endpoints, 23 frontend components, 18 migrations applied.
+See memory(L4).md for full platform summary and memory(L4-cont).md for metrics + corrected outstanding items.
 
 ## Outstanding
-- Review `server/mailer.js`, `server/pdf.js`, and migrations 016/017 — all part of an
-  unreviewed 482-file Replit Agent commit (`416d85c`) that arrived via `git pull`.
-- Resolve Lightstone Azure APIM 500 error — likely subscription not linked to the
-  Property-Search Product on portal.apis.lightstone.co.za (Lightstone-side fix, not code).
-- Decide whether to bake `PUPPETEER_SKIP_DOWNLOAD=true` permanently into `deploy.sh`/`.env`.
-- Yoco live keys: add `sk_live_` + `whsec_` to server .env.
+- Review `server/mailer.js`, `server/pdf.js`, and migrations 016/017 — Replit Agent commit `416d85c`
+- Lightstone Azure APIM 500 — subscription config on portal.apis.lightstone.co.za (Lightstone-side)
+- Bake `PUPPETEER_SKIP_DOWNLOAD=true` permanently into `deploy.sh`/`.env`
+- Yoco live keys: add `sk_live_` + `whsec_` to server .env
 - SAFLII first run: `nohup node server/saflii.js --limit 50 --years 5 > logs/saflii-first-run.log 2>&1 &`
+- VerifyNow API key: set in Super Admin → Settings → API Keys
