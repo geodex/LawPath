@@ -1,6 +1,20 @@
 # LawPath SA — Claude Session Memory
 > Load this file at the start of a new chat to restore full context.
-> Last updated: 2026-06-09
+> Last updated: 2026-06-18
+
+---
+
+## SESSION MEMORY FILES — READ THESE FIRST
+The `docs/memory/` folder contains detailed session memory files. Read them for full context:
+
+| File | Contents |
+|---|---|
+| `docs/memory/MEMORY.md` | Memory index |
+| `docs/memory/project_overview.md` | Stack, deploy, DB, auth, billing architecture |
+| `docs/memory/user_profile.md` | Senior full-stack dev + SA attorney, building LawPath as life's work |
+| `docs/memory/feedback.md` | Write large components in chunks; don't repeat env/deploy setup |
+| `docs/memory/memory(L3).md` | Lightstone API integration, Replit Agent issues, production deploy fixes |
+| `docs/memory/memory(L4).md` | **Comprehensive platform summary**: all features, AI routing system, integrations, DB schema, recent work (2026-06-18) |
 
 ---
 
