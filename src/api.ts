@@ -112,6 +112,13 @@ export async function saveTenantProfile(profile: TenantProfile) {
   });
 }
 
+export async function verifyFfcNumber(ffcNumber: string) {
+  return request<import("./types").FfcVerificationResult>("/api/tenant-profile/verify-ffc", {
+    method: "POST",
+    body: JSON.stringify({ ffcNumber })
+  });
+}
+
 export async function savePlatformSmtpSettings(settings: SmtpSettings) {
   return request<{ smtpSettings: SmtpSettings }>("/api/platform/smtp-settings", {
     method: "PUT",
@@ -645,6 +652,13 @@ export async function getVerifyNowUsage() {
     byTenant: import("./types").VerifyNowTenantStat[];
     recentLog: import("./types").VerifyNowLogEntry[];
   }>("/api/admin/verifynow/usage");
+}
+
+export async function getTenantsOverview() {
+  return request<{
+    tenants: import("./types").TenantOverviewRow[];
+    totals: import("./types").TenantsOverviewTotals;
+  }>("/api/admin/tenants/overview");
 }
 
 export async function getVerifyNowLog(params?: { limit?: number; offset?: number; service?: string }) {

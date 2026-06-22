@@ -157,6 +157,19 @@ export type TenantProfile = {
   onboardingCompleted: boolean;
   onboardingStep: number;
   invoiceHeaderFields: InvoiceHeaderField[];
+  ffcNumber?: string;
+  ffcYear?: number | null;
+  ffcVerifiedAt?: string | null;
+  ffcVerificationStatus?: "valid" | "invalid" | "unknown" | "pending" | null;
+};
+
+export type FfcVerificationResult = {
+  status: "valid" | "invalid" | "unknown";
+  portalReachable: boolean;
+  snippet: string | null;
+  detectedField: string | null;
+  detectedFields: string[] | null;
+  error: string | null;
 };
 
 export type AiFeature = "ai-chat" | "document-intelligence" | "research-summaries";
@@ -214,6 +227,38 @@ export type VerifyNowLogEntry = {
   error_code: string | null;
   input_ref: string | null;
   created_at: string;
+};
+
+export type TenantOverviewRow = {
+  id: string;
+  company_name: string;
+  slug: string;
+  plan: string | null;
+  plan_status: string | null;
+  trial_ends_at: string | null;
+  created_at: string;
+  status: string;
+  user_count: number;
+  matter_count: number;
+  ai_calls_30d: number;
+  ai_errors_30d: number;
+  ai_chars_30d: number | string;
+  ai_calls_total: number;
+  lightstone_calls_30d: number;
+  lightstone_errors_30d: number;
+  verifynow_calls_30d: number;
+  verifynow_credits_30d: number;
+  verifynow_errors_30d: number;
+  last_activity_at: string | null;
+};
+
+export type TenantsOverviewTotals = {
+  tenant_count: number;
+  active_tenants: number;
+  trial_tenants: number;
+  ai_calls_30d: number;
+  lightstone_calls_30d: number;
+  verifynow_calls_30d: number;
 };
 
 export type RagSource = {
@@ -561,7 +606,7 @@ export type ViewKey =
   | "trust" | "fica" | "time" | "popia"
   | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting"
   | "research-db" | "esignature" | "agents" | "analytics"
-  | "staff" | "billing-portal" | "ai-library";
+  | "staff" | "billing-portal" | "ai-library" | "super-tenants";
 
 // ─── CRM: CLIENTS ─────────────────────────────────────────────────────────────
 

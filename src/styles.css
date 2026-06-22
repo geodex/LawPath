@@ -848,6 +848,64 @@ button:disabled {
   border-color: var(--tint-07);
 }
 
+.nav-group {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.nav-group-header {
+  border: 0;
+  background: transparent;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 14px 6px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: 6px;
+  min-height: 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.nav-group-header:hover {
+  color: var(--ink);
+  background: var(--tint-05);
+}
+
+.nav-group.has-active .nav-group-header {
+  color: var(--gold);
+}
+
+.nav-chev {
+  transition: transform 0.18s ease;
+  opacity: 0.6;
+}
+
+.nav-group.open .nav-chev {
+  transform: rotate(180deg);
+}
+
+.nav-group-items {
+  display: grid;
+  gap: 2px;
+  padding-left: 6px;
+  border-left: 1px solid var(--tint-08);
+  margin-left: 14px;
+}
+
+.nav-top-divider {
+  margin-top: 12px;
+  border-top: 1px solid var(--tint-08) !important;
+  padding-top: 12px !important;
+  border-radius: 0 0 8px 8px;
+}
+
 .sidebar-card {
   margin-top: auto;
   padding: 18px;
@@ -5706,4 +5764,188 @@ select {
     text-shadow: none !important;
   }
 }
+
+/* ─── Super-admin Tenants overview ────────────────────────────────────── */
+
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.metric-row .metric h3 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.metric-row .metric strong {
+  font-family: var(--font-serif);
+  font-size: 1.85rem;
+  display: block;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.metric-row .metric small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.panel-head h2 {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.panel-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-input {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.panel-body {
+  margin-top: 4px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.data-table thead th {
+  text-align: left;
+  padding: 12px 14px;
+  background: var(--surface);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.data-table tbody td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.data-table tbody tr:hover:not(.row-detail) {
+  background: var(--tint-05);
+}
+
+.data-table tbody tr.row-detail {
+  background: var(--surface);
+}
+
+.data-table tbody tr.row-detail td {
+  padding: 18px 22px;
+}
+
+.tenant-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 24px;
+}
+
+.tenant-detail-grid > div > strong {
+  font-family: var(--font-serif);
+  font-size: 0.92rem;
+  display: block;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+
+.tenant-detail-grid dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.tenant-detail-grid dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.tenant-detail-grid dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+.tenant-detail-grid dd code {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  background: var(--paper);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* Plan pills */
+.plan-trial    { background: var(--surface);   color: var(--muted); }
+.plan-solo     { background: var(--blue-bg);   color: var(--blue); }
+.plan-practice { background: var(--gold-bg);   color: var(--gold); }
+.plan-firm     { background: var(--green-light); color: var(--green-dark); }
+
+/* FFC verification pills */
+.ffc-valid    { background: var(--green-light); color: var(--green-dark); }
+.ffc-invalid  { background: var(--rose-bg);     color: var(--rose); }
+.ffc-unknown  { background: var(--gold-bg);     color: var(--gold); }
+.ffc-pending  { background: var(--surface);     color: var(--muted); }
+
+.ffc-verify-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.ffc-snippet {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border-left: 3px solid var(--gold);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
 

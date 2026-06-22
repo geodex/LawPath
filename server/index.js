@@ -126,7 +126,11 @@ function tenantProfileFromRow(row) {
     logoPublicUrl: row.logo_public_url || "",
     onboardingCompleted: Boolean(row.onboarding_completed),
     onboardingStep: Number(row.onboarding_step || 1),
-    invoiceHeaderFields: parseInvoiceHeaderFields(row.invoice_header_fields)
+    invoiceHeaderFields: parseInvoiceHeaderFields(row.invoice_header_fields),
+    ffcNumber: row.ffc_number || "",
+    ffcYear: row.ffc_year ? Number(row.ffc_year) : null,
+    ffcVerifiedAt: row.ffc_verified_at ? row.ffc_verified_at.toISOString() : null,
+    ffcVerificationStatus: row.ffc_verification_status || null
   };
 }
 
@@ -386,7 +390,40 @@ async function callAiProvider(provider, apiKey, model, systemPrompt, userPrompt)
   return callOpenAiApi(apiKey, model, systemPrompt, userPrompt);
 }
 
-async function callAiAssistant({ message, agentKey, context }) {
+// Logging wrapper — call this instead of callAiProvider when you have a request
+// context so the super-admin Tenants overview can attribute usage to a tenant.
+async function callAiProviderLogged(provider, apiKey, model, systemPrompt, userPrompt, ctx = {}) {
+  const start = Date.now();
+  let response = null;
+  let errorMessage = null;
+  try {
+    response = await callAiProvider(provider, apiKey, model, systemPrompt, userPrompt);
+    return response;
+  } catch (err) {
+    errorMessage = String(err?.message || err).slice(0, 500);
+    throw err;
+  } finally {
+    pool.query(
+      `insert into ai_usage_log
+        (tenant_id, user_id, provider, model, feature, prompt_chars, response_chars, latency_ms, status, error_message)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        ctx.tenantId || null,
+        ctx.userId || null,
+        provider,
+        model || null,
+        ctx.feature || null,
+        ((systemPrompt || "").length + (userPrompt || "").length) || null,
+        response ? String(response).length : null,
+        Date.now() - start,
+        errorMessage ? "error" : "ok",
+        errorMessage
+      ]
+    ).catch(() => { /* never fail the request because of logging */ });
+  }
+}
+
+async function callAiAssistant({ message, agentKey, context, logCtx }) {
   const { provider, apiKey, model } = await getAiForFeature("ai-chat");
 
   if (!apiKey) {
@@ -419,7 +456,10 @@ async function callAiAssistant({ message, agentKey, context }) {
     message
   ].join("\n");
 
-  const content = await callAiProvider(provider, apiKey, model, systemPrompt, userPrompt);
+  const content = await callAiProviderLogged(provider, apiKey, model, systemPrompt, userPrompt, {
+    ...(logCtx || {}),
+    feature: "ai-chat"
+  });
 
   return { provider, model, content };
 }
@@ -653,8 +693,8 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
          phone, website, lpc_registration_number, company_registration_number, vat_number, conveyancer_count,
          senior_attorney_count, junior_attorney_count, candidate_attorney_count, legal_secretary_count,
          logo_data_url, logo_storage_uri, logo_public_url, onboarding_completed, onboarding_step,
-         invoice_header_fields)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+         invoice_header_fields, ffc_number, ffc_year)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
        on conflict (tenant_id) do update set
         trading_name = excluded.trading_name,
         practice_type = excluded.practice_type,
@@ -679,6 +719,8 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
         onboarding_completed = excluded.onboarding_completed,
         onboarding_step = excluded.onboarding_step,
         invoice_header_fields = excluded.invoice_header_fields,
+        ffc_number = excluded.ffc_number,
+        ffc_year = excluded.ffc_year,
         updated_at = now()
        returning *`,
       [
@@ -705,7 +747,9 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
         logoPublicUrl,
         Boolean(profile.onboardingCompleted),
         Number(profile.onboardingStep || 1),
-        invoiceHeaderFields
+        invoiceHeaderFields,
+        profile.ffcNumber || null,
+        profile.ffcYear ? Number(profile.ffcYear) : null
       ]
     );
 
@@ -741,6 +785,63 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// Verify the tenant's Fidelity Fund Certificate number against ffc.fidfund.co.za
+// and persist the verdict + an audit-log row. Returns the verdict + snippet so
+// the UI can show what the portal said.
+app.post("/api/tenant-profile/verify-ffc", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const ffcNumber = String(req.body?.ffcNumber || "").trim();
+  if (!ffcNumber) return res.status(400).json({ error: "ffcNumber is required" });
+  try {
+    const fidfund = require("./fidfund");
+    let result;
+    let errorMessage = null;
+    try {
+      result = await fidfund.verifyFfcNumber(ffcNumber);
+    } catch (err) {
+      errorMessage = String(err?.message || err).slice(0, 500);
+      result = { status: "unknown", error: errorMessage, portalReachable: false };
+    }
+
+    // Persist the audit log row
+    await pool.query(
+      `insert into ffc_verification_log
+        (tenant_id, user_id, ffc_number, status, http_status, detected_field, snippet, error_message)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        req.user.tenantId,
+        req.user.sub,
+        ffcNumber,
+        result.status || "unknown",
+        result.httpStatus || null,
+        result.detectedField || null,
+        (result.snippet || "").slice(0, 2000),
+        errorMessage || result.error || null
+      ]
+    ).catch((e) => console.warn("FFC log insert failed:", e.message));
+
+    // Update tenant profile with the latest verdict
+    await pool.query(
+      `update tenant_profiles
+       set ffc_number = $2,
+           ffc_verified_at = case when $3 = 'valid' then now() else ffc_verified_at end,
+           ffc_verification_status = $3,
+           updated_at = now()
+       where tenant_id = $1`,
+      [req.user.tenantId, ffcNumber, result.status || "unknown"]
+    );
+
+    res.json({
+      status: result.status,
+      portalReachable: result.portalReachable !== false,
+      snippet: result.snippet || null,
+      detectedField: result.detectedField || null,
+      detectedFields: result.detectedFields || null,
+      error: errorMessage || result.error || null
+    });
+  } catch (error) { next(error); }
 });
 
 app.get("/api/tenant/email-identity", authMiddleware, async (req, res, next) => {
@@ -1141,7 +1242,12 @@ app.post("/api/ai/chat", authMiddleware, async (req, res, next) => {
 
     const context = await buildTenantAiContext(req, agentKey);
     const contextSummary = buildContextSummary(context);
-    const ai = await callAiAssistant({ message: String(message), agentKey, context });
+    const ai = await callAiAssistant({
+      message: String(message),
+      agentKey,
+      context,
+      logCtx: { tenantId: req.user.tenantId || null, userId: req.user.sub || null }
+    });
 
     await pool.query(
       `insert into ai_messages (conversation_id, tenant_id, role, content, model, context_summary)
@@ -2669,7 +2775,11 @@ ${text}
 """`;
         let aiText = "";
         try {
-          aiText = await callAiProvider(docProvider, apiKey, model, "", prompt);
+          aiText = await callAiProviderLogged(docProvider, apiKey, model, "", prompt, {
+            tenantId: req.user.tenantId || null,
+            userId: req.user.sub || null,
+            feature: "document-intelligence"
+          });
         } catch (aiErr) {
           await pool.query(
             "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
@@ -2854,7 +2964,11 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
     if (searchAi.apiKey && docs.rowCount > 0) {
       const searchPrompt = `Summarise the following South African legal research results for the query "${query}" in 2-3 sentences. Cite the most relevant authority. Attorney review required:\n${docs.rows.map(d => `${d.title} ${d.citation}: ${d.summary}`).join("\n")}`;
       try {
-        aiSummary = await callAiProvider(searchAi.provider, searchAi.apiKey, searchAi.model, "", searchPrompt) || aiSummary;
+        aiSummary = await callAiProviderLogged(searchAi.provider, searchAi.apiKey, searchAi.model, "", searchPrompt, {
+          tenantId: req.user.tenantId || null,
+          userId: req.user.sub || null,
+          feature: "research-summaries"
+        }) || aiSummary;
       } catch { /* fallback to default summary */ }
     }
     await pool.query("insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)", [req.user.tenantId, query, docs.rowCount, aiSummary, JSON.stringify(citations), req.user.sub]);
@@ -3896,9 +4010,116 @@ app.get("/api/admin/lightstone/usage", authMiddleware, async (req, res, next) =>
     const [totals, byService, recent] = await Promise.all([
       pool.query(`select count(*) as total_calls, count(*) filter (where status='error') as errors, round(avg(latency_ms)) as avg_latency_ms, coalesce(sum(result_count), 0) as total_results from lightstone_usage_log`),
       pool.query(`select service, count(*) as calls, count(*) filter (where status='error') as errors, round(avg(latency_ms)) as avg_latency_ms from lightstone_usage_log group by service order by calls desc`),
-      pool.query(`select l.*, t.name as tenant_name from lightstone_usage_log l left join tenants t on t.id = l.tenant_id order by l.created_at desc limit 50`)
+      pool.query(`select l.*, t.company_name as tenant_name from lightstone_usage_log l left join tenants t on t.id = l.tenant_id order by l.created_at desc limit 50`)
     ]);
     res.json({ totals: totals.rows[0], byService: byService.rows, recentLog: recent.rows });
+  } catch (err) { next(err); }
+});
+
+// ─── SUPER-ADMIN: TENANTS OVERVIEW ─────────────────────────────────────────
+// Returns one row per tenant with aggregated usage across AI, Lightstone,
+// VerifyNow (Searchwork360) and Yoco subscription status.
+app.get("/api/admin/tenants/overview", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  try {
+    const result = await pool.query(`
+      with ai_30d as (
+        select tenant_id,
+               count(*)::int as ai_calls_30d,
+               count(*) filter (where status='error')::int as ai_errors_30d,
+               sum(prompt_chars + coalesce(response_chars,0))::bigint as ai_chars_30d
+        from ai_usage_log
+        where created_at >= now() - interval '30 days'
+        group by tenant_id
+      ),
+      ai_total as (
+        select tenant_id, count(*)::int as ai_calls_total from ai_usage_log group by tenant_id
+      ),
+      ls_30d as (
+        select tenant_id,
+               count(*)::int as ls_calls_30d,
+               count(*) filter (where status='error')::int as ls_errors_30d
+        from lightstone_usage_log
+        where created_at >= now() - interval '30 days'
+        group by tenant_id
+      ),
+      vn_30d as (
+        select tenant_id,
+               count(*)::int as vn_calls_30d,
+               coalesce(sum(credits_spent),0)::int as vn_credits_30d,
+               count(*) filter (where status='error')::int as vn_errors_30d
+        from verifynow_usage_log
+        where created_at >= now() - interval '30 days'
+        group by tenant_id
+      ),
+      user_count as (
+        select tenant_id, count(*)::int as user_count
+        from users
+        where tenant_id is not null and status <> 'disabled'
+        group by tenant_id
+      ),
+      matter_count as (
+        select tenant_id, count(*)::int as matter_count from matters group by tenant_id
+      )
+      select
+        t.id,
+        t.company_name,
+        t.slug,
+        t.plan,
+        t.plan_status,
+        t.trial_ends_at,
+        t.created_at,
+        t.status,
+        coalesce(uc.user_count, 0)            as user_count,
+        coalesce(mc.matter_count, 0)          as matter_count,
+        coalesce(ai30.ai_calls_30d, 0)        as ai_calls_30d,
+        coalesce(ai30.ai_errors_30d, 0)       as ai_errors_30d,
+        coalesce(ai30.ai_chars_30d, 0)        as ai_chars_30d,
+        coalesce(ait.ai_calls_total, 0)       as ai_calls_total,
+        coalesce(ls30.ls_calls_30d, 0)        as lightstone_calls_30d,
+        coalesce(ls30.ls_errors_30d, 0)       as lightstone_errors_30d,
+        coalesce(vn30.vn_calls_30d, 0)        as verifynow_calls_30d,
+        coalesce(vn30.vn_credits_30d, 0)      as verifynow_credits_30d,
+        coalesce(vn30.vn_errors_30d, 0)       as verifynow_errors_30d
+      from tenants t
+      left join ai_30d   ai30 on ai30.tenant_id = t.id
+      left join ai_total ait  on ait.tenant_id  = t.id
+      left join ls_30d   ls30 on ls30.tenant_id = t.id
+      left join vn_30d   vn30 on vn30.tenant_id = t.id
+      left join user_count   uc on uc.tenant_id = t.id
+      left join matter_count mc on mc.tenant_id = t.id
+      order by t.created_at desc
+    `);
+    const [platformTotals, lastActivity] = await Promise.all([
+      pool.query(`
+        select
+          (select count(*)::int from tenants)                              as tenant_count,
+          (select count(*)::int from tenants where status='active')        as active_tenants,
+          (select count(*)::int from tenants where status='trial')         as trial_tenants,
+          (select count(*)::int from ai_usage_log where created_at >= now() - interval '30 days') as ai_calls_30d,
+          (select count(*)::int from lightstone_usage_log where created_at >= now() - interval '30 days') as lightstone_calls_30d,
+          (select count(*)::int from verifynow_usage_log where created_at >= now() - interval '30 days') as verifynow_calls_30d
+      `),
+      pool.query(`
+        select t.id as tenant_id,
+               greatest(
+                 coalesce(max(a.created_at), 'epoch'::timestamptz),
+                 coalesce(max(l.created_at), 'epoch'::timestamptz),
+                 coalesce(max(v.created_at), 'epoch'::timestamptz)
+               ) as last_activity
+        from tenants t
+        left join ai_usage_log a         on a.tenant_id = t.id
+        left join lightstone_usage_log l on l.tenant_id = t.id
+        left join verifynow_usage_log v  on v.tenant_id = t.id
+        group by t.id
+      `)
+    ]);
+    const lastActivityMap = new Map(lastActivity.rows.map(r => [r.tenant_id, r.last_activity]));
+    const tenants = result.rows.map(r => ({
+      ...r,
+      last_activity_at: lastActivityMap.get(r.id) || null
+    }));
+    res.json({ tenants, totals: platformTotals.rows[0] });
   } catch (err) { next(err); }
 });
 

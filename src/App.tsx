@@ -7,6 +7,7 @@ import {
   Building2,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   CircleDollarSign,
   Clock,
   Clock3,
@@ -68,6 +69,7 @@ import { Clients } from "./Clients";
 import { StripeBilling } from "./StripeBilling";
 import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
+import { SuperTenants } from "./SuperTenants";
 import { HelpPanel } from "./HelpPanel";
 import { TenantTraining } from "./TenantTraining";
 
@@ -98,7 +100,25 @@ const nav: NavItem[] = [
   { key: "portal", label: "Portal", icon: UsersRound },
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
   { key: "ai-library", label: "AI Library", icon: BookOpenCheck },
+  { key: "super-tenants", label: "Tenants", icon: Building2 },
   { key: "settings", label: "Settings", icon: Settings }
+];
+
+// Sidebar groups — collapsible sections for the main navigation.
+// Overview and Settings stay top-level (rendered outside groups).
+// `key` is the group's stable identifier (used for localStorage persistence).
+type NavGroup = { key: string; label: string; items: ViewKey[] };
+
+const navGroups: NavGroup[] = [
+  { key: "workspace", label: "Workspace", items: ["drafting", "research", "secretary", "booking", "portal"] },
+  { key: "clients", label: "Clients & Compliance", items: ["clients", "fica", "popia"] },
+  { key: "financial", label: "Financial", items: ["time", "billing", "trust", "accounting"] },
+  { key: "practice", label: "Practice Areas", items: ["conveyancing", "litigation"] },
+  { key: "ai", label: "AI Tools", items: ["research-db", "documents", "esignature"] },
+  { key: "network", label: "Comms & Network", items: ["whatsapp", "cipc", "agents"] },
+  { key: "insights", label: "Insights", items: ["analytics", "staff"] },
+  { key: "account", label: "Account", items: ["billing-portal", "training-guide", "ai-library"] },
+  { key: "platform", label: "Platform", items: ["super-tenants"] }
 ];
 
 const viewAgentMap: Record<ViewKey, AiAgentKey> = {
@@ -128,6 +148,7 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   portal: "portal",
   "training-guide": "research",
   "ai-library": "research",
+  "super-tenants": "settings",
   settings: "settings"
 };
 
@@ -193,7 +214,11 @@ const defaultTenantProfile = (companyName = ""): TenantProfile => ({
   logoPublicUrl: "",
   onboardingCompleted: false,
   onboardingStep: 1,
-  invoiceHeaderFields: ["address", "phone", "website", "vatNumber", "lpcNumber"]
+  invoiceHeaderFields: ["address", "phone", "website", "vatNumber", "lpcNumber"],
+  ffcNumber: "",
+  ffcYear: null,
+  ffcVerifiedAt: null,
+  ffcVerificationStatus: null
 });
 
 function fileToDataUrl(file: File) {
@@ -755,6 +780,7 @@ export function App() {
         {activeView === "booking" && <Booking appointments={appointments} setAppointments={setAppointments} log={log} />}
         {activeView === "portal" && <Portal matters={matters} setMatters={setMatters} portalMode={portalMode} setPortalMode={setPortalMode} log={log} />}
         {activeView === "training-guide" && isPlatformSuperAdmin && <AITrainingGuide setActiveView={setActiveView} />}
+        {activeView === "super-tenants" && isPlatformSuperAdmin && <SuperTenants log={log} showToast={showToast} />}
         {activeView === "ai-library" && hasTenantContext && (
           <TenantTraining
             ragSources={ragSources}
@@ -907,9 +933,42 @@ function OnboardingFlow({
 }) {
   const [step, setStep] = useState(profile.onboardingStep || 1);
   const [saving, setSaving] = useState(false);
+  const [ffcVerifying, setFfcVerifying] = useState(false);
+  const [ffcResult, setFfcResult] = useState<import("./types").FfcVerificationResult | null>(null);
 
   function update<K extends keyof TenantProfile>(key: K, value: TenantProfile[K]) {
     setProfile((current) => ({ ...current, [key]: value, onboardingStep: step }));
+  }
+
+  async function handleVerifyFfc() {
+    const num = (profile.ffcNumber || "").trim();
+    if (!num) {
+      showToast("error", "FFC number missing", "Enter the certificate number before verifying.");
+      return;
+    }
+    setFfcVerifying(true);
+    setFfcResult(null);
+    try {
+      const { verifyFfcNumber } = await import("./api");
+      const result = await verifyFfcNumber(num);
+      setFfcResult(result);
+      setProfile((current) => ({
+        ...current,
+        ffcVerificationStatus: result.status,
+        ffcVerifiedAt: result.status === "valid" ? new Date().toISOString() : current.ffcVerifiedAt || null
+      }));
+      const labels: Record<string, [Toast["type"], string]> = {
+        valid:   ["success", "FFC verified"],
+        invalid: ["error",   "FFC could not be verified"],
+        unknown: ["info",    "Verification result unclear"]
+      };
+      const [type, title] = labels[result.status] || ["info", "Verification result"];
+      showToast(type, title, result.snippet ? result.snippet.slice(0, 200) : (result.error || "See the snippet in the verification log."));
+    } catch (err) {
+      showToast("error", "Verification failed", err instanceof Error ? err.message : "Could not reach the FidFund portal.");
+    } finally {
+      setFfcVerifying(false);
+    }
   }
 
   async function handleLogo(file: File | undefined) {
@@ -982,6 +1041,22 @@ function OnboardingFlow({
         {step === 2 && (
           <div className="onboarding-grid">
             <label>LPC practice / firm number<input value={profile.lpcRegistrationNumber} onChange={(event) => update("lpcRegistrationNumber", event.target.value)} placeholder="Legal Practice Council registration" /></label>
+            <label>
+              Fidelity Fund Certificate number
+              <input value={profile.ffcNumber || ""} onChange={(event) => update("ffcNumber", event.target.value)} placeholder="e.g. FFC/2026/12345" />
+              <div className="ffc-verify-row">
+                <button type="button" className="ghost small" disabled={ffcVerifying || !(profile.ffcNumber || "").trim()} onClick={handleVerifyFfc}>
+                  <ShieldCheck size={14} /> {ffcVerifying ? "Verifying…" : "Verify with FidFund"}
+                </button>
+                {profile.ffcVerificationStatus && (
+                  <span className={`pill ffc-${profile.ffcVerificationStatus}`}>{profile.ffcVerificationStatus}</span>
+                )}
+              </div>
+              {ffcResult?.snippet && (
+                <small className="muted ffc-snippet">{ffcResult.snippet.slice(0, 240)}</small>
+              )}
+            </label>
+            <label>FFC year<input type="number" min="2000" max="2099" value={profile.ffcYear || ""} onChange={(event) => update("ffcYear", event.target.value ? Number(event.target.value) : null)} placeholder="2026" /></label>
             <label>Company registration number<input value={profile.companyRegistrationNumber} onChange={(event) => update("companyRegistrationNumber", event.target.value)} placeholder="If incorporated" /></label>
             <label>VAT number<input value={profile.vatNumber} onChange={(event) => update("vatNumber", event.target.value)} placeholder="If VAT registered" /></label>
             <label>Conveyancers<input type="number" min="0" value={profile.conveyancerCount} onChange={(event) => update("conveyancerCount", Number(event.target.value))} /></label>
@@ -1196,11 +1271,62 @@ function Sidebar({ activeView, setActiveView, isPlatformSuperAdmin }: { activeVi
   // and is not a tenant-facing feature.
   // ai-library is the tenant-facing private training upload; super admins
   // use the platform RAG panel in Settings instead.
-  const visibleNav = nav.filter((item) => {
-    if (item.key === "training-guide") return isPlatformSuperAdmin;
-    if (item.key === "ai-library") return !isPlatformSuperAdmin;
+  const navByKey = useMemo(() => {
+    const map = new Map<ViewKey, NavItem>();
+    nav.forEach((item) => map.set(item.key, item));
+    return map;
+  }, []);
+
+  const isItemVisible = (key: ViewKey) => {
+    if (key === "training-guide") return isPlatformSuperAdmin;
+    if (key === "super-tenants") return isPlatformSuperAdmin;
+    if (key === "ai-library") return !isPlatformSuperAdmin;
     return true;
+  };
+
+  // Auto-open the group containing the active view, persist user toggles.
+  const STORAGE_KEY = "lp.sidebar.groups";
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch { /* fall through */ }
+    // Default: open the group that contains the active view, close the rest.
+    const initial: Record<string, boolean> = {};
+    navGroups.forEach((g) => { initial[g.key] = g.items.includes(activeView); });
+    return initial;
   });
+
+  useEffect(() => {
+    // Ensure the active view's group is open when activeView changes.
+    setOpenGroups((prev) => {
+      const containing = navGroups.find((g) => g.items.includes(activeView));
+      if (!containing || prev[containing.key]) return prev;
+      return { ...prev, [containing.key]: true };
+    });
+  }, [activeView]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(openGroups)); } catch { /* ignore */ }
+  }, [openGroups]);
+
+  const toggleGroup = (key: string) => setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  const renderItem = (key: ViewKey) => {
+    const item = navByKey.get(key);
+    if (!item) return null;
+    const Icon = item.icon;
+    return (
+      <button key={item.key} className={activeView === item.key ? "active" : ""} onClick={() => setActiveView(item.key)}>
+        <Icon size={18} />
+        <span>{item.label}</span>
+      </button>
+    );
+  };
+
+  const overviewItem = navByKey.get("overview");
+  const settingsItem = navByKey.get("settings");
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -1211,15 +1337,42 @@ function Sidebar({ activeView, setActiveView, isPlatformSuperAdmin }: { activeVi
         </div>
       </div>
       <nav className="nav" aria-label="Main navigation">
-        {visibleNav.map((item) => {
-          const Icon = item.icon;
+        {overviewItem && (
+          <button key={overviewItem.key} className={activeView === "overview" ? "active" : ""} onClick={() => setActiveView("overview")}>
+            <overviewItem.icon size={18} />
+            <span>{overviewItem.label}</span>
+          </button>
+        )}
+        {navGroups.map((group) => {
+          const visibleItems = group.items.filter(isItemVisible);
+          if (visibleItems.length === 0) return null;
+          const isOpen = openGroups[group.key] ?? false;
+          const hasActiveChild = visibleItems.includes(activeView);
           return (
-            <button key={item.key} className={activeView === item.key ? "active" : ""} onClick={() => setActiveView(item.key)}>
-              <Icon size={18} />
-              <span>{item.label}</span>
-            </button>
+            <div key={group.key} className={`nav-group${isOpen ? " open" : ""}${hasActiveChild ? " has-active" : ""}`}>
+              <button
+                type="button"
+                className="nav-group-header"
+                aria-expanded={isOpen}
+                onClick={() => toggleGroup(group.key)}
+              >
+                <span>{group.label}</span>
+                <ChevronDown size={14} className="nav-chev" />
+              </button>
+              {isOpen && (
+                <div className="nav-group-items">
+                  {visibleItems.map(renderItem)}
+                </div>
+              )}
+            </div>
           );
         })}
+        {settingsItem && (
+          <button key={settingsItem.key} className={`nav-top-divider ${activeView === "settings" ? "active" : ""}`} onClick={() => setActiveView("settings")}>
+            <settingsItem.icon size={18} />
+            <span>{settingsItem.label}</span>
+          </button>
+        )}
       </nav>
       <div className="sidebar-card">
         <span>Portal token</span>
