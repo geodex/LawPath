@@ -787,59 +787,34 @@ app.put("/api/tenant/profile", authMiddleware, async (req, res, next) => {
   }
 });
 
-// Verify the tenant's Fidelity Fund Certificate number against ffc.fidfund.co.za
-// and persist the verdict + an audit-log row. Returns the verdict + snippet so
-// the UI can show what the portal said.
-app.post("/api/tenant-profile/verify-ffc", authMiddleware, async (req, res, next) => {
+// Mark the tenant's FFC as verified after the user has visually confirmed it
+// on ffc.fidfund.co.za. The portal has no public API, so this is a manual
+// attestation; we log who confirmed it and when for the audit trail.
+app.post("/api/tenant-profile/confirm-ffc", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const ffcNumber = String(req.body?.ffcNumber || "").trim();
   if (!ffcNumber) return res.status(400).json({ error: "ffcNumber is required" });
   try {
-    const fidfund = require("./fidfund");
-    let result;
-    let errorMessage = null;
-    try {
-      result = await fidfund.verifyFfcNumber(ffcNumber);
-    } catch (err) {
-      errorMessage = String(err?.message || err).slice(0, 500);
-      result = { status: "unknown", error: errorMessage, portalReachable: false };
-    }
-
-    // Persist the audit log row
     await pool.query(
-      `insert into ffc_verification_log
-        (tenant_id, user_id, ffc_number, status, http_status, detected_field, snippet, error_message)
-       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        req.user.tenantId,
-        req.user.sub,
-        ffcNumber,
-        result.status || "unknown",
-        result.httpStatus || null,
-        result.detectedField || null,
-        (result.snippet || "").slice(0, 2000),
-        errorMessage || result.error || null
-      ]
+      `insert into ffc_verification_log (tenant_id, user_id, ffc_number, status)
+       values ($1, $2, $3, 'valid')`,
+      [req.user.tenantId, req.user.sub, ffcNumber]
     ).catch((e) => console.warn("FFC log insert failed:", e.message));
 
-    // Update tenant profile with the latest verdict
-    await pool.query(
+    const updated = await pool.query(
       `update tenant_profiles
        set ffc_number = $2,
-           ffc_verified_at = case when $3 = 'valid' then now() else ffc_verified_at end,
-           ffc_verification_status = $3,
+           ffc_verified_at = now(),
+           ffc_verification_status = 'valid',
            updated_at = now()
-       where tenant_id = $1`,
-      [req.user.tenantId, ffcNumber, result.status || "unknown"]
+       where tenant_id = $1
+       returning ffc_verified_at`,
+      [req.user.tenantId, ffcNumber]
     );
 
     res.json({
-      status: result.status,
-      portalReachable: result.portalReachable !== false,
-      snippet: result.snippet || null,
-      detectedField: result.detectedField || null,
-      detectedFields: result.detectedFields || null,
-      error: errorMessage || result.error || null
+      status: "valid",
+      verifiedAt: updated.rows[0]?.ffc_verified_at?.toISOString() || new Date().toISOString()
     });
   } catch (error) { next(error); }
 });

@@ -933,41 +933,36 @@ function OnboardingFlow({
 }) {
   const [step, setStep] = useState(profile.onboardingStep || 1);
   const [saving, setSaving] = useState(false);
-  const [ffcVerifying, setFfcVerifying] = useState(false);
-  const [ffcResult, setFfcResult] = useState<import("./types").FfcVerificationResult | null>(null);
+  const [ffcChecked, setFfcChecked] = useState(false);
 
   function update<K extends keyof TenantProfile>(key: K, value: TenantProfile[K]) {
     setProfile((current) => ({ ...current, [key]: value, onboardingStep: step }));
   }
 
-  async function handleVerifyFfc() {
+  function openFidFundPortal() {
     const num = (profile.ffcNumber || "").trim();
     if (!num) {
-      showToast("error", "FFC number missing", "Enter the certificate number before verifying.");
+      showToast("error", "FFC number missing", "Enter the certificate number first.");
       return;
     }
-    setFfcVerifying(true);
-    setFfcResult(null);
+    window.open("https://ffc.fidfund.co.za/verification/", "_blank", "noopener,noreferrer");
+    setFfcChecked(true);
+  }
+
+  async function confirmFfcVerified() {
+    const num = (profile.ffcNumber || "").trim();
+    if (!num) return;
     try {
-      const { verifyFfcNumber } = await import("./api");
-      const result = await verifyFfcNumber(num);
-      setFfcResult(result);
+      const { confirmFfcVerification } = await import("./api");
+      await confirmFfcVerification(num);
       setProfile((current) => ({
         ...current,
-        ffcVerificationStatus: result.status,
-        ffcVerifiedAt: result.status === "valid" ? new Date().toISOString() : current.ffcVerifiedAt || null
+        ffcVerificationStatus: "valid",
+        ffcVerifiedAt: new Date().toISOString()
       }));
-      const labels: Record<string, [Toast["type"], string]> = {
-        valid:   ["success", "FFC verified"],
-        invalid: ["error",   "FFC could not be verified"],
-        unknown: ["info",    "Verification result unclear"]
-      };
-      const [type, title] = labels[result.status] || ["info", "Verification result"];
-      showToast(type, title, result.snippet ? result.snippet.slice(0, 200) : (result.error || "See the snippet in the verification log."));
+      showToast("success", "FFC marked as verified", "Verification timestamped against your firm profile.");
     } catch (err) {
-      showToast("error", "Verification failed", err instanceof Error ? err.message : "Could not reach the FidFund portal.");
-    } finally {
-      setFfcVerifying(false);
+      showToast("error", "Could not save verification", err instanceof Error ? err.message : "Try again.");
     }
   }
 
@@ -1043,18 +1038,23 @@ function OnboardingFlow({
             <label>LPC practice / firm number<input value={profile.lpcRegistrationNumber} onChange={(event) => update("lpcRegistrationNumber", event.target.value)} placeholder="Legal Practice Council registration" /></label>
             <label>
               Fidelity Fund Certificate number
-              <input value={profile.ffcNumber || ""} onChange={(event) => update("ffcNumber", event.target.value)} placeholder="e.g. FFC/2026/12345" />
+              <input value={profile.ffcNumber || ""} onChange={(event) => { update("ffcNumber", event.target.value); setFfcChecked(false); }} placeholder="e.g. FFC/2026/12345" />
               <div className="ffc-verify-row">
-                <button type="button" className="ghost small" disabled={ffcVerifying || !(profile.ffcNumber || "").trim()} onClick={handleVerifyFfc}>
-                  <ShieldCheck size={14} /> {ffcVerifying ? "Verifying…" : "Verify with FidFund"}
+                <button type="button" className="ghost small" disabled={!(profile.ffcNumber || "").trim()} onClick={openFidFundPortal}>
+                  <ShieldCheck size={14} /> Open FidFund portal
                 </button>
+                {ffcChecked && profile.ffcVerificationStatus !== "valid" && (
+                  <button type="button" className="primary small" onClick={confirmFfcVerified}>
+                    Mark as verified
+                  </button>
+                )}
                 {profile.ffcVerificationStatus && (
                   <span className={`pill ffc-${profile.ffcVerificationStatus}`}>{profile.ffcVerificationStatus}</span>
                 )}
               </div>
-              {ffcResult?.snippet && (
-                <small className="muted ffc-snippet">{ffcResult.snippet.slice(0, 240)}</small>
-              )}
+              <small className="muted ffc-help">
+                Check the certificate at ffc.fidfund.co.za, then click "Mark as verified" to timestamp it against your firm.
+              </small>
             </label>
             <label>FFC year<input type="number" min="2000" max="2099" value={profile.ffcYear || ""} onChange={(event) => update("ffcYear", event.target.value ? Number(event.target.value) : null)} placeholder="2026" /></label>
             <label>Company registration number<input value={profile.companyRegistrationNumber} onChange={(event) => update("companyRegistrationNumber", event.target.value)} placeholder="If incorporated" /></label>

@@ -112,8 +112,8 @@ export async function saveTenantProfile(profile: TenantProfile) {
   });
 }
 
-export async function verifyFfcNumber(ffcNumber: string) {
-  return request<import("./types").FfcVerificationResult>("/api/tenant-profile/verify-ffc", {
+export async function confirmFfcVerification(ffcNumber: string) {
+  return request<{ status: "valid"; verifiedAt: string }>("/api/tenant-profile/confirm-ffc", {
     method: "POST",
     body: JSON.stringify({ ffcNumber })
   });

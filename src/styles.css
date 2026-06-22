@@ -1076,6 +1076,22 @@ h3 {
   border-color: var(--tint-18);
 }
 
+/* When .primary and .small are combined, the orange-gradient styling must
+   beat the ghost-style .small rules above. Without this, "primary small"
+   buttons render as invisible ghost buttons against panel backgrounds. */
+.primary.small {
+  background: linear-gradient(160deg, #d97706 0%, #b45309 100%);
+  color: #ffffff;
+  border: 1px solid rgba(0,0,0,0.15);
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.30), 0 4px 16px rgba(217,119,6,0.25), inset 0 1px 0 rgba(255,255,255,0.12);
+}
+
+.primary.small:hover {
+  background: linear-gradient(160deg, #f59e0b 0%, #d97706 100%);
+  border-color: rgba(0,0,0,0.15);
+}
+
 /* ─── Toast Notifications ────────────────────────────────────────────────── */
 
 .toast-stack {
@@ -5945,6 +5961,13 @@ select {
   border-left: 3px solid var(--gold);
   border-radius: 4px;
   font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.ffc-help {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.74rem;
   line-height: 1.4;
 }
 

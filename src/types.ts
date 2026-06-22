@@ -163,14 +163,6 @@ export type TenantProfile = {
   ffcVerificationStatus?: "valid" | "invalid" | "unknown" | "pending" | null;
 };
 
-export type FfcVerificationResult = {
-  status: "valid" | "invalid" | "unknown";
-  portalReachable: boolean;
-  snippet: string | null;
-  detectedField: string | null;
-  detectedFields: string[] | null;
-  error: string | null;
-};
 
 export type AiFeature = "ai-chat" | "document-intelligence" | "research-summaries";
 
