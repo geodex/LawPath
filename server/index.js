@@ -4360,7 +4360,7 @@ app.post("/api/clients", authMiddleware, async (req, res, next) => {
         postal_same_as_physical,postal_line1,postal_line2,postal_suburb,postal_city,postal_province,postal_code_post,
         fica_status,risk_rating,is_pep,pep_details,source_of_funds,source_of_wealth,nature_of_business,
         conflicts_checked,conflicts_notes,default_rate_cents,billing_email,payment_terms_days,credit_limit_cents,
-        relationship_partner,originating_attorney,client_since,referral_source,client_category,tags,
+        relationship_partner,originating_attorney,client_since,referral_source,tags,
         portal_email,portal_active,internal_notes)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,
                $25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,
@@ -4376,7 +4376,7 @@ app.post("/api/clients", authMiddleware, async (req, res, next) => {
        b.postalSameAsPhysical !== false, b.postalLine1||null, b.postalLine2||null, b.postalSuburb||null, b.postalCity||null, b.postalProvince||null, b.postalCodePost||null,
        b.ficaStatus||'pending', b.riskRating||'unrated', b.isPep||false, b.pepDetails||null, b.sourceOfFunds||null, b.sourceOfWealth||null, b.natureOfBusiness||null,
        b.conflictsChecked||false, b.conflictsNotes||null, b.defaultRateCents||0, b.billingEmail||null, b.paymentTermsDays||30, b.creditLimitCents||0,
-       b.relationshipPartner||null, b.originatingAttorney||null, b.clientSince||null, b.referralSource||null, b.clientCategory||'standard', b.tags||[],
+       b.relationshipPartner||null, b.originatingAttorney||null, b.clientSince||null, b.referralSource||null, b.tags||[],
        b.portalEmail||null, b.portalActive||false, b.internalNotes||null]
     );
     res.status(201).json({ client: clientRowToJson(row.rows[0]) });

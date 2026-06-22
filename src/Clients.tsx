@@ -151,20 +151,25 @@ export function Clients({ showToast, log }: {
     if (!d.fullName?.trim()) { showToast("error", "Name required", "Enter the client's full name."); return; }
     if (d.clientType === "natural_person" && !d.firstName?.trim()) { showToast("error", "First name required", "Enter first name."); return; }
     setCreating(true);
-    const res = await createClient(d);
-    setCreating(false);
-    if (res?.client) {
-      setClients(prev => [res.client, ...prev]);
-      setTotal(t => t + 1);
-      setShowCreate(false);
-      setCreateDraft({ ...EMPTY_CLIENT });
-      setCreateStep(0);
-      log(`Created client: ${res.client.fullName}`);
-      showToast("success", "Client added", res.client.fullName);
-      setSelected(res.client);
-      setDetailTab("profile");
-    } else {
-      showToast("error", "Failed", "Could not create client.");
+    try {
+      const res = await createClient(d);
+      if (res?.client) {
+        setClients(prev => [res.client, ...prev]);
+        setTotal(t => t + 1);
+        setShowCreate(false);
+        setCreateDraft({ ...EMPTY_CLIENT });
+        setCreateStep(0);
+        log(`Created client: ${res.client.fullName}`);
+        showToast("success", "Client added", res.client.fullName);
+        setSelected(res.client);
+        setDetailTab("profile");
+      } else {
+        showToast("error", "Failed", "Could not create client.");
+      }
+    } catch (err) {
+      showToast("error", "Could not create client", err instanceof Error ? err.message : "Server rejected the request.");
+    } finally {
+      setCreating(false);
     }
   }
 
