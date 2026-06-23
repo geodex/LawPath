@@ -6,7 +6,7 @@ import type { TenantOverviewRow, TenantsOverviewTotals } from "./types";
 type SortKey =
   | "company_name" | "plan" | "user_count" | "matter_count"
   | "ai_calls_30d" | "lightstone_calls_30d" | "verifynow_credits_30d"
-  | "last_activity_at" | "created_at";
+  | "searchworks_calls_30d" | "last_activity_at" | "created_at";
 
 const planClass = (plan: string | null) => {
   const p = (plan || "trial").toLowerCase();
@@ -140,7 +140,12 @@ export function SuperTenants({ log, showToast }: Props) {
         <article className="metric">
           <h3>VerifyNow (30d)</h3>
           <strong>{fmtNum(totals?.verifynow_calls_30d)}</strong>
-          <small>Searchwork360 ID/CIPC/AML</small>
+          <small>ID/CIPC/AML checks</small>
+        </article>
+        <article className="metric">
+          <h3>SearchWorks (30d)</h3>
+          <strong>{fmtNum(totals?.searchworks_calls_30d)}</strong>
+          <small>Deeds + DOTS tracking</small>
         </article>
       </section>
 
@@ -177,13 +182,14 @@ export function SuperTenants({ log, showToast }: Props) {
                     <th onClick={() => toggleSort("ai_calls_30d")} style={{ cursor: "pointer", textAlign: "right" }}>AI 30d{sortIndicator("ai_calls_30d")}</th>
                     <th onClick={() => toggleSort("lightstone_calls_30d")} style={{ cursor: "pointer", textAlign: "right" }}>Lightstone 30d{sortIndicator("lightstone_calls_30d")}</th>
                     <th onClick={() => toggleSort("verifynow_credits_30d")} style={{ cursor: "pointer", textAlign: "right" }}>VerifyNow 30d{sortIndicator("verifynow_credits_30d")}</th>
+                    <th onClick={() => toggleSort("searchworks_calls_30d")} style={{ cursor: "pointer", textAlign: "right" }}>SearchWorks 30d{sortIndicator("searchworks_calls_30d")}</th>
                     <th onClick={() => toggleSort("last_activity_at")} style={{ cursor: "pointer" }}>Last activity{sortIndicator("last_activity_at")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedRows.map((r) => {
                     const isExpanded = expandedId === r.id;
-                    const hasErrors = r.ai_errors_30d > 0 || r.lightstone_errors_30d > 0 || r.verifynow_errors_30d > 0;
+                    const hasErrors = r.ai_errors_30d > 0 || r.lightstone_errors_30d > 0 || r.verifynow_errors_30d > 0 || r.searchworks_errors_30d > 0;
                     return (
                       <>
                         <tr key={r.id} onClick={() => setExpandedId(isExpanded ? null : r.id)} style={{ cursor: "pointer" }}>
@@ -206,6 +212,10 @@ export function SuperTenants({ log, showToast }: Props) {
                             {fmtNum(r.verifynow_calls_30d)}
                             {r.verifynow_credits_30d > 0 && <small className="muted" style={{ marginLeft: 6 }}>({fmtNum(r.verifynow_credits_30d)} cr)</small>}
                           </td>
+                          <td style={{ textAlign: "right" }}>
+                            {fmtNum(r.searchworks_calls_30d)}
+                            {r.searchworks_credits_30d > 0 && <small className="muted" style={{ marginLeft: 6 }}>(R{(r.searchworks_credits_30d / 100).toLocaleString("en-ZA", { maximumFractionDigits: 0 })})</small>}
+                          </td>
                           <td>
                             <small>{fmtRelative(r.last_activity_at)}</small>
                             {hasErrors && <AlertTriangle size={14} style={{ color: "var(--rose)", marginLeft: 6, verticalAlign: "middle" }} />}
@@ -213,7 +223,7 @@ export function SuperTenants({ log, showToast }: Props) {
                         </tr>
                         {isExpanded && (
                           <tr className="row-detail">
-                            <td colSpan={9}>
+                            <td colSpan={10}>
                               <div className="tenant-detail-grid">
                                 <div>
                                   <strong>Account</strong>
@@ -238,6 +248,7 @@ export function SuperTenants({ log, showToast }: Props) {
                                   <dl>
                                     <dt>Lightstone (30d)</dt><dd>{fmtNum(r.lightstone_calls_30d)} calls, {fmtNum(r.lightstone_errors_30d)} errors</dd>
                                     <dt>VerifyNow (30d)</dt><dd>{fmtNum(r.verifynow_calls_30d)} calls, {fmtNum(r.verifynow_credits_30d)} credits, {fmtNum(r.verifynow_errors_30d)} errors</dd>
+                                    <dt>SearchWorks (30d)</dt><dd>{fmtNum(r.searchworks_calls_30d)} calls, R{(r.searchworks_credits_30d / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}, {fmtNum(r.searchworks_errors_30d)} errors</dd>
                                   </dl>
                                 </div>
                                 <div>

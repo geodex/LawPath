@@ -269,7 +269,8 @@ export function App() {
     grokModel: "grok-4.3",
     grokFeatures: [],
     verifyNowApiKey: "",
-    lightstoneApiKey: ""
+    lightstoneApiKey: "",
+    searchworksApiKey: ""
   });
   const [ragSources, setRagSources] = useState<RagSource[]>([]);
   const [assistantTraining, setAssistantTraining] = useState<AssistantTrainingSettings>({
@@ -3512,7 +3513,27 @@ function AdminSettings({
                 One key covers all three Lightstone products (Property-Search, Property-Search-Internal, Property-Data). Requires a Standard or higher subscription.
               </p>
             </article>
-            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: 4 }}>Windeed requires <code>WINDEED_API_KEY</code> in <code>.env</code>. Both providers need a commercial subscription.</p>
+            <article className="integration-card" style={{ gridColumn: "1 / -1" }}>
+              <div className="integration-head">
+                <Building2 size={20} />
+                <div>
+                  <strong>SearchWorks (Deeds + DOTS)</strong>
+                  <span>Deeds Office search, property history, document retrieval (T/B/BC/ST), and DOTS tracking with email alerts. <a href="https://www.searchworks.co.za" target="_blank" rel="noreferrer" style={{ color: "var(--green)" }}>Portal ↗</a></span>
+                </div>
+              </div>
+              <label>API key
+                <input
+                  type="password"
+                  value={apiSettings.searchworksApiKey}
+                  onChange={(e) => updateApi("searchworksApiKey", e.target.value)}
+                  placeholder="Bearer token from SearchWorks onboarding"
+                />
+              </label>
+              <p style={{ margin: "8px 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>
+                Single key covers all SearchWorks services. Once SearchWorks supplies the spec, confirm the auth scheme matches (Bearer is the default placeholder in <code>server/searchworks.js</code>).
+              </p>
+            </article>
+            <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: 4 }}>Windeed requires <code>WINDEED_API_KEY</code> in <code>.env</code>. All deeds providers need a commercial subscription.</p>
           </div>
         </Panel>
       </section>

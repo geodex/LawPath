@@ -10,7 +10,8 @@ const { authMiddleware, signToken } = require("./auth");
 const { sendTransactionalEmail } = require("./mailer");
 const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText, downloadText } = require("./gcs");
 const verifynow  = require("./verifynow");
-const lightstone = require("./lightstone");
+const lightstone  = require("./lightstone");
+const searchworks = require("./searchworks");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -166,7 +167,8 @@ function apiSettingsFromRows(rows) {
     grokModel: byProvider.grok?.default_model || "grok-4.3",
     grokFeatures: byProvider.grok?.features || [],
     verifyNowApiKey: byProvider.verifynow?.api_key_secret_ref || "",
-    lightstoneApiKey: byProvider.lightstone?.api_key_secret_ref || ""
+    lightstoneApiKey: byProvider.lightstone?.api_key_secret_ref || "",
+    searchworksApiKey: byProvider.searchworks?.api_key_secret_ref || ""
   };
 }
 
@@ -917,7 +919,8 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
     ["gemini", settings.geminiApiKey || "", settings.geminiModel || "gemini-3.5-flash", null, settings.geminiFeatures || []],
     ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4.3", null, settings.grokFeatures || []],
     ["verifynow",    settings.verifyNowApiKey    || "", null, null, []],
-    ["lightstone",   settings.lightstoneApiKey   || "", null, null, []]
+    ["lightstone",   settings.lightstoneApiKey   || "", null, null, []],
+    ["searchworks",  settings.searchworksApiKey  || "", null, null, []]
   ];
 
   try {
@@ -3991,6 +3994,73 @@ app.get("/api/admin/lightstone/usage", authMiddleware, async (req, res, next) =>
   } catch (err) { next(err); }
 });
 
+// ─── SEARCHWORKS — deeds data, document retrieval, DOTS tracking ────────────
+
+// Tenant-facing proxy. Service must be on the allowlist defined in searchworks.js.
+app.post("/api/searchworks/:service", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const service = req.params.service;
+  const handler = searchworks.SERVICE_HANDLERS[service];
+  if (!handler) return res.status(400).json({ error: `Unknown SearchWorks service: ${service}` });
+  try {
+    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub };
+    const data = await handler(req.body || {}, ctx);
+    res.json(data);
+  } catch (err) {
+    if (err.expose) return res.status(err.statusCode || 500).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Super-admin usage overview.
+app.get("/api/admin/searchworks/usage", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  try {
+    const [totals, byService, byTenant, recent] = await Promise.all([
+      pool.query(`
+        select
+          count(*)::int                                    as total_calls,
+          coalesce(sum(credits_spent), 0)::bigint          as total_credits,
+          coalesce(sum(credits_spent) filter (where created_at >= now() - interval '30 days'), 0)::bigint as credits_30d,
+          coalesce(sum(credits_spent) filter (where created_at >= now() - interval '7 days'),  0)::bigint as credits_7d,
+          coalesce(sum(credits_spent) filter (where created_at >= date_trunc('day', now())),   0)::bigint as credits_today,
+          count(*) filter (where status='error')::int      as error_calls,
+          round(avg(latency_ms))                           as avg_latency_ms
+        from searchworks_usage_log`),
+      pool.query(`
+        select service,
+               count(*)::int                            as calls,
+               coalesce(sum(credits_spent), 0)::bigint  as credits,
+               count(*) filter (where status='error')::int as errors
+        from searchworks_usage_log
+        group by service
+        order by credits desc`),
+      pool.query(`
+        select t.company_name as tenant_name, s.tenant_id,
+               count(*)::int                            as calls,
+               coalesce(sum(s.credits_spent), 0)::bigint as credits
+        from searchworks_usage_log s
+        left join tenants t on t.id = s.tenant_id
+        where s.created_at >= now() - interval '30 days'
+        group by s.tenant_id, t.company_name
+        order by credits desc
+        limit 20`),
+      pool.query(`
+        select s.*, t.company_name as tenant_name
+        from searchworks_usage_log s
+        left join tenants t on t.id = s.tenant_id
+        order by s.created_at desc
+        limit 50`)
+    ]);
+    res.json({
+      totals: totals.rows[0],
+      byService: byService.rows,
+      byTenant: byTenant.rows,
+      recentLog: recent.rows
+    });
+  } catch (err) { next(err); }
+});
+
 // ─── SUPER-ADMIN: TENANTS OVERVIEW ─────────────────────────────────────────
 // Returns one row per tenant with aggregated usage across AI, Lightstone,
 // VerifyNow (Searchwork360) and Yoco subscription status.
@@ -4027,6 +4097,15 @@ app.get("/api/admin/tenants/overview", authMiddleware, async (req, res, next) =>
         where created_at >= now() - interval '30 days'
         group by tenant_id
       ),
+      sw_30d as (
+        select tenant_id,
+               count(*)::int as sw_calls_30d,
+               coalesce(sum(credits_spent),0)::int as sw_credits_30d,
+               count(*) filter (where status='error')::int as sw_errors_30d
+        from searchworks_usage_log
+        where created_at >= now() - interval '30 days'
+        group by tenant_id
+      ),
       user_count as (
         select tenant_id, count(*)::int as user_count
         from users
@@ -4055,12 +4134,16 @@ app.get("/api/admin/tenants/overview", authMiddleware, async (req, res, next) =>
         coalesce(ls30.ls_errors_30d, 0)       as lightstone_errors_30d,
         coalesce(vn30.vn_calls_30d, 0)        as verifynow_calls_30d,
         coalesce(vn30.vn_credits_30d, 0)      as verifynow_credits_30d,
-        coalesce(vn30.vn_errors_30d, 0)       as verifynow_errors_30d
+        coalesce(vn30.vn_errors_30d, 0)       as verifynow_errors_30d,
+        coalesce(sw30.sw_calls_30d, 0)        as searchworks_calls_30d,
+        coalesce(sw30.sw_credits_30d, 0)      as searchworks_credits_30d,
+        coalesce(sw30.sw_errors_30d, 0)       as searchworks_errors_30d
       from tenants t
       left join ai_30d   ai30 on ai30.tenant_id = t.id
       left join ai_total ait  on ait.tenant_id  = t.id
       left join ls_30d   ls30 on ls30.tenant_id = t.id
       left join vn_30d   vn30 on vn30.tenant_id = t.id
+      left join sw_30d   sw30 on sw30.tenant_id = t.id
       left join user_count   uc on uc.tenant_id = t.id
       left join matter_count mc on mc.tenant_id = t.id
       order by t.created_at desc
@@ -4073,19 +4156,22 @@ app.get("/api/admin/tenants/overview", authMiddleware, async (req, res, next) =>
           (select count(*)::int from tenants where status='trial')         as trial_tenants,
           (select count(*)::int from ai_usage_log where created_at >= now() - interval '30 days') as ai_calls_30d,
           (select count(*)::int from lightstone_usage_log where created_at >= now() - interval '30 days') as lightstone_calls_30d,
-          (select count(*)::int from verifynow_usage_log where created_at >= now() - interval '30 days') as verifynow_calls_30d
+          (select count(*)::int from verifynow_usage_log where created_at >= now() - interval '30 days') as verifynow_calls_30d,
+          (select count(*)::int from searchworks_usage_log where created_at >= now() - interval '30 days') as searchworks_calls_30d
       `),
       pool.query(`
         select t.id as tenant_id,
                greatest(
                  coalesce(max(a.created_at), 'epoch'::timestamptz),
                  coalesce(max(l.created_at), 'epoch'::timestamptz),
-                 coalesce(max(v.created_at), 'epoch'::timestamptz)
+                 coalesce(max(v.created_at), 'epoch'::timestamptz),
+                 coalesce(max(s.created_at), 'epoch'::timestamptz)
                ) as last_activity
         from tenants t
-        left join ai_usage_log a         on a.tenant_id = t.id
-        left join lightstone_usage_log l on l.tenant_id = t.id
-        left join verifynow_usage_log v  on v.tenant_id = t.id
+        left join ai_usage_log a          on a.tenant_id = t.id
+        left join lightstone_usage_log l  on l.tenant_id = t.id
+        left join verifynow_usage_log v   on v.tenant_id = t.id
+        left join searchworks_usage_log s on s.tenant_id = t.id
         group by t.id
       `)
     ]);

@@ -180,6 +180,7 @@ export type ApiProviderSettings = {
   grokFeatures: AiFeature[];
   verifyNowApiKey: string;
   lightstoneApiKey: string;
+  searchworksApiKey: string;
 };
 
 export type VerifyNowUsageTotals = {
@@ -241,6 +242,9 @@ export type TenantOverviewRow = {
   verifynow_calls_30d: number;
   verifynow_credits_30d: number;
   verifynow_errors_30d: number;
+  searchworks_calls_30d: number;
+  searchworks_credits_30d: number;
+  searchworks_errors_30d: number;
   last_activity_at: string | null;
 };
 
@@ -251,6 +255,7 @@ export type TenantsOverviewTotals = {
   ai_calls_30d: number;
   lightstone_calls_30d: number;
   verifynow_calls_30d: number;
+  searchworks_calls_30d: number;
 };
 
 export type RagSource = {

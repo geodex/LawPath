@@ -661,6 +661,42 @@ export async function getTenantsOverview() {
   }>("/api/admin/tenants/overview");
 }
 
+export async function searchworksCall<T = unknown>(service: string, body: unknown) {
+  return request<T>(`/api/searchworks/${service}`, {
+    method: "POST",
+    body: JSON.stringify(body || {})
+  });
+}
+
+export async function getSearchworksUsage() {
+  return request<{
+    totals: {
+      total_calls: number;
+      total_credits: number;
+      credits_30d: number;
+      credits_7d: number;
+      credits_today: number;
+      error_calls: number;
+      avg_latency_ms: number | null;
+    };
+    byService: { service: string; calls: number; credits: number; errors: number }[];
+    byTenant: { tenant_id: string; tenant_name: string | null; calls: number; credits: number }[];
+    recentLog: {
+      id: number;
+      tenant_id: string | null;
+      tenant_name: string | null;
+      service: string;
+      input_ref: string | null;
+      credits_spent: number;
+      latency_ms: number | null;
+      status: "success" | "error";
+      error_code: string | null;
+      result_count: number | null;
+      created_at: string;
+    }[];
+  }>("/api/admin/searchworks/usage");
+}
+
 export async function getVerifyNowLog(params?: { limit?: number; offset?: number; service?: string }) {
   const qs = new URLSearchParams();
   if (params?.limit)   qs.set("limit",   String(params.limit));
