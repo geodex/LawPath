@@ -180,7 +180,8 @@ export type ApiProviderSettings = {
   grokFeatures: AiFeature[];
   verifyNowApiKey: string;
   lightstoneApiKey: string;
-  searchworksApiKey: string;
+  searchworksUsername: string;
+  searchworksPassword: string;
 };
 
 export type VerifyNowUsageTotals = {

@@ -270,7 +270,8 @@ export function App() {
     grokFeatures: [],
     verifyNowApiKey: "",
     lightstoneApiKey: "",
-    searchworksApiKey: ""
+    searchworksUsername: "",
+    searchworksPassword: ""
   });
   const [ragSources, setRagSources] = useState<RagSource[]>([]);
   const [assistantTraining, setAssistantTraining] = useState<AssistantTrainingSettings>({
@@ -3518,19 +3519,29 @@ function AdminSettings({
                 <Building2 size={20} />
                 <div>
                   <strong>SearchWorks (Deeds + DOTS)</strong>
-                  <span>Deeds Office search, property history, document retrieval (T/B/BC/ST), and DOTS tracking with email alerts. <a href="https://www.searchworks.co.za" target="_blank" rel="noreferrer" style={{ color: "var(--green)" }}>Portal ↗</a></span>
+                  <span>Deeds Office search, property history, document retrieval (T/B/BC/ST), and DOTS tracking. Session-based auth — server logs in with these credentials and caches the SessionToken in memory. <a href="https://doccentral.searchworks.co.za" target="_blank" rel="noreferrer" style={{ color: "var(--green)" }}>Docs ↗</a></span>
                 </div>
               </div>
-              <label>API key
+              <label>Username
+                <input
+                  type="text"
+                  autoComplete="off"
+                  value={apiSettings.searchworksUsername}
+                  onChange={(e) => updateApi("searchworksUsername", e.target.value)}
+                  placeholder="e.g. uatapi@yourdomain.co.za"
+                />
+              </label>
+              <label>Password
                 <input
                   type="password"
-                  value={apiSettings.searchworksApiKey}
-                  onChange={(e) => updateApi("searchworksApiKey", e.target.value)}
-                  placeholder="Bearer token from SearchWorks onboarding"
+                  autoComplete="new-password"
+                  value={apiSettings.searchworksPassword}
+                  onChange={(e) => updateApi("searchworksPassword", e.target.value)}
+                  placeholder="SearchWorks account password"
                 />
               </label>
               <p style={{ margin: "8px 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>
-                Single key covers all SearchWorks services. Once SearchWorks supplies the spec, confirm the auth scheme matches (Bearer is the default placeholder in <code>server/searchworks.js</code>).
+                Base URL defaults to UAT (<code>uatrest.searchworks.co.za</code>). Override per environment with <code>SEARCHWORKS_BASE_URL</code> in the server <code>.env</code>.
               </p>
             </article>
             <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: 4 }}>Windeed requires <code>WINDEED_API_KEY</code> in <code>.env</code>. All deeds providers need a commercial subscription.</p>

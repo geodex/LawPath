@@ -168,7 +168,14 @@ function apiSettingsFromRows(rows) {
     grokFeatures: byProvider.grok?.features || [],
     verifyNowApiKey: byProvider.verifynow?.api_key_secret_ref || "",
     lightstoneApiKey: byProvider.lightstone?.api_key_secret_ref || "",
-    searchworksApiKey: byProvider.searchworks?.api_key_secret_ref || ""
+    ...(() => {
+      const raw = byProvider.searchworks?.api_key_secret_ref || "";
+      let username = "", password = "";
+      if (raw.startsWith("{")) {
+        try { const p = JSON.parse(raw); username = p.username || ""; password = p.password || ""; } catch { /* ignore */ }
+      }
+      return { searchworksUsername: username, searchworksPassword: password };
+    })()
   };
 }
 
@@ -920,7 +927,11 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
     ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4.3", null, settings.grokFeatures || []],
     ["verifynow",    settings.verifyNowApiKey    || "", null, null, []],
     ["lightstone",   settings.lightstoneApiKey   || "", null, null, []],
-    ["searchworks",  settings.searchworksApiKey  || "", null, null, []]
+    ["searchworks",
+      (settings.searchworksUsername || settings.searchworksPassword)
+        ? JSON.stringify({ username: settings.searchworksUsername || "", password: settings.searchworksPassword || "" })
+        : "",
+      null, null, []]
   ];
 
   try {

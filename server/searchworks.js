@@ -1,67 +1,83 @@
 // server/searchworks.js
 // SearchWorks (searchworks.co.za) Deeds Office data + DOTS tracking wrapper.
 //
-// SCAFFOLD — base URL, auth header, and request/response shapes are PLACEHOLDERS
-// to be replaced once SearchWorks supplies the onboarding pack. The public
-// surface (function signatures, usage logging, error handling) is stable; only
-// the inner HTTPS plumbing should change.
+// Auth pattern (confirmed from doccentral.searchworks.co.za):
+//   POST /auth/login/  body: {Username, Password}    → returns SessionToken
+//   Every API call POSTs JSON with SessionToken IN THE BODY (not a header).
+//   POST /auth/logout/ body: {SessionToken}
+//   POST /auth/validatetoken/ body: {SessionToken}
 //
-// Spec checklist to confirm with SearchWorks before going live:
-//   [ ] Production base URL                  → set SEARCHWORKS_BASE_URL
-//   [ ] Sandbox/UAT base URL (if any)        → set SEARCHWORKS_SANDBOX_URL
-//   [ ] Auth scheme (Bearer / API-Key / OAuth) → adjust authHeader()
-//   [ ] Endpoint paths for each service       → swap PATHS map
-//   [ ] Request body / query-param shape      → adjust each method's params
-//   [ ] Response JSON keys (results, meta)    → adjust result parsing
-//   [ ] Error envelope (code/message/details) → adjust error handling
-//   [ ] Per-call metered cost (cents)         → set CREDIT_COST or read from response
-//   [ ] Balance/credits endpoint (if any)     → implement getBalance()
+// Spec checklist still to confirm:
+//   [x] Auth scheme — session token in body (confirmed)
+//   [x] UAT base URL — uatrest.searchworks.co.za (confirmed)
+//   [ ] Production base URL — likely rest.searchworks.co.za, confirm with SearchWorks
+//   [x] /commtest/, /auth/*, /billingreports/*, /deedsoffice/crossdeeds/person/
+//   [ ] Deeds search by property/erf/title-deed paths
+//   [ ] Property history paths
+//   [ ] Document retrieval paths
+//   [ ] DOTS tracking + alert paths
+//   [ ] Per-call ZAR cost from SearchWorks pricing schedule
 //
-// Auth: stored in platform_api_provider_settings (provider = 'searchworks')
-// via Super Admin → Settings → API Keys, or SEARCHWORKS_API_KEY in .env.
+// Credentials are stored in platform_api_provider_settings.api_key_secret_ref
+// as JSON: {"username":"...","password":"..."} — set via Super Admin Settings UI.
 
 require("dotenv").config();
 const https = require("https");
 const { pool } = require("./db");
 
-// ─── Configuration (override via env when spec lands) ────────────────────────
+// ─── Configuration ──────────────────────────────────────────────────────────
 
-const BASE_URL = process.env.SEARCHWORKS_BASE_URL || "https://api.searchworks.co.za/v1";
+const BASE_URL = process.env.SEARCHWORKS_BASE_URL || "https://uatrest.searchworks.co.za";
 
-// Placeholder paths — swap to actual once spec is in.
+// Endpoint paths (all SearchWorks paths end with a trailing slash).
 const PATHS = {
-  "deeds-search":         "/deeds/search",
-  "property-history":     "/property/history",
-  "document-retrieval":   "/documents/retrieve",
-  "dots-track":           "/dots/track",
-  "dots-alert-subscribe": "/dots/alerts/subscribe",
-  "property-info":        "/property/info"
+  // Auth
+  "login":            "/auth/login/",
+  "logout":           "/auth/logout/",
+  "validate-token":   "/auth/validatetoken/",
+  "search-limit":     "/auth/GetSearchLimitDetails/",
+  // Diagnostic
+  "commtest":         "/commtest/",
+  // Billing reports
+  "billing-branch":   "/billingreports/branch/",
+  "billing-company":  "/billingreports/company/",
+  // Deeds Office searches
+  "deeds-cross-person": "/deedsoffice/crossdeeds/person/"
+  // TODO: add the remaining deeds, property history, document retrieval,
+  // DOTS track, and DOTS alert paths once confirmed from doccentral docs.
 };
 
-// Per-service Rand-cent cost (rough estimate vs WinDeed pricing).
-// Replace with values from the SearchWorks pricing schedule.
+// Per-service Rand-cent cost (placeholder — replace with real pricing schedule).
 const CREDIT_COST = {
-  "deeds-search":         2567,   // R25.67
-  "property-history":     2567,
-  "document-retrieval":   5000,
-  "dots-track":           2567,
-  "dots-alert-subscribe": 25785,  // R257.85 (30-day auto-renew tier)
-  "property-info":        2000
+  "commtest":            0,
+  "billing-branch":      0,
+  "billing-company":     0,
+  "deeds-cross-person":  2567,    // R25.67 (WinDeed comparable)
+  "deeds-search":        2567,
+  "property-history":    2567,
+  "document-retrieval":  5000,
+  "dots-track":          2567,
+  "dots-alert-subscribe": 25785,  // R257.85 30-day auto-renew
+  "property-info":       2000
 };
 
-// ─── HTTPS helpers (Node built-in, same pattern as server/lightstone.js) ────
+// ─── HTTPS helper ───────────────────────────────────────────────────────────
 
-function httpsRequest({ method, url, headers, body, timeoutMs = 15000 }) {
+function httpsPost(url, jsonBody, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
-    const options = {
+    const body = JSON.stringify(jsonBody || {});
+    const req = https.request({
       hostname: u.hostname,
-      port:     u.port || 443,
-      path:     u.pathname + u.search,
-      method,
-      headers
-    };
-    const req = https.request(options, (res) => {
+      port: u.port || 443,
+      path: u.pathname + u.search,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Content-Length": Buffer.byteLength(body)
+      }
+    }, (res) => {
       let raw = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => { raw += chunk; });
@@ -73,37 +89,83 @@ function httpsRequest({ method, url, headers, body, timeoutMs = 15000 }) {
     });
     req.on("error", reject);
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`SearchWorks request timed out after ${timeoutMs}ms`)));
-    if (body) req.write(typeof body === "string" ? body : JSON.stringify(body));
+    req.write(body);
     req.end();
   });
 }
 
-// ─── Auth + DB ────────────────────────────────────────────────────────────────
+// ─── Credentials + session token cache ──────────────────────────────────────
 
-async function getApiKey() {
+async function getCredentials() {
   const result = await pool.query(
     "select api_key_secret_ref from platform_api_provider_settings where provider = 'searchworks' and active = true limit 1"
   );
-  const dbKey = result.rows[0]?.api_key_secret_ref;
-  const key   = (dbKey && dbKey.trim()) ? dbKey.trim() : (process.env.SEARCHWORKS_API_KEY || "").trim();
-  if (!key) {
+  const raw = (result.rows[0]?.api_key_secret_ref || "").trim();
+  let username = "";
+  let password = "";
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw);
+      username = (parsed.username || "").trim();
+      password = (parsed.password || "").trim();
+    } catch { /* fall through to env */ }
+  }
+  if (!username) username = (process.env.SEARCHWORKS_USERNAME || "").trim();
+  if (!password) password = (process.env.SEARCHWORKS_PASSWORD || "").trim();
+  if (!username || !password) {
     const err = new Error(
-      "SearchWorks API key not configured. " +
-      "Add your key in Super Admin → Settings → API Keys (provider: searchworks), " +
-      "or set SEARCHWORKS_API_KEY in .env."
+      "SearchWorks credentials not configured. " +
+      "Add Username + Password in Super Admin → Settings → API Keys (provider: searchworks), " +
+      "or set SEARCHWORKS_USERNAME and SEARCHWORKS_PASSWORD in .env."
     );
     err.statusCode = 503;
     err.expose = true;
     throw err;
   }
-  return key;
+  return { username, password };
 }
 
-// Adjust this once SearchWorks confirms whether they use Bearer, X-API-Key,
-// or another header. Default to Bearer (the common case).
-function authHeader(apiKey) {
-  return { "Authorization": `Bearer ${apiKey}` };
+// In-memory session token cache. Lost on process restart (cheap to re-login).
+// Keyed by username to support credential rotation without a restart.
+const sessionCache = new Map(); // username → { token, fetchedAt }
+
+const SESSION_TTL_MS = 50 * 60 * 1000; // assume tokens stay valid 50 minutes; re-login on 401 regardless
+
+async function loginAndCacheToken({ username, password }) {
+  const url = BASE_URL + PATHS["login"];
+  console.info(`[searchworks] POST ${url} (login as ${username})`);
+  const res = await httpsPost(url, { Username: username, Password: password });
+  if (!res.ok) {
+    const msg = res.json?.Message || res.json?.message || res.raw?.slice(0, 200) || `HTTP ${res.statusCode}`;
+    throw Object.assign(new Error(`SearchWorks login failed: ${msg}`), {
+      statusCode: res.statusCode === 401 ? 401 : 502,
+      expose: true
+    });
+  }
+  // The login response shape is per-doc; we accept several common key spellings.
+  const token = res.json?.SessionToken || res.json?.sessionToken || res.json?.Token || res.json?.token;
+  if (!token) {
+    throw Object.assign(new Error("SearchWorks login returned no SessionToken."), { statusCode: 502, expose: true });
+  }
+  sessionCache.set(username, { token, fetchedAt: Date.now() });
+  return token;
 }
+
+async function getSessionToken({ forceRefresh = false } = {}) {
+  const creds = await getCredentials();
+  if (!forceRefresh) {
+    const cached = sessionCache.get(creds.username);
+    if (cached && Date.now() - cached.fetchedAt < SESSION_TTL_MS) return cached.token;
+  }
+  return loginAndCacheToken(creds);
+}
+
+function invalidateSession(username) {
+  if (username) sessionCache.delete(username);
+  else sessionCache.clear();
+}
+
+// ─── Usage logging ──────────────────────────────────────────────────────────
 
 async function logUsage({ tenantId, userId, service, inputRef, creditsSpent, latencyMs, status, errorCode, resultCount }) {
   try {
@@ -128,9 +190,11 @@ async function logUsage({ tenantId, userId, service, inputRef, creditsSpent, lat
   }
 }
 
-// ─── Low-level call + logging ────────────────────────────────────────────────
+// ─── Generic call wrapper ──────────────────────────────────────────────────
+// Every SearchWorks call POSTs JSON with SessionToken in the body.
+// On 401 we transparently re-login once and retry.
 
-async function call({ service, method = "POST", body = null, query = null, ctx = {}, inputRef = null }) {
+async function call({ service, body = {}, ctx = {}, inputRef = null, skipAuth = false, _retried = false }) {
   const path = PATHS[service];
   if (!path) {
     const err = new Error(`Unknown SearchWorks service: ${service}`);
@@ -138,54 +202,50 @@ async function call({ service, method = "POST", body = null, query = null, ctx =
     err.expose = true;
     throw err;
   }
-  const apiKey = await getApiKey();
 
-  const url = new URL(`${BASE_URL}${path}`);
-  if (query) {
-    for (const [k, v] of Object.entries(query)) {
-      if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
-    }
-  }
+  let sessionToken = null;
+  if (!skipAuth) sessionToken = await getSessionToken();
 
-  const headers = {
-    ...authHeader(apiKey),
-    "Accept": "application/json"
-  };
-  if (body) headers["Content-Type"] = "application/json";
+  const url = BASE_URL + path;
+  const payload = skipAuth ? body : { SessionToken: sessionToken, ...body };
 
-  const fullUrl = url.toString();
-  console.info(`[searchworks] ${method} ${fullUrl}`);
+  console.info(`[searchworks] POST ${url} (service=${service})`);
 
   const start = Date.now();
-  let result;
+  let res;
   try {
-    result = await httpsRequest({ method, url: fullUrl, headers, body });
+    res = await httpsPost(url, payload);
   } catch (netErr) {
     await logUsage({ ...ctx, service, inputRef, creditsSpent: 0, latencyMs: Date.now() - start, status: "error", errorCode: "network_error" });
     throw Object.assign(new Error("SearchWorks API unreachable: " + netErr.message), { statusCode: 503, expose: true });
   }
-
   const latencyMs = Date.now() - start;
-  if (!result.ok) {
-    const code = String(result.statusCode);
-    console.error(`[searchworks] ${code} from ${fullUrl} — body: ${result.raw?.slice(0, 500)}`);
-    await logUsage({ ...ctx, service, inputRef, creditsSpent: 0, latencyMs, status: "error", errorCode: code });
-    const msg =
-      result.statusCode === 401 ? "SearchWorks API key is invalid or missing." :
-      result.statusCode === 403 ? "SearchWorks API key is not authorised for this service." :
-      result.statusCode === 404 ? "SearchWorks: no record matched the input." :
-      result.statusCode === 429 ? "SearchWorks rate limit exceeded — please retry shortly." :
-      result.statusCode >= 500  ? "SearchWorks backend error. Try again or contact SearchWorks support." :
-      (result.json?.message || result.json?.error || `SearchWorks error ${result.statusCode}`);
-    throw Object.assign(new Error(msg), { statusCode: result.statusCode, expose: true });
+
+  // 401 → token expired, re-login once and retry.
+  if (res.statusCode === 401 && !skipAuth && !_retried) {
+    console.warn(`[searchworks] 401 from ${url} — re-logging in and retrying`);
+    invalidateSession();
+    return call({ service, body, ctx, inputRef, _retried: true });
   }
 
-  // Response shape varies per service; common pattern is {results, count, meta}.
-  // Adjust once SearchWorks confirms canonical shape.
-  const payload = result.json;
-  const resultCount = Array.isArray(payload?.results) ? payload.results.length
-                    : Array.isArray(payload)         ? payload.length
-                    : payload?.results ? 1
+  if (!res.ok) {
+    const code = String(res.statusCode);
+    console.error(`[searchworks] ${code} from ${url} — body: ${res.raw?.slice(0, 500)}`);
+    await logUsage({ ...ctx, service, inputRef, creditsSpent: 0, latencyMs, status: "error", errorCode: code });
+    const msg =
+      res.statusCode === 401 ? "SearchWorks authentication failed (session expired or invalid credentials)." :
+      res.statusCode === 403 ? "SearchWorks: account not authorised for this service." :
+      res.statusCode === 404 ? "SearchWorks: no record matched the input." :
+      res.statusCode === 429 ? "SearchWorks rate limit exceeded — please retry shortly." :
+      res.statusCode >= 500  ? "SearchWorks backend error. Try again or contact SearchWorks support." :
+      (res.json?.Message || res.json?.message || res.json?.error || `SearchWorks error ${res.statusCode}`);
+    throw Object.assign(new Error(msg), { statusCode: res.statusCode, expose: true });
+  }
+
+  const payloadOut = res.json;
+  const resultCount = Array.isArray(payloadOut?.Results) ? payloadOut.Results.length
+                    : Array.isArray(payloadOut?.results) ? payloadOut.results.length
+                    : Array.isArray(payloadOut) ? payloadOut.length
                     : 0;
 
   await logUsage({
@@ -197,97 +257,94 @@ async function call({ service, method = "POST", body = null, query = null, ctx =
     status: "success",
     resultCount
   });
-
-  return payload;
+  return payloadOut;
 }
 
-// ─── Public service methods ──────────────────────────────────────────────────
+// ─── Public service methods ────────────────────────────────────────────────
 
-/** Deeds Office search — by erf/title-deed/owner/address. */
-async function deedsSearch(input, ctx = {}) {
+/** Diagnostic — verify connectivity (no auth required). */
+async function commtest(ctx = {}) {
+  return call({ service: "commtest", body: { testParam: "lawpath-ping" }, ctx, skipAuth: true });
+}
+
+/** Validate the cached session token (auto-renews on 401 via the call wrapper). */
+async function validateToken(ctx = {}) {
+  return call({ service: "validate-token", body: {}, ctx });
+}
+
+/** Get the current search-limit / credits state for the SearchWorks account. */
+async function getSearchLimit(ctx = {}) {
+  return call({ service: "search-limit", body: {}, ctx });
+}
+
+/** Billing report by branch — body: {DateFrom, DateTo} */
+async function billingByBranch(input, ctx = {}) {
   return call({
-    service: "deeds-search",
-    method: "POST",
-    body: input,
+    service: "billing-branch",
+    body: { DateFrom: input?.dateFrom || "", DateTo: input?.dateTo || "" },
     ctx,
-    inputRef: input?.erfNumber || input?.titleDeedNumber || input?.ownerName || input?.address || null
+    inputRef: `${input?.dateFrom || ""}..${input?.dateTo || ""}`
   });
 }
 
-/** Property ownership history — current + previous owners across estates and schemes. */
-async function propertyHistory(input, ctx = {}) {
+/** Billing report by company — body: {DateFrom, DateTo} */
+async function billingByCompany(input, ctx = {}) {
   return call({
-    service: "property-history",
-    method: "POST",
-    body: input,
+    service: "billing-company",
+    body: { DateFrom: input?.dateFrom || "", DateTo: input?.dateTo || "" },
     ctx,
-    inputRef: input?.propertyId || input?.erfNumber || input?.ownerIdNumber || null
+    inputRef: `${input?.dateFrom || ""}..${input?.dateTo || ""}`
   });
 }
 
-/** Document retrieval — fetch deed PDF/document by reference (T/B/BC/ST/SBC/SB/I/H). */
-async function documentRetrieval(input, ctx = {}) {
+/**
+ * Cross deeds-office search by person — searches multiple deeds offices for a
+ * person's property/title-deed history.
+ * input: {Reference, DeedsOfficeIDs, IDNumber, Firstname, Surname, Sequestration}
+ */
+async function deedsCrossPerson(input, ctx = {}) {
   return call({
-    service: "document-retrieval",
-    method: "POST",
-    body: input,
+    service: "deeds-cross-person",
+    body: {
+      Reference:      input?.reference      || input?.Reference      || "",
+      DeedsOfficeIDs: input?.deedsOfficeIDs || input?.DeedsOfficeIDs || "",
+      IDNumber:       input?.idNumber       || input?.IDNumber       || "",
+      Firstname:      input?.firstname      || input?.Firstname      || "",
+      Surname:        input?.surname        || input?.Surname        || "",
+      Sequestration:  String(input?.sequestration ?? input?.Sequestration ?? "false")
+    },
     ctx,
-    inputRef: input?.documentReference || input?.deedNumber || null
+    inputRef: input?.idNumber || input?.surname || input?.IDNumber || input?.Surname || null
   });
 }
 
-/** DOTS — Deeds Office Tracking System: real-time pending registration status. */
-async function dotsTrack(input, ctx = {}) {
-  return call({
-    service: "dots-track",
-    method: "POST",
-    body: input,
-    ctx,
-    inputRef: input?.trackingReference || input?.matterReference || null
-  });
-}
+// ─── Service handler map (used by the tenant proxy in server/index.js) ──────
 
-/** DOTS alert subscription — email notifications on Deeds Office status change. */
-async function dotsAlertSubscribe(input, ctx = {}) {
-  return call({
-    service: "dots-alert-subscribe",
-    method: "POST",
-    body: input,
-    ctx,
-    inputRef: input?.trackingReference || null
-  });
-}
-
-/** Generic property info lookup. */
-async function propertyInfo(input, ctx = {}) {
-  return call({
-    service: "property-info",
-    method: "POST",
-    body: input,
-    ctx,
-    inputRef: input?.propertyId || input?.erfNumber || null
-  });
-}
-
-// Map service strings to handler functions for the tenant proxy route.
 const SERVICE_HANDLERS = {
-  "deeds-search":         deedsSearch,
-  "property-history":     propertyHistory,
-  "document-retrieval":   documentRetrieval,
-  "dots-track":           dotsTrack,
-  "dots-alert-subscribe": dotsAlertSubscribe,
-  "property-info":        propertyInfo
+  "commtest":           commtest,
+  "validate-token":     validateToken,
+  "search-limit":       getSearchLimit,
+  "billing-branch":     billingByBranch,
+  "billing-company":    billingByCompany,
+  "deeds-cross-person": deedsCrossPerson
+  // TODO: add deeds-by-property, property-history, document-retrieval,
+  // dots-track, dots-alert-subscribe as those endpoints are confirmed.
 };
 
 const SERVICES = Object.keys(SERVICE_HANDLERS);
 
 module.exports = {
-  deedsSearch,
-  propertyHistory,
-  documentRetrieval,
-  dotsTrack,
-  dotsAlertSubscribe,
-  propertyInfo,
+  // service methods
+  commtest,
+  validateToken,
+  getSearchLimit,
+  billingByBranch,
+  billingByCompany,
+  deedsCrossPerson,
+  // proxy support
   SERVICE_HANDLERS,
-  SERVICES
+  SERVICES,
+  // session management (exposed for tests / debugging)
+  invalidateSession,
+  getSessionToken
 };
