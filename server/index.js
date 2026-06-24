@@ -4008,13 +4008,16 @@ app.get("/api/admin/lightstone/usage", authMiddleware, async (req, res, next) =>
 // ─── SEARCHWORKS — deeds data, document retrieval, DOTS tracking ────────────
 
 // Tenant-facing proxy. Service must be on the allowlist defined in searchworks.js.
+// Super admins (tenant_id null) can also call this for diagnostic/smoke testing;
+// their calls log with tenant_id null in searchworks_usage_log.
 app.post("/api/searchworks/:service", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const isSuperAdmin = req.user.role === "platform_super_admin";
+  if (!req.user.tenantId && !isSuperAdmin) return res.status(403).json({ error: "Tenant context required." });
   const service = req.params.service;
   const handler = searchworks.SERVICE_HANDLERS[service];
   if (!handler) return res.status(400).json({ error: `Unknown SearchWorks service: ${service}` });
   try {
-    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub };
+    const ctx = { tenantId: req.user.tenantId || null, userId: req.user.sub };
     const data = await handler(req.body || {}, ctx);
     res.json(data);
   } catch (err) {
