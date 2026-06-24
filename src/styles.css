@@ -5940,6 +5940,121 @@ select {
 .plan-practice { background: var(--gold-bg);   color: var(--gold); }
 .plan-firm     { background: var(--green-light); color: var(--green-dark); }
 
+/* ─── SearchWorks panel (Deeds Office search inside Conveyancing) ──────── */
+
+.sw-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.sw-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.sw-tab {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s;
+}
+
+.sw-tab:hover { color: var(--ink); border-color: var(--tint-18); }
+
+.sw-tab.active {
+  background: linear-gradient(135deg, rgba(217,119,6,0.20) 0%, rgba(217,119,6,0.08) 100%);
+  color: var(--green-dark);
+  border-color: rgba(217,119,6,0.30);
+}
+
+.sw-form { display: grid; gap: 12px; }
+
+.sw-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.sw-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sw-error {
+  padding: 10px 14px;
+  background: var(--rose-bg);
+  color: var(--rose);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.sw-result {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.sw-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sw-status {
+  font-size: 0.88rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 6px;
+}
+
+.sw-status-ok    { background: var(--green-light); color: var(--green-dark); }
+.sw-status-empty { background: var(--surface);     color: var(--muted); border: 1px solid var(--line); }
+
+.sw-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  font-size: 0.82rem;
+}
+
+.sw-meta-grid > div {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.sw-meta-grid dt { color: var(--muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+.sw-meta-grid dd { margin: 0; color: var(--ink); }
+.sw-meta-grid dd code { font-family: var(--font-mono); font-size: 0.72rem; background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+
+.sw-extras {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+}
+
+.sw-extras summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+.sw-extras pre { margin-top: 8px; overflow-x: auto; font-size: 0.74rem; line-height: 1.4; }
+
 /* FFC verification pills */
 .ffc-valid    { background: var(--green-light); color: var(--green-dark); }
 .ffc-invalid  { background: var(--rose-bg);     color: var(--rose); }

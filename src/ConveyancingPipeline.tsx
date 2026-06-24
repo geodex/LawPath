@@ -1,8 +1,9 @@
-import { Building2, CheckCircle2, ChevronDown, ChevronRight, Loader2, MapPin, Plus, ShieldCheck } from "lucide-react";
+import { Building2, CheckCircle2, ChevronDown, ChevronRight, FileSearch, Loader2, MapPin, Plus, ShieldCheck } from "lucide-react";
 import { FormEvent, useCallback, useRef, useState } from "react";
 import { advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstonePropertyBundle, getLightstoneSectionalUnits, searchLightstoneAddress, updateConveyancingClearances } from "./api";
 import type { LightstoneAddress, LightstonePropertyBundle, LightstoneSectionalUnit } from "./api";
 import type { ConveyancingMatter, ConveyancingStage } from "./types";
+import { SearchWorksPanel } from "./SearchWorksPanel";
 
 const money = (cents: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(cents / 100);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -939,6 +940,18 @@ export function ConveyancingPipeline({
                       )}
                     </div>
                   )}
+
+                  {/* SearchWorks deeds office search */}
+                  <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "22px 0" }} />
+                  <h4 style={{ margin: "0 0 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                    <FileSearch size={16} color="var(--green)" /> Deeds Office search (SearchWorks)
+                  </h4>
+                  <SearchWorksPanel
+                    defaultErfNumber={m.erfNumber}
+                    matterRef={m.matterRef}
+                    showToast={showToast}
+                    log={log}
+                  />
 
                   {/* VerifyNow Due Diligence */}
                   <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "22px 0" }} />
