@@ -192,10 +192,15 @@ async function loginAndCacheToken({ username, password }) {
       expose: true
     });
   }
-  // The login response shape is per-doc; we accept several common key spellings.
-  const token = res.json?.SessionToken || res.json?.sessionToken || res.json?.Token || res.json?.token;
+  // SearchWorks login returns the session token in `ResponseMessage` (their
+  // generic envelope field — e.g. commtest also returns the echoed test
+  // value there). Fall through to other common spellings just in case.
+  const token = res.json?.ResponseMessage || res.json?.SessionToken || res.json?.sessionToken || res.json?.Token || res.json?.token;
   if (!token) {
-    throw Object.assign(new Error("SearchWorks login returned no SessionToken."), { statusCode: 502, expose: true });
+    throw Object.assign(
+      new Error(`SearchWorks login returned no session token. Response keys: ${Object.keys(res.json || {}).join(", ") || "(empty)"}`),
+      { statusCode: 502, expose: true }
+    );
   }
   sessionCache.set(username, { token, fetchedAt: Date.now() });
   return token;
