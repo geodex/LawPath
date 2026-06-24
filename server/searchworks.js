@@ -7,16 +7,20 @@
 //   POST /auth/logout/ body: {SessionToken}
 //   POST /auth/validatetoken/ body: {SessionToken}
 //
-// Spec checklist still to confirm:
-//   [x] Auth scheme — session token in body (confirmed)
-//   [x] UAT base URL — uatrest.searchworks.co.za (confirmed)
+// Spec status (after authenticated crawl of doccentral.searchworks.co.za):
+//   [x] Auth — session token in body, login returns SessionToken
+//   [x] UAT base URL — uatrest.searchworks.co.za
+//   [x] All deeds office single + cross-office search paths
+//   [x] Property history (person / company / trust) paths
+//   [x] Property ownership history endpoint
+//   [x] Document retrieval (bond + title deed) path
+//   [x] DOTS — person, company, property-erf, barcode
+//   [x] Lightstone valuation (re-sold by SearchWorks) — erf endpoint
 //   [ ] Production base URL — likely rest.searchworks.co.za, confirm with SearchWorks
-//   [x] /commtest/, /auth/*, /billingreports/*, /deedsoffice/crossdeeds/person/
-//   [ ] Deeds search by property/erf/title-deed paths
-//   [ ] Property history paths
-//   [ ] Document retrieval paths
-//   [ ] DOTS tracking + alert paths
-//   [ ] Per-call ZAR cost from SearchWorks pricing schedule
+//   [ ] Per-call ZAR cost — no pricing in DocCentral; placeholders in CREDIT_COST
+//
+// Casing inconsistencies preserved in the wrapper (SearchWorks docs vary by
+// endpoint): see CAMELCASE_SERVICES set + per-handler body construction.
 //
 // Credentials are stored in platform_api_provider_settings.api_key_secret_ref
 // as JSON: {"username":"...","password":"..."} — set via Super Admin Settings UI.
@@ -30,35 +34,81 @@ const { pool } = require("./db");
 const BASE_URL = process.env.SEARCHWORKS_BASE_URL || "https://uatrest.searchworks.co.za";
 
 // Endpoint paths (all SearchWorks paths end with a trailing slash).
+// Confirmed from doccentral.searchworks.co.za via authenticated docs crawl.
 const PATHS = {
   // Auth
-  "login":            "/auth/login/",
-  "logout":           "/auth/logout/",
-  "validate-token":   "/auth/validatetoken/",
-  "search-limit":     "/auth/GetSearchLimitDetails/",
+  "login":                 "/auth/login/",
+  "logout":                "/auth/logout/",
+  "validate-token":        "/auth/validatetoken/",
+  "search-limit":          "/auth/GetSearchLimitDetails/",
   // Diagnostic
-  "commtest":         "/commtest/",
+  "commtest":              "/commtest/",
   // Billing reports
-  "billing-branch":   "/billingreports/branch/",
-  "billing-company":  "/billingreports/company/",
-  // Deeds Office searches
-  "deeds-cross-person": "/deedsoffice/crossdeeds/person/"
-  // TODO: add the remaining deeds, property history, document retrieval,
-  // DOTS track, and DOTS alert paths once confirmed from doccentral docs.
+  "billing-branch":        "/billingreports/branch/",
+  "billing-company":       "/billingreports/company/",
+  // Deeds Office — single-office searches (PascalCase fields)
+  "deeds-person":          "/deedsoffice/person/",
+  "deeds-company":         "/deedsoffice/company/",
+  "deeds-trust":           "/deedsoffice/trust/",
+  "deeds-property-erf":    "/deedsoffice/property/erf/",
+  "deeds-property-farm":   "/deedsoffice/property/farm/",
+  "deeds-property-scheme": "/deedsoffice/property/scheme/",
+  "deeds-document":        "/deedsoffice/property/document/",
+  // Deeds Office — cross-deeds searches across multiple offices
+  "deeds-cross-person":    "/deedsoffice/crossdeeds/person/",
+  "deeds-cross-company":   "/deedsoffice/crossdeeds/company/",
+  "deeds-cross-trust":     "/deedsoffice/crossdeeds/trust/",
+  // DOTS — Deeds Office Tracking System (camelCase fields except barcode)
+  "dots-person":           "/dots/person/",
+  "dots-company":          "/dots/company/",
+  "dots-property-erf":     "/dots/property/erf/",
+  "dots-barcode":          "/dots/property/barcode/",
+  // Document retrieval (PDF of bond / title deed)
+  "document-request":      "/documents/deedsoffice/requestdeedsdocument/",
+  // Property history (search across all deeds offices)
+  "property-history-person":  "/individual/propertyhistory/",
+  "property-history-company": "/csi/company/propertyhistory/",
+  "property-history-trust":   "/csi/trust/propertyhistory/",
+  // Property ownership (across erf/farm/holding/scheme/LPI)
+  "property-ownership":       "/property/PropertyOwnershipHistory/",
+  // Lightstone valuation re-sold by SearchWorks
+  "valuation-erf":            "/lightstone/valuation/erf/"
 };
 
-// Per-service Rand-cent cost (placeholder — replace with real pricing schedule).
+// Endpoints that use camelCase field names (DOTS person/company/property-erf).
+// All other endpoints use PascalCase (SessionToken / Reference / etc.).
+const CAMELCASE_SERVICES = new Set([
+  "dots-person", "dots-company", "dots-property-erf"
+]);
+
+// Per-service Rand-cent cost — PLACEHOLDERS, no public pricing schedule yet.
+// Replace with the values from SearchWorks' commercial agreement once confirmed.
 const CREDIT_COST = {
-  "commtest":            0,
-  "billing-branch":      0,
-  "billing-company":     0,
-  "deeds-cross-person":  2567,    // R25.67 (WinDeed comparable)
-  "deeds-search":        2567,
-  "property-history":    2567,
-  "document-retrieval":  5000,
-  "dots-track":          2567,
-  "dots-alert-subscribe": 25785,  // R257.85 30-day auto-renew
-  "property-info":       2000
+  "commtest":                0,
+  "validate-token":          0,
+  "search-limit":            0,
+  "billing-branch":          0,
+  "billing-company":         0,
+  "deeds-person":            2567,
+  "deeds-company":           2567,
+  "deeds-trust":             2567,
+  "deeds-property-erf":      2567,
+  "deeds-property-farm":     2567,
+  "deeds-property-scheme":   2567,
+  "deeds-document":          2567,
+  "deeds-cross-person":      5000,
+  "deeds-cross-company":     5000,
+  "deeds-cross-trust":       5000,
+  "dots-person":             2567,
+  "dots-company":            2567,
+  "dots-property-erf":       2567,
+  "dots-barcode":            2567,
+  "document-request":        5000,
+  "property-history-person":  3500,
+  "property-history-company": 3500,
+  "property-history-trust":   3500,
+  "property-ownership":       3500,
+  "valuation-erf":            4000
 };
 
 // ─── HTTPS helper ───────────────────────────────────────────────────────────
@@ -207,7 +257,14 @@ async function call({ service, body = {}, ctx = {}, inputRef = null, skipAuth = 
   if (!skipAuth) sessionToken = await getSessionToken();
 
   const url = BASE_URL + path;
-  const payload = skipAuth ? body : { SessionToken: sessionToken, ...body };
+  let payload;
+  if (skipAuth) {
+    payload = body;
+  } else if (CAMELCASE_SERVICES.has(service)) {
+    payload = { sessionToken, ...body };
+  } else {
+    payload = { SessionToken: sessionToken, ...body };
+  }
 
   console.info(`[searchworks] POST ${url} (service=${service})`);
 
@@ -260,91 +317,368 @@ async function call({ service, body = {}, ctx = {}, inputRef = null, skipAuth = 
   return payloadOut;
 }
 
-// ─── Public service methods ────────────────────────────────────────────────
+// ─── Service methods ───────────────────────────────────────────────────────
+// All accept (input, ctx) where input is the request body in camelCase JS
+// conventions; the handler normalises into the exact body shape SearchWorks
+// expects (PascalCase or camelCase per the docs).
+//
+// Each handler resolves to the parsed JSON body of the SearchWorks response.
 
-/** Diagnostic — verify connectivity (no auth required). */
+// ── Diagnostic / auth ────────────────────────────────────────────────────
 async function commtest(ctx = {}) {
   return call({ service: "commtest", body: { testParam: "lawpath-ping" }, ctx, skipAuth: true });
 }
-
-/** Validate the cached session token (auto-renews on 401 via the call wrapper). */
 async function validateToken(ctx = {}) {
   return call({ service: "validate-token", body: {}, ctx });
 }
-
-/** Get the current search-limit / credits state for the SearchWorks account. */
 async function getSearchLimit(ctx = {}) {
   return call({ service: "search-limit", body: {}, ctx });
 }
 
-/** Billing report by branch — body: {DateFrom, DateTo} */
+// ── Billing reports ─────────────────────────────────────────────────────
 async function billingByBranch(input, ctx = {}) {
   return call({
     service: "billing-branch",
     body: { DateFrom: input?.dateFrom || "", DateTo: input?.dateTo || "" },
-    ctx,
-    inputRef: `${input?.dateFrom || ""}..${input?.dateTo || ""}`
+    ctx, inputRef: `${input?.dateFrom || ""}..${input?.dateTo || ""}`
   });
 }
-
-/** Billing report by company — body: {DateFrom, DateTo} */
 async function billingByCompany(input, ctx = {}) {
   return call({
     service: "billing-company",
     body: { DateFrom: input?.dateFrom || "", DateTo: input?.dateTo || "" },
-    ctx,
-    inputRef: `${input?.dateFrom || ""}..${input?.dateTo || ""}`
+    ctx, inputRef: `${input?.dateFrom || ""}..${input?.dateTo || ""}`
   });
 }
 
-/**
- * Cross deeds-office search by person — searches multiple deeds offices for a
- * person's property/title-deed history.
- * input: {Reference, DeedsOfficeIDs, IDNumber, Firstname, Surname, Sequestration}
- */
+// ── Deeds Office single-office searches ─────────────────────────────────
+// DeedsOffice integer codes: 1=Bloemfontein, 2=CapeTown, 3=Johannesburg,
+//                            4=Kimberley, 5=KingWilliamsTown, 6=Pietermaritzburg,
+//                            7=Pretoria, 8=Vryburg, 9=Umtata, 11=Mpumalanga, 12=Limpopo
+async function deedsPerson(input, ctx = {}) {
+  return call({
+    service: "deeds-person",
+    body: {
+      Reference:     input?.reference     || "",
+      DeedsOffice:   input?.deedsOffice   || "",
+      Surname:       input?.surname       || "",
+      Firstname:     input?.firstname     || "",
+      IDNumber:      input?.idNumber      || "",
+      Sequestration: String(input?.sequestration ?? "false")
+    },
+    ctx, inputRef: input?.idNumber || input?.surname || null
+  });
+}
+async function deedsCompany(input, ctx = {}) {
+  return call({
+    service: "deeds-company",
+    body: {
+      Reference:                 input?.reference                 || "",
+      DeedsOffice:               input?.deedsOffice               || "",
+      CompanyName:               input?.companyName               || "",
+      CompanyRegistrationNumber: input?.companyRegistrationNumber || "",
+      Sequestration:             String(input?.sequestration ?? "false")
+    },
+    ctx, inputRef: input?.companyRegistrationNumber || input?.companyName || null
+  });
+}
+async function deedsTrust(input, ctx = {}) {
+  return call({
+    service: "deeds-trust",
+    body: {
+      Reference:     input?.reference     || "",
+      DeedsOffice:   input?.deedsOffice   || "",
+      TrustName:     input?.trustName     || "",
+      Sequestration: String(input?.sequestration ?? "false")
+    },
+    ctx, inputRef: input?.trustName || null
+  });
+}
+async function deedsPropertyErf(input, ctx = {}) {
+  return call({
+    service: "deeds-property-erf",
+    body: {
+      Reference:       input?.reference       || "",
+      DeedsOffice:     input?.deedsOffice     || "",
+      Township:        input?.township        || "",
+      ErfNumber:       input?.erfNumber       || "",
+      PortionNumber:   input?.portionNumber   || "",
+      RemainingExtent: String(input?.remainingExtent ?? "false")
+    },
+    ctx, inputRef: input?.erfNumber || null
+  });
+}
+async function deedsPropertyFarm(input, ctx = {}) {
+  return call({
+    service: "deeds-property-farm",
+    body: {
+      Reference:            input?.reference            || "",
+      DeedsOffice:          input?.deedsOffice          || "",
+      RegistrationDivision: input?.registrationDivision || "",
+      FarmName:             input?.farmName             || "",
+      FarmNumber:           input?.farmNumber           || "",
+      PortionNumber:        input?.portionNumber        || "",
+      RemainingExtent:      String(input?.remainingExtent ?? "false")
+    },
+    ctx, inputRef: input?.farmNumber || input?.farmName || null
+  });
+}
+async function deedsPropertyScheme(input, ctx = {}) {
+  // UnitType: 1=Units, 2=ExclusiveUseAreas, 3=Contract
+  return call({
+    service: "deeds-property-scheme",
+    body: {
+      Reference:    input?.reference    || "",
+      DeedsOffice:  input?.deedsOffice  || "",
+      SchemeName:   input?.schemeName   || "",
+      SchemeNumber: input?.schemeNumber || "",
+      UnitNumber:   input?.unitNumber   || "",
+      UnitType:     input?.unitType     || ""
+    },
+    ctx, inputRef: input?.schemeNumber || input?.schemeName || null
+  });
+}
+async function deedsDocument(input, ctx = {}) {
+  return call({
+    service: "deeds-document",
+    body: {
+      Reference:      input?.reference      || "",
+      DeedsOffice:    input?.deedsOffice    || "",
+      DocumentNumber: input?.documentNumber || ""
+    },
+    ctx, inputRef: input?.documentNumber || null
+  });
+}
+
+// ── Deeds Office cross-deeds searches ───────────────────────────────────
+// DeedsOfficeIDs: comma-delimited list, e.g. "1,3,7"
 async function deedsCrossPerson(input, ctx = {}) {
   return call({
     service: "deeds-cross-person",
     body: {
-      Reference:      input?.reference      || input?.Reference      || "",
-      DeedsOfficeIDs: input?.deedsOfficeIDs || input?.DeedsOfficeIDs || "",
-      IDNumber:       input?.idNumber       || input?.IDNumber       || "",
-      Firstname:      input?.firstname      || input?.Firstname      || "",
-      Surname:        input?.surname        || input?.Surname        || "",
-      Sequestration:  String(input?.sequestration ?? input?.Sequestration ?? "false")
+      Reference:      input?.reference      || "",
+      DeedsOfficeIDs: input?.deedsOfficeIDs || "",
+      IDNumber:       input?.idNumber       || "",
+      Firstname:      input?.firstname      || "",
+      Surname:        input?.surname        || "",
+      Sequestration:  String(input?.sequestration ?? "false")
     },
-    ctx,
-    inputRef: input?.idNumber || input?.surname || input?.IDNumber || input?.Surname || null
+    ctx, inputRef: input?.idNumber || input?.surname || null
+  });
+}
+async function deedsCrossCompany(input, ctx = {}) {
+  return call({
+    service: "deeds-cross-company",
+    body: {
+      Reference:                 input?.reference                 || "",
+      DeedsOfficeIDs:            input?.deedsOfficeIDs            || "",
+      CompanyName:               input?.companyName               || "",
+      CompanyRegistrationNumber: input?.companyRegistrationNumber || "",
+      Sequestration:             String(input?.sequestration ?? "false")
+    },
+    ctx, inputRef: input?.companyRegistrationNumber || input?.companyName || null
+  });
+}
+async function deedsCrossTrust(input, ctx = {}) {
+  return call({
+    service: "deeds-cross-trust",
+    body: {
+      Reference:      input?.reference      || "",
+      DeedsOfficeIDs: input?.deedsOfficeIDs || "",
+      TrustName:      input?.trustName      || "",
+      Sequestration:  String(input?.sequestration ?? "false")
+    },
+    ctx, inputRef: input?.trustName || null
+  });
+}
+
+// ── DOTS — Deeds Office Tracking System ─────────────────────────────────
+// NB: person / company / property-erf use camelCase (sessionToken,
+// deedsOfficeID, iDNumber, etc.). Barcode uses PascalCase.
+async function dotsPerson(input, ctx = {}) {
+  return call({
+    service: "dots-person",
+    body: {
+      reference:     input?.reference     || "",
+      deedsOfficeID: input?.deedsOfficeID || input?.deedsOffice || "",
+      iDNumber:      input?.idNumber      || "",
+      firstname:     input?.firstname     || "",
+      surname:       input?.surname       || ""
+    },
+    ctx, inputRef: input?.idNumber || input?.surname || null
+  });
+}
+async function dotsCompany(input, ctx = {}) {
+  return call({
+    service: "dots-company",
+    body: {
+      reference:                 input?.reference                 || "",
+      deedsOfficeID:             input?.deedsOfficeID || input?.deedsOffice || "",
+      companyName:               input?.companyName               || "",
+      companyRegistrationNumber: input?.companyRegistrationNumber || ""
+    },
+    ctx, inputRef: input?.companyRegistrationNumber || input?.companyName || null
+  });
+}
+async function dotsPropertyErf(input, ctx = {}) {
+  return call({
+    service: "dots-property-erf",
+    body: {
+      reference:     input?.reference     || "",
+      deedsOfficeID: input?.deedsOfficeID || input?.deedsOffice || "",
+      townshipName:  input?.townshipName  || input?.township   || "",
+      erfNumber:     input?.erfNumber     || "",
+      portionNumber: input?.portionNumber || ""
+    },
+    ctx, inputRef: input?.erfNumber || null
+  });
+}
+async function dotsBarcode(input, ctx = {}) {
+  return call({
+    service: "dots-barcode",
+    body: {
+      Reference:   input?.reference   || "",
+      DeedsOffice: input?.deedsOffice || "",
+      Barcode:     input?.barcode     || ""
+    },
+    ctx, inputRef: input?.barcode || null
+  });
+}
+
+// ── Document retrieval (returns bond / title deed PDF) ──────────────────
+async function requestDeedsDocument(input, ctx = {}) {
+  return call({
+    service: "document-request",
+    body: {
+      Reference:      input?.reference      || "",
+      DeedsOffice:    input?.deedsOffice    || "",
+      DocumentNumber: input?.documentNumber || ""
+    },
+    ctx, inputRef: input?.documentNumber || null
+  });
+}
+
+// ── Property history (cross-office) ─────────────────────────────────────
+async function propertyHistoryPerson(input, ctx = {}) {
+  return call({
+    service: "property-history-person",
+    body: {
+      Reference: input?.reference || "",
+      Firstname: input?.firstname || "",
+      Surname:   input?.surname   || "",
+      IDNumber:  input?.idNumber  || ""
+    },
+    ctx, inputRef: input?.idNumber || input?.surname || null
+  });
+}
+async function propertyHistoryCompany(input, ctx = {}) {
+  // Note SearchWorks mixes casing on this endpoint: lowercase sessionToken/
+  // reference, but PascalCase CompanyName.
+  return call({
+    service: "property-history-company",
+    body: {
+      reference:        input?.reference        || "",
+      CompanyName:      input?.companyName      || "",
+      companyRegNumber: input?.companyRegNumber || ""
+    },
+    ctx, inputRef: input?.companyRegNumber || input?.companyName || null
+  });
+}
+async function propertyHistoryTrust(input, ctx = {}) {
+  return call({
+    service: "property-history-trust",
+    body: {
+      Reference:   input?.reference   || "",
+      TrustNumber: input?.trustNumber || "",
+      TrustName:   input?.trustName   || ""
+    },
+    ctx, inputRef: input?.trustNumber || input?.trustName || null
+  });
+}
+
+// ── Property ownership history ─────────────────────────────────────────
+// PropertyType: 1=Erf, 2=Farm, 3=Holding, 4=LPICode, 5=Scheme
+// Criteria1/2/3 map to fields whose meaning depends on PropertyType.
+async function propertyOwnership(input, ctx = {}) {
+  return call({
+    service: "property-ownership",
+    body: {
+      Reference:     input?.reference     || "",
+      DeedsOfficeID: input?.deedsOfficeID || input?.deedsOffice || "",
+      PropertyType:  input?.propertyType  || "",
+      Criteria1:     input?.criteria1     || "",
+      Criteria2:     input?.criteria2     || "",
+      Criteria3:     input?.criteria3     || "",
+      IsRemainder:   String(input?.isRemainder ?? "false")
+    },
+    ctx, inputRef: input?.criteria1 || null
+  });
+}
+
+// ── Lightstone valuation (re-sold by SearchWorks) ──────────────────────
+async function valuationErf(input, ctx = {}) {
+  return call({
+    service: "valuation-erf",
+    body: {
+      Reference:     input?.reference     || "",
+      Township:      input?.township      || "",
+      ErfNumber:     input?.erfNumber     || "",
+      PortionNumber: input?.portionNumber || ""
+    },
+    ctx, inputRef: input?.erfNumber || null
   });
 }
 
 // ─── Service handler map (used by the tenant proxy in server/index.js) ──────
 
 const SERVICE_HANDLERS = {
-  "commtest":           commtest,
-  "validate-token":     validateToken,
-  "search-limit":       getSearchLimit,
-  "billing-branch":     billingByBranch,
-  "billing-company":    billingByCompany,
-  "deeds-cross-person": deedsCrossPerson
-  // TODO: add deeds-by-property, property-history, document-retrieval,
-  // dots-track, dots-alert-subscribe as those endpoints are confirmed.
+  // diagnostic / auth
+  "commtest":              commtest,
+  "validate-token":        validateToken,
+  "search-limit":          getSearchLimit,
+  // billing
+  "billing-branch":        billingByBranch,
+  "billing-company":       billingByCompany,
+  // deeds — single office
+  "deeds-person":          deedsPerson,
+  "deeds-company":         deedsCompany,
+  "deeds-trust":           deedsTrust,
+  "deeds-property-erf":    deedsPropertyErf,
+  "deeds-property-farm":   deedsPropertyFarm,
+  "deeds-property-scheme": deedsPropertyScheme,
+  "deeds-document":        deedsDocument,
+  // deeds — cross office
+  "deeds-cross-person":    deedsCrossPerson,
+  "deeds-cross-company":   deedsCrossCompany,
+  "deeds-cross-trust":     deedsCrossTrust,
+  // DOTS
+  "dots-person":           dotsPerson,
+  "dots-company":          dotsCompany,
+  "dots-property-erf":     dotsPropertyErf,
+  "dots-barcode":          dotsBarcode,
+  // documents
+  "document-request":      requestDeedsDocument,
+  // property history + ownership
+  "property-history-person":  propertyHistoryPerson,
+  "property-history-company": propertyHistoryCompany,
+  "property-history-trust":   propertyHistoryTrust,
+  "property-ownership":       propertyOwnership,
+  // valuation
+  "valuation-erf":            valuationErf
 };
 
 const SERVICES = Object.keys(SERVICE_HANDLERS);
 
 module.exports = {
-  // service methods
-  commtest,
-  validateToken,
-  getSearchLimit,
-  billingByBranch,
-  billingByCompany,
-  deedsCrossPerson,
-  // proxy support
-  SERVICE_HANDLERS,
-  SERVICES,
-  // session management (exposed for tests / debugging)
-  invalidateSession,
-  getSessionToken
+  commtest, validateToken, getSearchLimit,
+  billingByBranch, billingByCompany,
+  deedsPerson, deedsCompany, deedsTrust,
+  deedsPropertyErf, deedsPropertyFarm, deedsPropertyScheme, deedsDocument,
+  deedsCrossPerson, deedsCrossCompany, deedsCrossTrust,
+  dotsPerson, dotsCompany, dotsPropertyErf, dotsBarcode,
+  requestDeedsDocument,
+  propertyHistoryPerson, propertyHistoryCompany, propertyHistoryTrust,
+  propertyOwnership, valuationErf,
+  SERVICE_HANDLERS, SERVICES,
+  invalidateSession, getSessionToken
 };
