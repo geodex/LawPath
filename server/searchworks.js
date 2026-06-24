@@ -81,34 +81,56 @@ const CAMELCASE_SERVICES = new Set([
   "dots-person", "dots-company", "dots-property-erf"
 ]);
 
-// Per-service Rand-cent cost — PLACEHOLDERS, no public pricing schedule yet.
-// Replace with the values from SearchWorks' commercial agreement once confirmed.
+// Per-service Rand-cent cost from SearchWorks April 2026 pricelist.
+//
+// Volume breaks (DeedsOfficeSearch + DOTSInformation, billed monthly):
+//   Base       (1 - 500     calls/mo): R 22.80
+//   Tier 1     (501 - 1000  calls/mo): R 21.45
+//   Tier 2     (1001 - 1500 calls/mo): R 20.55
+//   Tier 3     (1501 - 2500 calls/mo): R 19.65
+//   Tier 4     (2501+       calls/mo): R 19.25
+// We log the base rate here; reconcile against the SearchWorks billing
+// reports endpoint (billingreports/branch + billingreports/company) for
+// the actual tier-discounted invoice.
+//
+// Extrapolations (not on the pricelist, marked below):
+//   property-history-company / -trust: same as PersonPropertyHistory (R 16.50)
+//   deeds-cross-*: priced like TransferReport per line (R 16.65)
+//   valuation-erf: kept as placeholder pending confirmation
 const CREDIT_COST = {
-  "commtest":                0,
-  "validate-token":          0,
-  "search-limit":            0,
-  "billing-branch":          0,
-  "billing-company":         0,
-  "deeds-person":            2567,
-  "deeds-company":           2567,
-  "deeds-trust":             2567,
-  "deeds-property-erf":      2567,
-  "deeds-property-farm":     2567,
-  "deeds-property-scheme":   2567,
-  "deeds-document":          2567,
-  "deeds-cross-person":      5000,
-  "deeds-cross-company":     5000,
-  "deeds-cross-trust":       5000,
-  "dots-person":             2567,
-  "dots-company":            2567,
-  "dots-property-erf":       2567,
-  "dots-barcode":            2567,
-  "document-request":        5000,
-  "property-history-person":  3500,
-  "property-history-company": 3500,
-  "property-history-trust":   3500,
-  "property-ownership":       3500,
-  "valuation-erf":            4000
+  // diagnostic / auth — no cost
+  "commtest":                  0,
+  "validate-token":            0,
+  "search-limit":              0,
+  "billing-branch":            0,
+  "billing-company":           0,
+  // Deeds Office single-office searches — DeedsOfficeSearch R 22.80
+  "deeds-person":              2280,
+  "deeds-company":             2280,
+  "deeds-trust":               2280,
+  "deeds-property-erf":        2280,
+  "deeds-property-farm":       2280,
+  "deeds-property-scheme":     2280,
+  "deeds-document":            2280,
+  // Cross-deeds searches — TransferReport(PerLine) R 16.65 [extrapolated]
+  "deeds-cross-person":        1665,
+  "deeds-cross-company":       1665,
+  "deeds-cross-trust":         1665,
+  // DOTS — DOTSInformation R 22.80
+  "dots-person":               2280,
+  "dots-company":              2280,
+  "dots-property-erf":         2280,
+  "dots-barcode":              2280,
+  // Document retrieval — DeedDocumentCopy R 110.00
+  "document-request":          11000,
+  // Property history — PersonPropertyHistory R 16.50 (company/trust extrapolated)
+  "property-history-person":   1650,
+  "property-history-company":  1650,
+  "property-history-trust":    1650,
+  // Property ownership — PropertyOwnershipHistory R 17.60
+  "property-ownership":        1760,
+  // Lightstone valuation re-sold by SearchWorks — placeholder
+  "valuation-erf":             4000
 };
 
 // ─── HTTPS helper ───────────────────────────────────────────────────────────
