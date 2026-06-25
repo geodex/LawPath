@@ -70,6 +70,7 @@ import { StripeBilling } from "./StripeBilling";
 import { Billing } from "./Billing";
 import { VerifyNowMonitor } from "./VerifyNowMonitor";
 import { SuperTenants } from "./SuperTenants";
+import { PlatformPricingPanel } from "./PlatformPricingPanel";
 import { HelpPanel } from "./HelpPanel";
 import { TenantTraining } from "./TenantTraining";
 
@@ -3549,6 +3550,9 @@ function AdminSettings({
         </Panel>
       </section>
       )}
+
+      {/* Platform pricing — VAT + markup applied to external-provider usage */}
+      {isPlatformSuperAdmin && <PlatformPricingPanel showToast={showToast} />}
 
       {/* VerifyNow Usage Monitoring */}
       {isPlatformSuperAdmin && <VerifyNowMonitor showToast={showToast} />}

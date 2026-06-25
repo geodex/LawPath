@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Building2, AlertTriangle, RefreshCw, TrendingUp, Users } from "lucide-react";
 import { getTenantsOverview } from "./api";
-import type { TenantOverviewRow, TenantsOverviewTotals } from "./types";
+import type { PlatformPricingConfig, TenantOverviewRow, TenantsOverviewTotals } from "./types";
 
 type SortKey =
   | "company_name" | "plan" | "user_count" | "matter_count"
@@ -58,9 +58,23 @@ interface Props {
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
 }
 
+function rands(cents: number) {
+  return `R ${(cents / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function computeCharge(baseCents: number, pricing: PlatformPricingConfig) {
+  const charge = Math.round(baseCents * (1 + pricing.vatRate) * (1 + pricing.markupRate));
+  const vat    = Math.round(baseCents * pricing.vatRate);
+  const subtotal = baseCents + vat;
+  const markup = charge - subtotal;
+  const margin = charge - baseCents; // platform's gross take (VAT + markup, before passing VAT to SARS)
+  return { baseCents, vat, subtotal, markup, charge, margin };
+}
+
 export function SuperTenants({ log, showToast }: Props) {
   const [rows, setRows] = useState<TenantOverviewRow[]>([]);
   const [totals, setTotals] = useState<TenantsOverviewTotals | null>(null);
+  const [pricing, setPricing] = useState<PlatformPricingConfig>({ vatRate: 0.15, markupRate: 0 });
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("last_activity_at");
@@ -74,6 +88,7 @@ export function SuperTenants({ log, showToast }: Props) {
       const data = await getTenantsOverview();
       setRows(data.tenants);
       setTotals(data.totals);
+      if (data.pricing) setPricing(data.pricing);
       log(`Loaded ${data.tenants.length} tenants for overview.`);
     } catch (err: any) {
       showToast("error", "Failed to load tenants", err?.message || "Unknown error");
@@ -214,7 +229,15 @@ export function SuperTenants({ log, showToast }: Props) {
                           </td>
                           <td style={{ textAlign: "right" }}>
                             {fmtNum(r.searchworks_calls_30d)}
-                            {r.searchworks_credits_30d > 0 && <small className="muted" style={{ marginLeft: 6 }}>(R{(r.searchworks_credits_30d / 100).toLocaleString("en-ZA", { maximumFractionDigits: 0 })})</small>}
+                            {r.searchworks_credits_30d > 0 && (() => {
+                              const b = computeCharge(r.searchworks_credits_30d, pricing);
+                              return (
+                                <div style={{ fontSize: "0.74rem", color: "var(--muted)", marginTop: 2, lineHeight: 1.3 }}>
+                                  <div>Base {rands(b.baseCents)}</div>
+                                  <div title={`VAT ${rands(b.vat)} + markup ${rands(b.markup)}`}>Charge <strong style={{ color: "var(--green)" }}>{rands(b.charge)}</strong></div>
+                                </div>
+                              );
+                            })()}
                           </td>
                           <td>
                             <small>{fmtRelative(r.last_activity_at)}</small>
@@ -248,7 +271,19 @@ export function SuperTenants({ log, showToast }: Props) {
                                   <dl>
                                     <dt>Lightstone (30d)</dt><dd>{fmtNum(r.lightstone_calls_30d)} calls, {fmtNum(r.lightstone_errors_30d)} errors</dd>
                                     <dt>VerifyNow (30d)</dt><dd>{fmtNum(r.verifynow_calls_30d)} calls, {fmtNum(r.verifynow_credits_30d)} credits, {fmtNum(r.verifynow_errors_30d)} errors</dd>
-                                    <dt>SearchWorks (30d)</dt><dd>{fmtNum(r.searchworks_calls_30d)} calls, R{(r.searchworks_credits_30d / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}, {fmtNum(r.searchworks_errors_30d)} errors</dd>
+                                    <dt>SearchWorks (30d)</dt><dd>{fmtNum(r.searchworks_calls_30d)} calls, {fmtNum(r.searchworks_errors_30d)} errors</dd>
+                                    {r.searchworks_credits_30d > 0 && (() => {
+                                      const b = computeCharge(r.searchworks_credits_30d, pricing);
+                                      return (
+                                        <>
+                                          <dt>SW base cost</dt><dd>{rands(b.baseCents)}</dd>
+                                          <dt>+ VAT ({(pricing.vatRate * 100).toFixed(2)}%)</dt><dd>{rands(b.vat)}</dd>
+                                          <dt>+ Markup ({(pricing.markupRate * 100).toFixed(2)}%)</dt><dd>{rands(b.markup)}</dd>
+                                          <dt>SW tenant charge</dt><dd><strong>{rands(b.charge)}</strong></dd>
+                                          <dt>Platform margin</dt><dd>{rands(b.margin)}</dd>
+                                        </>
+                                      );
+                                    })()}
                                   </dl>
                                 </div>
                                 <div>

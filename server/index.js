@@ -959,6 +959,40 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
   }
 });
 
+// ─── PLATFORM PRICING CONFIG ───────────────────────────────────────────────
+// VAT rate + platform markup applied to all external-provider usage when
+// billing tenants. tenant_charge = base * (1 + vat) * (1 + markup).
+
+app.get("/api/platform/pricing-config", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  try {
+    const r = await pool.query("select vat_rate, markup_rate, updated_at from platform_pricing_config where id = 1");
+    const row = r.rows[0] || { vat_rate: "0.15", markup_rate: "0", updated_at: null };
+    res.json({
+      vatRate:    Number(row.vat_rate),
+      markupRate: Number(row.markup_rate),
+      updatedAt:  row.updated_at
+    });
+  } catch (err) { next(err); }
+});
+
+app.put("/api/platform/pricing-config", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  const vatRate    = Number(req.body?.vatRate);
+  const markupRate = Number(req.body?.markupRate);
+  if (!isFinite(vatRate)    || vatRate    < 0 || vatRate    > 1) return res.status(400).json({ error: "vatRate must be between 0 and 1 (e.g. 0.15 for 15%)" });
+  if (!isFinite(markupRate) || markupRate < 0 || markupRate > 5) return res.status(400).json({ error: "markupRate must be between 0 and 5 (e.g. 0.30 for 30%)" });
+  try {
+    await pool.query(
+      `insert into platform_pricing_config (id, vat_rate, markup_rate, updated_at, updated_by)
+       values (1, $1, $2, now(), $3)
+       on conflict (id) do update set vat_rate = $1, markup_rate = $2, updated_at = now(), updated_by = $3`,
+      [vatRate, markupRate, req.user.sub]
+    );
+    res.json({ vatRate, markupRate, updatedAt: new Date().toISOString() });
+  } catch (err) { next(err); }
+});
+
 app.put("/api/platform/assistant-training", authMiddleware, async (req, res, next) => {
   if (!requirePlatformSuperAdmin(req, res)) return;
 
@@ -4194,7 +4228,15 @@ app.get("/api/admin/tenants/overview", authMiddleware, async (req, res, next) =>
       ...r,
       last_activity_at: lastActivityMap.get(r.id) || null
     }));
-    res.json({ tenants, totals: platformTotals.rows[0] });
+    // Pricing config drives per-tenant charge/margin computation on the frontend.
+    const pricing = await pool.query("select vat_rate, markup_rate from platform_pricing_config where id = 1")
+      .then(r => r.rows[0] || { vat_rate: 0.15, markup_rate: 0 })
+      .catch(() => ({ vat_rate: 0.15, markup_rate: 0 }));
+    res.json({
+      tenants,
+      totals: platformTotals.rows[0],
+      pricing: { vatRate: Number(pricing.vat_rate), markupRate: Number(pricing.markup_rate) }
+    });
   } catch (err) { next(err); }
 });
 

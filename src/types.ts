@@ -259,6 +259,12 @@ export type TenantsOverviewTotals = {
   searchworks_calls_30d: number;
 };
 
+export type PlatformPricingConfig = {
+  vatRate: number;     // 0.15 = 15%
+  markupRate: number;  // 0.30 = 30%
+  updatedAt?: string | null;
+};
+
 export type RagSource = {
   id: string;
   name: string;

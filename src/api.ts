@@ -658,7 +658,19 @@ export async function getTenantsOverview() {
   return request<{
     tenants: import("./types").TenantOverviewRow[];
     totals: import("./types").TenantsOverviewTotals;
+    pricing: import("./types").PlatformPricingConfig;
   }>("/api/admin/tenants/overview");
+}
+
+export async function getPricingConfig() {
+  return request<import("./types").PlatformPricingConfig>("/api/platform/pricing-config");
+}
+
+export async function savePricingConfig(config: { vatRate: number; markupRate: number }) {
+  return request<import("./types").PlatformPricingConfig>("/api/platform/pricing-config", {
+    method: "PUT",
+    body: JSON.stringify(config)
+  });
 }
 
 export async function searchworksCall<T = unknown>(service: string, body: unknown) {

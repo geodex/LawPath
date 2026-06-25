@@ -5940,6 +5940,43 @@ select {
 .plan-practice { background: var(--gold-bg);   color: var(--gold); }
 .plan-firm     { background: var(--green-light); color: var(--green-dark); }
 
+/* ─── Platform pricing breakdown ──────────────────────────────────────── */
+
+.pricing-breakdown {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 6px;
+  column-gap: 14px;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.pricing-breakdown dt {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.pricing-breakdown dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.pricing-breakdown dt.pricing-total-key,
+.pricing-breakdown dd.pricing-total-val {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: 4px;
+  font-weight: 700;
+  color: var(--green-dark);
+}
+
+.pricing-breakdown dd.pricing-total-val {
+  color: var(--green);
+  font-size: 0.95rem;
+}
+
 /* ─── SearchWorks panel (Deeds Office search inside Conveyancing) ──────── */
 
 .sw-panel {
