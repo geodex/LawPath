@@ -6,6 +6,167 @@ import type { LegalCorpusDocument, LegalCorpusSource, ResearchQuery } from "./ty
 const uid = (p: string) => `${p}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
 const formatDate = (iso: string) => iso ? new Date(iso).toLocaleDateString("en-ZA") : "Never";
 
+// Escape user / DB content before injecting into the standalone judgment HTML
+// document. Plain HTML — no React tree, no DOMPurify dependency.
+function escapeHtml(s: string) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Build a self-contained styled HTML document for the full-judgment view.
+// Opened via a Blob URL in a new tab so the user gets dedicated scroll,
+// browser find, print + save-as-PDF. Closing the tab drops everything.
+function buildJudgmentHtml(d: { title: string; citation: string; court: string; year: string; text: string; source: string; sourceUrl: string }) {
+  const sourceLabel = d.source === "gcs" ? "Full text from cloud archive"
+    : d.source === "snippet" ? "Indexed extract from the corpus"
+    : d.source === "none" ? "Full text not available — showing summary"
+    : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(d.title)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:ital,wght@0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #0d1b17;
+      --muted: #5c7569;
+      --line: #dce4de;
+      --paper: #f3f5f2;
+      --panel: #ffffff;
+      --surface: #f7f9f7;
+      --green: #177a5f;
+      --green-dark: #091410;
+      --gold: #b8870c;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); }
+    body {
+      font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      line-height: 1.7;
+      font-size: 16px;
+    }
+    .wrap {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 36px 28px 80px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 14px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .brand .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    }
+    h1 {
+      font-family: "Lora", Georgia, "Times New Roman", serif;
+      font-weight: 600;
+      font-size: 28px;
+      line-height: 1.25;
+      letter-spacing: -0.01em;
+      margin: 0 0 8px;
+      color: var(--ink);
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 18px;
+    }
+    .meta strong { color: var(--ink); }
+    .source-pill {
+      display: inline-block;
+      padding: 3px 10px;
+      background: rgba(23,122,95,0.10);
+      color: var(--green-dark);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-right: 8px;
+    }
+    .source-pill.snippet { background: rgba(184,135,12,0.12); color: var(--gold); }
+    .source-pill.none    { background: var(--surface); color: var(--muted); }
+    .ext-link {
+      display: inline-block;
+      margin-bottom: 22px;
+      color: var(--green);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+      border-bottom: 1px solid currentColor;
+    }
+    .ext-link:hover { color: var(--green-dark); }
+    hr {
+      border: 0;
+      border-top: 1px solid var(--line);
+      margin: 22px 0 28px;
+    }
+    .body-text {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 15.5px;
+      line-height: 1.8;
+      color: var(--ink);
+      background: var(--panel);
+      padding: 28px 32px;
+      border-radius: 10px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .footer {
+      margin-top: 28px;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .footer strong { color: var(--ink); }
+    @media print {
+      body { background: white; font-size: 11pt; }
+      .wrap { max-width: none; padding: 0; }
+      .body-text { box-shadow: none; padding: 0; border-radius: 0; }
+      .source-pill, .ext-link, .footer { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span> LawPath SA · Legal Research Corpus</div>
+    <h1>${escapeHtml(d.title)}</h1>
+    <div class="meta">
+      ${d.citation ? `<strong>${escapeHtml(d.citation)}</strong>` : ""}
+      ${d.citation && (d.court || d.year) ? " · " : ""}
+      ${d.court ? escapeHtml(d.court) : ""}
+      ${d.court && d.year ? " · " : ""}
+      ${d.year ? escapeHtml(d.year) : ""}
+    </div>
+    <div>
+      ${sourceLabel ? `<span class="source-pill ${d.source === "snippet" ? "snippet" : d.source === "none" ? "none" : ""}">${escapeHtml(sourceLabel)}</span>` : ""}
+      ${d.sourceUrl ? `<a class="ext-link" href="${escapeHtml(d.sourceUrl)}" target="_blank" rel="noopener noreferrer">Open original source ↗</a>` : ""}
+    </div>
+    <hr>
+    <div class="body-text">${escapeHtml(d.text)}</div>
+    <div class="footer">
+      <strong>Attorney review required.</strong> This judgment text is shown for research purposes only. Always verify the citation, holding, and current authority against the official law report before relying on it in a matter.
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 const SOURCE_TYPE_LABELS: Record<LegalCorpusSource["sourceType"], string> = {
   case_law: "Case law", legislation: "Legislation", gazette: "Gazette",
   lpc_rules: "LPC Rules", practice_directive: "Practice directive",
@@ -108,9 +269,35 @@ export function LegalResearchDB({
     setLoadingFullText(doc.id);
     try {
       const res = await getCorpusDocumentText(doc.id);
-      setFullTextDoc(res);
-    } catch {
-      setFullTextDoc({ title: doc.title, citation: doc.citation, text: doc.summary || "Full text not available.", source: "none" });
+      // Build a self-contained HTML document, open it via a Blob URL in a
+      // new tab. When the user closes the tab the Blob URL is revoked and
+      // nothing persists.
+      const html = buildJudgmentHtml({
+        title: res.title || doc.title,
+        citation: res.citation || doc.citation || "",
+        court: doc.court || "",
+        year: doc.year ? String(doc.year) : "",
+        text: res.text || doc.summary || "Full text not available for this judgment.",
+        source: res.source,
+        sourceUrl: res.sourceUrl || doc.sourceUrl || ""
+      });
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank", "noopener,noreferrer");
+      if (!win) {
+        // Popup blocked — fall back to the in-page modal so the user sees something.
+        URL.revokeObjectURL(url);
+        setFullTextDoc(res);
+        showToast("info", "Popup blocked", "Allow popups for this site to open judgments in a new tab.");
+      } else {
+        // Revoke the URL after the new tab has had time to load (60s buffer);
+        // closing the tab earlier is fine — the browser keeps the document
+        // until the tab actually closes.
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not load the judgment.";
+      showToast("error", "Full judgment failed", msg);
     } finally {
       setLoadingFullText(null);
     }

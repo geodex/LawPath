@@ -3222,7 +3222,8 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
 });
 
 app.get("/api/research-db/documents/:id/text", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const isSuperAdmin = req.user.role === "platform_super_admin";
+  if (!req.user.tenantId && !isSuperAdmin) return res.status(403).json({ error: "Tenant context required." });
   try {
     const result = await pool.query("select gcs_uri, full_text_snippet, title, citation, source_url from legal_corpus_documents where id = $1 limit 1", [req.params.id]);
     if (!result.rowCount) return res.status(404).json({ error: "Document not found." });
