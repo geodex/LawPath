@@ -73,22 +73,14 @@ export function LegalResearchDB({
       setQueries(prev => [q, ...prev].slice(0, 10));
       log(`Research query: "${searchQuery}" — ${res.documents.length} results`);
       showToast("success", "Search complete", `${res.documents.length} results found.`);
-    } catch {
-      // Local fallback
-      const q = searchQuery.toLowerCase();
-      const filtered = documents.filter(d =>
-        d.title.toLowerCase().includes(q) || d.citation.toLowerCase().includes(q) ||
-        d.summary.toLowerCase().includes(q) || d.tags.some(t => t.toLowerCase().includes(q))
-      );
-      setSearchResults(filtered);
-      setAiSummary(`${filtered.length} results found in the SA legal corpus for "${searchQuery}". Key authority: ${filtered[0]?.title ?? "none found"}. Attorney review required before relying on any AI research summary.`);
-      const qRec: ResearchQuery = {
-        id: uid("RQ"), queryText: searchQuery, resultsCount: filtered.length,
-        aiSummary, citations: filtered.map(d => ({ title: d.title, citation: d.citation, url: d.sourceUrl })),
-        createdAt: new Date().toISOString()
-      };
-      setQueries(prev => [qRec, ...prev].slice(0, 10));
-      showToast("info", "Local search", `${filtered.length} results from indexed documents.`);
+    } catch (err) {
+      // Surface the actual API error so we don't silently mask 403s or 500s
+      // behind an empty local result.
+      const msg = err instanceof Error ? err.message : "Search failed.";
+      setSearchResults([]);
+      setAiSummary(`Search failed: ${msg}`);
+      showToast("error", "Search failed", msg);
+      console.error("[research-db] search failed:", err);
     } finally {
       setSearching(false);
     }

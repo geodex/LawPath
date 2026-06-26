@@ -3083,7 +3083,10 @@ async function rerankWithAi(query, docs, aiCtx) {
 }
 
 app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  // Super admins (tenant_id null) can also search the platform corpus for
+  // testing and demos; their queries log with tenant_id null.
+  const isSuperAdmin = req.user.role === "platform_super_admin";
+  if (!req.user.tenantId && !isSuperAdmin) return res.status(403).json({ error: "Tenant context required." });
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "Query is required." });
   const aiCtx = { tenantId: req.user.tenantId || null, userId: req.user.sub || null };
@@ -3186,10 +3189,15 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
       } catch { /* keep default */ }
     }
 
-    await pool.query(
-      "insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)",
-      [req.user.tenantId, query, finalDocs.length, aiSummary, JSON.stringify(citations), req.user.sub]
-    );
+    // Only persist into tenant_research_queries when there's a real tenant
+    // (the column is NOT NULL). Super-admin smoke searches don't get logged
+    // to the per-tenant history.
+    if (req.user.tenantId) {
+      await pool.query(
+        "insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)",
+        [req.user.tenantId, query, finalDocs.length, aiSummary, JSON.stringify(citations), req.user.sub]
+      ).catch(err => console.warn("[research] tenant_research_queries insert failed:", err.message));
+    }
 
     // If we still ended with zero, fetch the corpus size so the UI can
     // distinguish "nothing matches" from "corpus is empty".
