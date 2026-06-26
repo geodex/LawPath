@@ -5940,6 +5940,63 @@ select {
 .plan-practice { background: var(--gold-bg);   color: var(--gold); }
 .plan-firm     { background: var(--green-light); color: var(--green-dark); }
 
+/* ─── SA Case Law semantic search additions ───────────────────────────── */
+
+.ai-ranked-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  background: var(--green-light);
+  color: var(--green-dark);
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+
+.query-expansion-details {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.query-expansion-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.query-expansion-details code {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.corpus-doc-relevance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 8px;
+  padding: 6px 10px;
+  background: var(--green-light);
+  color: var(--green-dark);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.corpus-doc-relevance svg {
+  flex-shrink: 0;
+}
+
 /* ─── Platform pricing breakdown ──────────────────────────────────────── */
 
 .pricing-breakdown {

@@ -505,7 +505,13 @@ export async function getLegalCorpus() {
 }
 
 export async function searchLegalCorpus(query: string) {
-  return request<{ documents: LegalCorpusDocument[]; aiSummary: string; citations: ResearchQuery["citations"] }>("/api/research-db/search", { method: "POST", body: JSON.stringify({ query }) });
+  return request<{
+    documents: LegalCorpusDocument[];
+    aiSummary: string;
+    citations: ResearchQuery["citations"];
+    queryExpansion: string | null;
+    aiRanked: boolean;
+  }>("/api/research-db/search", { method: "POST", body: JSON.stringify({ query }) });
 }
 
 export async function indexCorpusSource(sourceId: string) {

@@ -34,6 +34,8 @@ export function LegalResearchDB({
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<LegalCorpusDocument[]>([]);
   const [aiSummary, setAiSummary] = useState("");
+  const [aiRanked, setAiRanked] = useState(false);
+  const [queryExpansion, setQueryExpansion] = useState<string | null>(null);
   const [citationBundle, setCitationBundle] = useState<LegalCorpusDocument[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [indexing, setIndexing] = useState<string | null>(null);
@@ -52,6 +54,8 @@ export function LegalResearchDB({
       const res = await searchLegalCorpus(searchQuery);
       setSearchResults(res.documents);
       setAiSummary(res.aiSummary);
+      setAiRanked(Boolean(res.aiRanked));
+      setQueryExpansion(res.queryExpansion);
       const q: ResearchQuery = {
         id: uid("RQ"), queryText: searchQuery, resultsCount: res.documents.length,
         aiSummary: res.aiSummary, citations: res.citations, createdAt: new Date().toISOString()
@@ -224,7 +228,7 @@ export function LegalResearchDB({
             <input
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Search SA case law, legislation and LPC rules — e.g. voetstoots, Section 86, good faith..."
+              placeholder="Ask in plain English — e.g. &quot;Can a seller hide a leaking roof using voetstoots?&quot; AI understands legal concepts and SA Acts."
             />
             <select
               style={{ padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8 }}
@@ -257,8 +261,18 @@ export function LegalResearchDB({
         {/* AI summary */}
         {aiSummary && (
           <div className="ai-research-summary">
-            <p className="eyebrow"><Sparkles size={14} style={{ display: "inline", marginRight: 4 }} />AI Research Analysis</p>
+            <p className="eyebrow">
+              <Sparkles size={14} style={{ display: "inline", marginRight: 4 }} />
+              AI Research Analysis
+              {aiRanked && <span className="ai-ranked-badge">AI-ranked</span>}
+            </p>
             <p style={{ margin: 0, fontSize: "0.92rem" }}>{aiSummary}</p>
+            {queryExpansion && (
+              <details className="query-expansion-details">
+                <summary>Search terms used</summary>
+                <code>{queryExpansion}</code>
+              </details>
+            )}
           </div>
         )}
 
@@ -282,6 +296,11 @@ export function LegalResearchDB({
                         : doc.title}
                     </div>
                     <div className="corpus-doc-citation">{doc.citation} · {doc.court} · {doc.year}</div>
+                    {doc.relevanceReason && (
+                      <div className="corpus-doc-relevance">
+                        <Sparkles size={11} /> {doc.relevanceReason}
+                      </div>
+                    )}
                     {expandedDoc === doc.id
                       ? <p style={{ margin: "0 0 8px", fontSize: "0.87rem" }}>{doc.summary}</p>
                       : <p className="corpus-doc-summary">{doc.summary}</p>}

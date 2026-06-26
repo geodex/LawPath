@@ -2956,46 +2956,183 @@ app.get("/api/research-db/corpus", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── SA Legal Corpus search — AI-enhanced semantic search ──────────────
+// Two-stage hybrid:
+//   1. AI rewrites the user's natural-language query into FTS-friendly
+//      OR-separated legal terms (concepts, Act names, SA-specific synonyms).
+//   2. PostgreSQL FTS pulls a wider candidate pool; AI reranks by relevance
+//      to the original intent and returns top 10 with brief explanations.
+// Falls back to plain FTS if AI is unavailable.
+
+// In-memory cache for expanded queries (1-hour TTL) so identical searches
+// don't re-spend tokens.
+const queryExpansionCache = new Map(); // query.toLowerCase() → { expansion, expiresAt }
+const QUERY_CACHE_TTL_MS = 60 * 60 * 1000;
+
+async function expandLegalQuery(query, aiCtx) {
+  const key = query.toLowerCase().trim();
+  const cached = queryExpansionCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.expansion;
+
+  const searchAi = await getAiForFeature("research-summaries");
+  if (!searchAi.apiKey) return null;
+
+  const prompt = [
+    `Rewrite this South African legal research query into PostgreSQL tsquery-compatible boolean search terms.`,
+    `Output ONLY a single line of terms separated by ' | ' (OR). No prose, no markdown.`,
+    `Include: key legal concepts, SA-specific Act names (full + short forms), case names if any, common synonyms.`,
+    `Prefer single words or short multi-word phrases joined by ' & ' inside the OR groups.`,
+    `Example input: "Can a seller hide a leaking roof using voetstoots?"`,
+    `Example output: voetstoots | latent & defect | seller & disclosure | Consumer & Protection & Act | CPA & 55 & 2008 | merx | aedilitian | non-disclosure`,
+    ``,
+    `Query: ${query}`,
+    `tsquery terms:`
+  ].join("\n");
+
+  try {
+    const text = await callAiProviderLogged(
+      searchAi.provider, searchAi.apiKey, searchAi.model, "", prompt,
+      { ...aiCtx, feature: "research-summaries" }
+    );
+    const cleaned = String(text || "").trim().split("\n")[0].replace(/^[`*\s>]+|[`*\s]+$/g, "");
+    if (!cleaned) return null;
+    queryExpansionCache.set(key, { expansion: cleaned, expiresAt: Date.now() + QUERY_CACHE_TTL_MS });
+    return cleaned;
+  } catch (err) {
+    console.warn("[research] query expansion failed:", err.message);
+    return null;
+  }
+}
+
+async function rerankWithAi(query, docs, aiCtx) {
+  if (docs.length <= 5) return docs; // nothing to rerank
+  const searchAi = await getAiForFeature("research-summaries");
+  if (!searchAi.apiKey) return docs;
+
+  const candidates = docs.map((d, i) => `[${i}] ${d.title} ${d.citation || ""} (${d.court || "—"}, ${d.year || "—"}): ${(d.summary || "").slice(0, 350)}`).join("\n");
+  const prompt = [
+    `User searched the South African legal corpus for: "${query}"`,
+    ``,
+    `Below are candidate documents (indexed [0]..[${docs.length - 1}]). Rerank by relevance to the user's intent.`,
+    `Return ONLY a JSON array of objects, no prose. Each object: {"i": <index>, "reason": "<one short sentence why this is relevant>"}.`,
+    `Include only the top ${Math.min(10, docs.length)} most relevant. If none are relevant, return [].`,
+    ``,
+    `Candidates:`,
+    candidates,
+    ``,
+    `JSON:`
+  ].join("\n");
+
+  try {
+    const text = await callAiProviderLogged(
+      searchAi.provider, searchAi.apiKey, searchAi.model, "", prompt,
+      { ...aiCtx, feature: "research-summaries" }
+    );
+    // Pull JSON array out of the response, tolerating code fences.
+    const jsonMatch = String(text || "").match(/\[\s*\{[\s\S]*?\}\s*\]/);
+    if (!jsonMatch) return docs;
+    const ranked = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(ranked) || !ranked.length) return docs;
+    const reordered = [];
+    const seen = new Set();
+    for (const item of ranked) {
+      const idx = Number(item?.i);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= docs.length || seen.has(idx)) continue;
+      seen.add(idx);
+      reordered.push({ ...docs[idx], _relevance_reason: String(item?.reason || "").slice(0, 240) });
+    }
+    return reordered.length ? reordered : docs;
+  } catch (err) {
+    console.warn("[research] rerank failed:", err.message);
+    return docs;
+  }
+}
+
 app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "Query is required." });
+  const aiCtx = { tenantId: req.user.tenantId || null, userId: req.user.sub || null };
+
   try {
-    // Full-text search via generated tsvector; fall back to ILIKE if FTS column missing or no results.
-    let docs;
-    try {
-      docs = await pool.query(
+    // Step 1: Expand the natural-language query into tsquery-friendly terms.
+    // Skip for short keyword-only queries (≤ 3 words) where the user clearly
+    // knows what they want.
+    const wordCount = query.trim().split(/\s+/).length;
+    const expanded = wordCount > 3 ? await expandLegalQuery(query, aiCtx) : null;
+
+    // Step 2: Try FTS with the expanded query (broader recall), then fall
+    // back to plain plainto_tsquery, then ILIKE.
+    let docs = { rows: [], rowCount: 0 };
+    const tryQuery = async (sql, params) => {
+      try { return await pool.query(sql, params); }
+      catch { return { rows: [], rowCount: 0 }; }
+    };
+
+    if (expanded) {
+      docs = await tryQuery(
+        `select * from legal_corpus_documents
+         where content_tsv @@ to_tsquery('english', $1)
+         order by ts_rank(content_tsv, to_tsquery('english', $1)) desc, year desc nulls last
+         limit 30`,
+        [expanded]
+      );
+    }
+    if (!docs.rowCount) {
+      docs = await tryQuery(
         `select * from legal_corpus_documents
          where content_tsv @@ plainto_tsquery('english', $1)
-         order by year desc limit 20`,
+         order by ts_rank(content_tsv, plainto_tsquery('english', $1)) desc, year desc nulls last
+         limit 30`,
         [query]
       );
-    } catch {
-      docs = { rows: [], rowCount: 0 };
     }
     if (!docs.rowCount) {
       docs = await pool.query(
         `select * from legal_corpus_documents
          where title ilike $1 or summary ilike $1 or citation ilike $1 or full_text_snippet ilike $1
-         order by year desc limit 20`,
+         order by year desc nulls last limit 30`,
         [`%${query}%`]
       );
     }
-    let aiSummary = `${docs.rowCount} results found in the SA legal corpus for "${query}". Attorney review required before relying on any AI research summary.`;
-    const citations = docs.rows.map(d => ({ title: d.title, citation: d.citation || "", url: d.source_url || "" }));
+
+    // Step 3: AI rerank (top 30 → top 10) with relevance reasons.
+    const ranked = await rerankWithAi(query, docs.rows, aiCtx);
+    const finalDocs = ranked.slice(0, 10);
+
+    // Step 4: AI synthesis summary across the reranked top results.
+    let aiSummary = `${finalDocs.length} result${finalDocs.length === 1 ? "" : "s"} found in the SA legal corpus for "${query}". Attorney review required before relying on any AI research summary.`;
+    const citations = finalDocs.map(d => ({ title: d.title, citation: d.citation || "", url: d.source_url || "" }));
+
     const searchAi = await getAiForFeature("research-summaries");
-    if (searchAi.apiKey && docs.rowCount > 0) {
-      const searchPrompt = `Summarise the following South African legal research results for the query "${query}" in 2-3 sentences. Cite the most relevant authority. Attorney review required:\n${docs.rows.map(d => `${d.title} ${d.citation}: ${d.summary}`).join("\n")}`;
+    if (searchAi.apiKey && finalDocs.length > 0) {
+      const searchPrompt = [
+        `Synthesise these South African legal authorities for the user's research question: "${query}".`,
+        `Give a 2-4 sentence summary. Cite the most relevant authority by name. End with: "Attorney review required."`,
+        ``,
+        finalDocs.map(d => `${d.title} ${d.citation || ""}: ${(d.summary || "").slice(0, 400)}`).join("\n")
+      ].join("\n");
       try {
-        aiSummary = await callAiProviderLogged(searchAi.provider, searchAi.apiKey, searchAi.model, "", searchPrompt, {
-          tenantId: req.user.tenantId || null,
-          userId: req.user.sub || null,
-          feature: "research-summaries"
-        }) || aiSummary;
-      } catch { /* fallback to default summary */ }
+        const summaryText = await callAiProviderLogged(
+          searchAi.provider, searchAi.apiKey, searchAi.model, "", searchPrompt,
+          { ...aiCtx, feature: "research-summaries" }
+        );
+        if (summaryText && summaryText.trim()) aiSummary = summaryText.trim();
+      } catch { /* keep default */ }
     }
-    await pool.query("insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)", [req.user.tenantId, query, docs.rowCount, aiSummary, JSON.stringify(citations), req.user.sub]);
-    res.json({ documents: docs.rows.map(corpusDocFromRow), aiSummary, citations });
+
+    await pool.query(
+      "insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)",
+      [req.user.tenantId, query, finalDocs.length, aiSummary, JSON.stringify(citations), req.user.sub]
+    );
+
+    res.json({
+      documents: finalDocs.map(d => ({ ...corpusDocFromRow(d), relevanceReason: d._relevance_reason || null })),
+      aiSummary,
+      citations,
+      queryExpansion: expanded || null,
+      aiRanked: ranked !== docs.rows
+    });
   } catch (error) { next(error); }
 });
 

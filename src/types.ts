@@ -739,6 +739,8 @@ export type LegalCorpusDocument = {
   gcsUri: string;
   tags: string[];
   year: number;
+  // Populated by the AI rerank step; explains why this result matched.
+  relevanceReason?: string | null;
 };
 
 export type ResearchQuery = {
