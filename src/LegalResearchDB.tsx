@@ -53,7 +53,17 @@ export function LegalResearchDB({
     try {
       const res = await searchLegalCorpus(searchQuery);
       setSearchResults(res.documents);
-      setAiSummary(res.aiSummary);
+      if (res.documents.length === 0) {
+        if (res.corpusSize === 0) {
+          setAiSummary("The legal corpus is empty on this server. Run the indexer: node server/saflii.js --queries 95 --top-k 20");
+        } else if (res.corpusSize != null) {
+          setAiSummary(`No matches found in ${res.corpusSize.toLocaleString("en-ZA")} indexed documents. Try a shorter query or different keywords.`);
+        } else {
+          setAiSummary(res.aiSummary);
+        }
+      } else {
+        setAiSummary(res.aiSummary);
+      }
       setAiRanked(Boolean(res.aiRanked));
       setQueryExpansion(res.queryExpansion);
       const q: ResearchQuery = {

@@ -2969,21 +2969,38 @@ app.get("/api/research-db/corpus", authMiddleware, async (req, res, next) => {
 const queryExpansionCache = new Map(); // query.toLowerCase() → { expansion, expiresAt }
 const QUERY_CACHE_TTL_MS = 60 * 60 * 1000;
 
+// Strip everything that isn't a word char / & / | / parens / space and collapse
+// whitespace so PostgreSQL to_tsquery doesn't choke on the AI's output.
+function sanitiseTsQuery(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim().split("\n")[0];
+  s = s.replace(/^[`*\s>"']+|[`*\s"']+$/g, "");
+  // Allow letters/digits/spaces and the tsquery operators & | ( )
+  s = s.replace(/[^\w\s&|()]/g, " ").replace(/\s+/g, " ").trim();
+  // Drop dangling operators at start/end and double operators
+  s = s.replace(/^\s*[&|]\s*/, "").replace(/\s*[&|]\s*$/, "");
+  s = s.replace(/\s*&\s*&\s*/g, " & ").replace(/\s*\|\s*\|\s*/g, " | ");
+  return s || null;
+}
+
 async function expandLegalQuery(query, aiCtx) {
   const key = query.toLowerCase().trim();
   const cached = queryExpansionCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.expansion;
 
   const searchAi = await getAiForFeature("research-summaries");
-  if (!searchAi.apiKey) return null;
+  if (!searchAi.apiKey) {
+    console.info("[research] no AI key configured — skipping query expansion");
+    return null;
+  }
 
   const prompt = [
     `Rewrite this South African legal research query into PostgreSQL tsquery-compatible boolean search terms.`,
-    `Output ONLY a single line of terms separated by ' | ' (OR). No prose, no markdown.`,
+    `Output ONLY a single line of terms separated by ' | ' (OR). No prose, no markdown, no punctuation other than the & | ( ) operators.`,
     `Include: key legal concepts, SA-specific Act names (full + short forms), case names if any, common synonyms.`,
     `Prefer single words or short multi-word phrases joined by ' & ' inside the OR groups.`,
     `Example input: "Can a seller hide a leaking roof using voetstoots?"`,
-    `Example output: voetstoots | latent & defect | seller & disclosure | Consumer & Protection & Act | CPA & 55 & 2008 | merx | aedilitian | non-disclosure`,
+    `Example output: voetstoots | latent & defect | seller & disclosure | Consumer & Protection & Act | merx | aedilitian | non-disclosure`,
     ``,
     `Query: ${query}`,
     `tsquery terms:`
@@ -2994,14 +3011,31 @@ async function expandLegalQuery(query, aiCtx) {
       searchAi.provider, searchAi.apiKey, searchAi.model, "", prompt,
       { ...aiCtx, feature: "research-summaries" }
     );
-    const cleaned = String(text || "").trim().split("\n")[0].replace(/^[`*\s>]+|[`*\s]+$/g, "");
-    if (!cleaned) return null;
+    const cleaned = sanitiseTsQuery(text);
+    if (!cleaned) {
+      console.warn("[research] query expansion returned nothing usable. Raw:", String(text).slice(0, 200));
+      return null;
+    }
+    console.info(`[research] expansion: "${query}" → ${cleaned}`);
     queryExpansionCache.set(key, { expansion: cleaned, expiresAt: Date.now() + QUERY_CACHE_TTL_MS });
     return cleaned;
   } catch (err) {
     console.warn("[research] query expansion failed:", err.message);
     return null;
   }
+}
+
+// Split a free-text query into meaningful words for the ILIKE OR fallback.
+// Drops common English stopwords and punctuation, lowercases, dedupes, caps
+// at 8 terms.
+const STOPWORDS = new Set("a an and are as at be but by can could do does for from has have he her him his how i in is it its me my of on or our she so the their them they this to use used was we what when where which who why will with would you your".split(/\s+/));
+function keywordsFor(query) {
+  const words = String(query || "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !STOPWORDS.has(w));
+  return [...new Set(words)].slice(0, 8);
 }
 
 async function rerankWithAi(query, docs, aiCtx) {
@@ -3062,39 +3096,70 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
     const expanded = wordCount > 3 ? await expandLegalQuery(query, aiCtx) : null;
 
     // Step 2: Try FTS with the expanded query (broader recall), then fall
-    // back to plain plainto_tsquery, then ILIKE.
+    // back to plain plainto_tsquery, then keyword OR ILIKE, then bare ILIKE.
     let docs = { rows: [], rowCount: 0 };
-    const tryQuery = async (sql, params) => {
-      try { return await pool.query(sql, params); }
-      catch { return { rows: [], rowCount: 0 }; }
+    let stageUsed = "none";
+    const tryQuery = async (label, sql, params) => {
+      try {
+        const r = await pool.query(sql, params);
+        console.info(`[research] stage="${label}" returned ${r.rowCount} rows`);
+        return r;
+      } catch (err) {
+        console.warn(`[research] stage="${label}" failed:`, err.message);
+        return { rows: [], rowCount: 0 };
+      }
     };
 
     if (expanded) {
-      docs = await tryQuery(
+      docs = await tryQuery("tsquery-expanded",
         `select * from legal_corpus_documents
          where content_tsv @@ to_tsquery('english', $1)
          order by ts_rank(content_tsv, to_tsquery('english', $1)) desc, year desc nulls last
          limit 30`,
         [expanded]
       );
+      if (docs.rowCount) stageUsed = "tsquery-expanded";
     }
     if (!docs.rowCount) {
-      docs = await tryQuery(
+      docs = await tryQuery("plainto-tsquery",
         `select * from legal_corpus_documents
          where content_tsv @@ plainto_tsquery('english', $1)
          order by ts_rank(content_tsv, plainto_tsquery('english', $1)) desc, year desc nulls last
          limit 30`,
         [query]
       );
+      if (docs.rowCount) stageUsed = "plainto-tsquery";
     }
     if (!docs.rowCount) {
-      docs = await pool.query(
+      const keywords = keywordsFor(query);
+      if (keywords.length) {
+        const conditions = keywords.map((_, i) => {
+          const n = i + 1;
+          return `(title ilike $${n} or summary ilike $${n} or citation ilike $${n} or full_text_snippet ilike $${n})`;
+        }).join(" or ");
+        const params = keywords.map(k => `%${k}%`);
+        docs = await tryQuery(`ilike-keywords[${keywords.join(",")}]`,
+          `select *,
+             (${keywords.map((_, i) => `(case when (title ilike $${i + 1} or summary ilike $${i + 1} or full_text_snippet ilike $${i + 1}) then 1 else 0 end)`).join(" + ")}) as match_score
+           from legal_corpus_documents
+           where ${conditions}
+           order by match_score desc, year desc nulls last
+           limit 30`,
+          params
+        );
+        if (docs.rowCount) stageUsed = "ilike-keywords";
+      }
+    }
+    if (!docs.rowCount) {
+      docs = await tryQuery("ilike-fullquery",
         `select * from legal_corpus_documents
          where title ilike $1 or summary ilike $1 or citation ilike $1 or full_text_snippet ilike $1
          order by year desc nulls last limit 30`,
         [`%${query}%`]
       );
+      if (docs.rowCount) stageUsed = "ilike-fullquery";
     }
+    console.info(`[research] query="${query}" final stage=${stageUsed} rows=${docs.rowCount}`);
 
     // Step 3: AI rerank (top 30 → top 10) with relevance reasons.
     const ranked = await rerankWithAi(query, docs.rows, aiCtx);
@@ -3126,12 +3191,24 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
       [req.user.tenantId, query, finalDocs.length, aiSummary, JSON.stringify(citations), req.user.sub]
     );
 
+    // If we still ended with zero, fetch the corpus size so the UI can
+    // distinguish "nothing matches" from "corpus is empty".
+    let corpusSize = null;
+    if (finalDocs.length === 0) {
+      try {
+        const c = await pool.query("select count(*)::int as n from legal_corpus_documents");
+        corpusSize = c.rows[0]?.n ?? null;
+      } catch { /* ignore */ }
+    }
+
     res.json({
       documents: finalDocs.map(d => ({ ...corpusDocFromRow(d), relevanceReason: d._relevance_reason || null })),
       aiSummary,
       citations,
       queryExpansion: expanded || null,
-      aiRanked: ranked !== docs.rows
+      aiRanked: ranked !== docs.rows,
+      stage: stageUsed,
+      corpusSize
     });
   } catch (error) { next(error); }
 });

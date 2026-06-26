@@ -511,6 +511,8 @@ export async function searchLegalCorpus(query: string) {
     citations: ResearchQuery["citations"];
     queryExpansion: string | null;
     aiRanked: boolean;
+    stage: string;
+    corpusSize: number | null;
   }>("/api/research-db/search", { method: "POST", body: JSON.stringify({ query }) });
 }
 
