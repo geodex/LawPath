@@ -351,13 +351,43 @@ function isSouthAfrican(item) {
   return saSignals.some(s => text.includes(s));
 }
 
+// Derive a sensible title when Laws.Africa doesn't provide one.
+// Preference order:
+//   1. item.title (already a clean human title)
+//   2. Look for a v / vs pattern early in the text — that's almost always
+//      the case name in a judgment ("Banda v Minister of Police").
+//   3. First full sentence (ends with . ! ? or newline)
+//   4. Citation + year + court as a synthetic title
+//   5. "Untitled judgment"
+// Always avoids cutting mid-word.
+function deriveTitle(item, content, citation, year, court) {
+  if (item.title && String(item.title).trim()) return String(item.title).trim();
+
+  const head = String(content || "").slice(0, 800).replace(/\s+/g, " ").trim();
+
+  // Try to find a case-name pattern: "<Surname> [and Another|and Others]? v[s.]? <Surname>..."
+  const caseName = head.match(/[A-Z][\w'-]+(?:\s+[A-Z][\w'-]+){0,4}(?:\s+(?:and\s+(?:Another|Others)|NO))?\s+v(?:s\.?)?\s+[A-Z][\w'-]+(?:\s+[A-Z][\w'-]+){0,8}/);
+  if (caseName) return caseName[0].trim();
+
+  // Otherwise take the first sentence (or the first 250 chars at the
+  // nearest word boundary, whichever is shorter).
+  const firstSentence = head.split(/(?<=[.!?])\s+/)[0];
+  if (firstSentence && firstSentence.length <= 250 && firstSentence.length >= 12) {
+    return firstSentence.trim();
+  }
+
+  // Synthetic title from citation/court/year so the row is at least
+  // identifiable.
+  if (citation) return `${citation}${court ? ` — ${court}` : ""}`;
+  if (court && year) return `Judgment — ${court} (${year})`;
+  return "Untitled judgment";
+}
+
 async function indexResult(item) {
   const content = item.content?.text || item.text || "";
   const publicUrl = item.public_url || item.url || "";
-  const title = item.title || content.slice(0, 120).split("\n")[0] || "Untitled judgment";
 
   if (!publicUrl && !content) return false;
-
   if (!isSouthAfrican(item)) return false;
 
   // Skip if already indexed by URL
@@ -369,11 +399,15 @@ async function indexResult(item) {
     if (exists.rowCount) return false;
   }
 
-  const court = guessCourtFromTitle(title + " " + content);
-  const tags = extractTagsFromText(title + " " + content);
-  const year = extractYearFromText(title + " " + content);
-  const citation = extractCitationFromText(title + " " + content);
-  const summary = content.slice(0, 600).trim();
+  // Derive fields. Use a tentative title for the helper passes, then
+  // recompute the final title now that we have citation/year/court.
+  const tentativeTitle = item.title || content.slice(0, 200);
+  const court    = guessCourtFromTitle(tentativeTitle + " " + content);
+  const year     = extractYearFromText(tentativeTitle + " " + content);
+  const citation = extractCitationFromText(tentativeTitle + " " + content);
+  const tags     = extractTagsFromText(tentativeTitle + " " + content);
+  const title    = deriveTitle(item, content, citation, year, court);
+  const summary  = content.slice(0, 600).trim();
   const fullTextSnippet = content.trim();
 
   const sourceId = await ensureSourceRecord(court);
@@ -386,7 +420,7 @@ async function indexResult(item) {
      on conflict do nothing`,
     [
       sourceId,
-      title.slice(0, 500),
+      title,                       // no slice — let titles be their full length
       citation,
       court,
       year ? `${year}-01-01` : null,

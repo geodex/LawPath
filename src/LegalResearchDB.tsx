@@ -21,9 +21,15 @@ function escapeHtml(s: string) {
 // Opened via a Blob URL in a new tab so the user gets dedicated scroll,
 // browser find, print + save-as-PDF. Closing the tab drops everything.
 function buildJudgmentHtml(d: { title: string; citation: string; court: string; year: string; text: string; source: string; sourceUrl: string }) {
-  const sourceLabel = d.source === "gcs" ? "Full text from cloud archive"
-    : d.source === "snippet" ? "Indexed extract from the corpus"
-    : d.source === "none" ? "Full text not available — showing summary"
+  // Laws.Africa's API returns curated extracts (typically 1-5 KB of
+  // headnote-style "Issues / Held" text), not the full judgment. Detect
+  // that case and surface a prominent CTA to the source URL.
+  const isExtract = d.source === "snippet" || (d.text.length > 0 && d.text.length < 12000);
+  const isFullText = d.source === "gcs";
+
+  const sourceLabel = isFullText        ? "Full text from cloud archive"
+    : isExtract                          ? "Indexed extract — full text on source site"
+    : d.source === "none"                ? "Full text not available"
     : "";
   return `<!doctype html>
 <html lang="en">
@@ -107,6 +113,51 @@ function buildJudgmentHtml(d: { title: string; citation: string; court: string; 
       border-bottom: 1px solid currentColor;
     }
     .ext-link:hover { color: var(--green-dark); }
+    .full-text-cta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 0 0 20px;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, rgba(23,122,95,0.10) 0%, rgba(23,122,95,0.04) 100%);
+      border: 1px solid rgba(23,122,95,0.20);
+      border-left: 4px solid var(--green);
+      border-radius: 10px;
+    }
+    .full-text-cta-text {
+      font-size: 13.5px;
+      color: var(--ink);
+      line-height: 1.55;
+      max-width: 460px;
+    }
+    .full-text-cta-text strong { color: var(--green-dark); }
+    .full-text-cta-btn {
+      flex-shrink: 0;
+      padding: 11px 20px;
+      background: linear-gradient(160deg, #177a5f 0%, #0f6b52 100%);
+      color: #ffffff !important;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      box-shadow: 0 2px 8px rgba(23,122,95,0.30);
+      transition: transform 0.15s, box-shadow 0.15s;
+      white-space: nowrap;
+    }
+    .full-text-cta-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(23,122,95,0.40);
+    }
+    .extract-note {
+      font-size: 12.5px;
+      color: var(--muted);
+      margin: 18px 0 0;
+      padding-top: 14px;
+      border-top: 1px dashed var(--line);
+      line-height: 1.5;
+    }
+    .extract-note a { color: var(--green); font-weight: 600; }
     hr {
       border: 0;
       border-top: 1px solid var(--line);
@@ -155,10 +206,21 @@ function buildJudgmentHtml(d: { title: string; citation: string; court: string; 
     </div>
     <div>
       ${sourceLabel ? `<span class="source-pill ${d.source === "snippet" ? "snippet" : d.source === "none" ? "none" : ""}">${escapeHtml(sourceLabel)}</span>` : ""}
-      ${d.sourceUrl ? `<a class="ext-link" href="${escapeHtml(d.sourceUrl)}" target="_blank" rel="noopener noreferrer">Open original source ↗</a>` : ""}
     </div>
+    ${(isExtract && d.sourceUrl) ? `
+    <div class="full-text-cta">
+      <div class="full-text-cta-text">
+        <strong>This is an indexed extract</strong> — typically a headnote with the issues and held. The complete judgment is hosted on the original source site.
+      </div>
+      <a class="full-text-cta-btn" href="${escapeHtml(d.sourceUrl)}" target="_blank" rel="noopener noreferrer">Read the full judgment ↗</a>
+    </div>` : (d.sourceUrl ? `<a class="ext-link" href="${escapeHtml(d.sourceUrl)}" target="_blank" rel="noopener noreferrer">Open original source ↗</a>` : "")}
     <hr>
     <div class="body-text">${escapeHtml(d.text)}</div>
+    ${isExtract && d.sourceUrl ? `
+    <p class="extract-note">
+      The extract above ends where the source data ends. For the complete reasoning, parties, dates and any subsequent treatment, see the full judgment at
+      <a href="${escapeHtml(d.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.sourceUrl)}</a>.
+    </p>` : ""}
     <div class="footer">
       <strong>Attorney review required.</strong> This judgment text is shown for research purposes only. Always verify the citation, holding, and current authority against the official law report before relying on it in a matter.
     </div>
