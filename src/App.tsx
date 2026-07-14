@@ -73,8 +73,10 @@ import { SuperTenants } from "./SuperTenants";
 import { PlatformPricingPanel } from "./PlatformPricingPanel";
 import { HelpPanel } from "./HelpPanel";
 import { TenantTraining } from "./TenantTraining";
+import { Today } from "./Today";
 
 const nav: NavItem[] = [
+  { key: "today",     label: "Today", icon: Sun },
   { key: "overview",  label: "Overview", icon: Home },
   { key: "clients",   label: "Clients",  icon: Users },
   { key: "drafting",  label: "Contracts", icon: FilePenLine },
@@ -123,6 +125,7 @@ const navGroups: NavGroup[] = [
 ];
 
 const viewAgentMap: Record<ViewKey, AiAgentKey> = {
+  today: "general",
   overview: "general",
   clients: "general",
   drafting: "drafting",
@@ -461,6 +464,8 @@ export function App() {
     try {
       const user = await login({ email, password });
       setAuthUser(user);
+      // Land tenant users on the Today brief; super admins on Overview.
+      setActiveView(user.role === "platform_super_admin" ? "overview" : "today");
       setAuthMessage("Logged in to the tenant workspace.");
       showToast("success", "Logged in", `Welcome back, ${user.fullName}.`);
     } catch (error) {
@@ -521,6 +526,7 @@ export function App() {
     try {
       const response = await getCurrentUser();
       setAuthUser(response.user);
+      setActiveView(response.user.role === "platform_super_admin" ? "overview" : "today");
       setAuthMessage("Session restored.");
       showToast("success", "Session restored", `Signed in as ${response.user.fullName}.`);
     } catch (error) {
@@ -619,6 +625,7 @@ export function App() {
           </div>
         </header>
 
+        {activeView === "today" && <Today userName={authUser?.fullName} setActiveView={setActiveView} />}
         {activeView === "overview" && <Overview matters={matters} tasks={tasks} invoices={invoices} research={research} activity={activity} setActiveView={setActiveView} />}
         {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} tenantProfile={tenantProfile} />}
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
@@ -1327,6 +1334,7 @@ function Sidebar({ activeView, setActiveView, isPlatformSuperAdmin }: { activeVi
     );
   };
 
+  const todayItem = navByKey.get("today");
   const overviewItem = navByKey.get("overview");
   const settingsItem = navByKey.get("settings");
 
@@ -1340,6 +1348,12 @@ function Sidebar({ activeView, setActiveView, isPlatformSuperAdmin }: { activeVi
         </div>
       </div>
       <nav className="nav" aria-label="Main navigation">
+        {todayItem && !isPlatformSuperAdmin && (
+          <button key={todayItem.key} className={activeView === "today" ? "active" : ""} onClick={() => setActiveView("today")}>
+            <todayItem.icon size={18} />
+            <span>{todayItem.label}</span>
+          </button>
+        )}
         {overviewItem && (
           <button key={overviewItem.key} className={activeView === "overview" ? "active" : ""} onClick={() => setActiveView("overview")}>
             <overviewItem.icon size={18} />

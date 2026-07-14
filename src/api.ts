@@ -498,6 +498,12 @@ export async function syncInvoiceToAccounting(id: string, provider: string) {
   return request<{ invoice: Invoice }>(`/api/invoices/${id}/accounting`, { method: "POST", body: JSON.stringify({ provider }) });
 }
 
+// ─── TODAY / MORNING BRIEF ────────────────────────────────────────────────────
+
+export async function getTodayBrief() {
+  return request<import("./types").TodayBrief>("/api/today");
+}
+
 // ─── LEGAL RESEARCH DATABASE ──────────────────────────────────────────────────
 
 export async function getLegalCorpus() {

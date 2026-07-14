@@ -604,8 +604,28 @@ export type AccountingExportRecord = {
 
 // ─── TIER 3: SA LEGAL RESEARCH DATABASE ──────────────────────────────────────
 
+export type TodayItem = {
+  id: string;
+  category: string;
+  severity: "critical" | "warning" | "info";
+  icon: string;
+  view: ViewKey;
+  title: string;
+  detail: string;
+  dueDate: string | null;
+  daysUntil: number | null;
+  dueLabel: string;
+};
+
+export type TodayBrief = {
+  items: TodayItem[];
+  counts: { critical: number; warning: number; info: number; total: number };
+  brief: string | null;
+  generatedAt: string;
+};
+
 export type ViewKey =
-  | "overview" | "clients" | "drafting" | "research" | "secretary" | "billing"
+  | "today" | "overview" | "clients" | "drafting" | "research" | "secretary" | "billing"
   | "booking" | "portal" | "training-guide" | "settings"
   | "trust" | "fica" | "time" | "popia"
   | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting"

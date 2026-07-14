@@ -2264,6 +2264,204 @@ app.get("/api/activity", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── TODAY / MORNING BRIEF ─────────────────────────────────────────────────
+// Aggregates the things that actually need a practitioner's attention today,
+// across litigation deadlines, court dates, conveyancing clearances, FICA
+// expiries and aged unbilled WIP. Each item is normalised into a common
+// shape so the frontend can render one prioritised feed. Optionally an AI
+// composes a short natural-language brief over the top.
+
+function daysUntilLabel(days) {
+  if (days == null) return "";
+  if (days < 0) return `${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} overdue`;
+  if (days === 0) return "due today";
+  if (days === 1) return "due tomorrow";
+  return `in ${days} days`;
+}
+
+app.get("/api/today", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const tid = req.user.tenantId;
+  try {
+    const [litDeadlines, courtDates, clearances, targetReg, ficaExpiry, agedWip] = await Promise.all([
+      // Incomplete litigation deadlines: overdue or due within 45 days
+      pool.query(
+        `select d.id, d.description, d.rule_reference, d.due_date, d.priority,
+                (d.due_date - current_date) as days_until,
+                m.matter_ref, m.case_number, m.plaintiff, m.defendant
+         from litigation_deadlines d
+         join litigation_matters m on m.id = d.matter_id
+         where d.tenant_id = $1 and d.completed = false
+           and m.status = 'Active'
+           and d.due_date <= current_date + 45
+         order by d.due_date asc limit 40`, [tid]),
+      // Upcoming court dates within 30 days
+      pool.query(
+        `select c.id, c.court_date, c.court_time, c.court, c.purpose, c.roll_type,
+                (c.court_date - current_date) as days_until,
+                m.matter_ref, m.case_number, m.plaintiff, m.defendant
+         from court_dates c
+         join litigation_matters m on m.id = c.matter_id
+         where c.tenant_id = $1 and c.court_date >= current_date
+           and c.court_date <= current_date + 30
+           and (c.outcome is null or c.outcome = '')
+         order by c.court_date asc limit 30`, [tid]).catch(() => ({ rows: [] })),
+      // Rates/levy clearances expiring within 21 days or already expired
+      pool.query(
+        `select id, matter_ref, seller_name, buyer_name, current_stage,
+                rates_clearance_expiry, levy_clearance_expiry,
+                least(
+                  coalesce(rates_clearance_expiry, date '9999-12-31'),
+                  coalesce(levy_clearance_expiry, date '9999-12-31')
+                ) as soonest_expiry
+         from conveyancing_matters
+         where tenant_id = $1 and current_stage <> 'completed'
+           and (
+             (rates_clearance_status = 'Received' and rates_clearance_expiry is not null and rates_clearance_expiry <= current_date + 21)
+             or (levy_clearance_status = 'Received' and levy_clearance_expiry is not null and levy_clearance_expiry <= current_date + 21)
+           )
+         order by soonest_expiry asc limit 30`, [tid]).catch(() => ({ rows: [] })),
+      // Conveyancing matters with a target registration date approaching
+      pool.query(
+        `select id, matter_ref, seller_name, buyer_name, current_stage,
+                target_registration_date,
+                (target_registration_date - current_date) as days_until
+         from conveyancing_matters
+         where tenant_id = $1 and current_stage <> 'completed'
+           and target_registration_date is not null
+           and target_registration_date <= current_date + 14
+         order by target_registration_date asc limit 20`, [tid]).catch(() => ({ rows: [] })),
+      // FICA clients expiring within 30 days or expired
+      pool.query(
+        `select id, client_name, risk_rating, fica_status, fica_expiry_date,
+                (fica_expiry_date - current_date) as days_until
+         from fica_clients
+         where tenant_id = $1 and fica_expiry_date is not null
+           and fica_expiry_date <= current_date + 30
+           and fica_status <> 'Rejected'
+         order by fica_expiry_date asc limit 30`, [tid]).catch(() => ({ rows: [] })),
+      // Aged unbilled WIP grouped by matter (WIP older than 45 days)
+      pool.query(
+        `select matter_ref, client_name,
+                sum(amount_cents + vat_amount_cents) as total_cents,
+                count(*) as entry_count,
+                min(entry_date) as oldest_entry
+         from time_entries
+         where tenant_id = $1 and status = 'WIP'
+           and entry_date <= current_date - 45
+         group by matter_ref, client_name
+         having sum(amount_cents + vat_amount_cents) >= 500000
+         order by total_cents desc limit 20`, [tid]).catch(() => ({ rows: [] }))
+    ]);
+
+    const items = [];
+
+    for (const d of litDeadlines.rows) {
+      const days = d.days_until == null ? null : Number(d.days_until);
+      const severity = days < 0 || d.priority === "Critical" ? "critical" : (days <= 7 || d.priority === "Urgent") ? "warning" : "info";
+      items.push({
+        id: `litdl-${d.id}`, category: "litigation-deadline", severity,
+        icon: "gavel", view: "litigation",
+        title: `${d.description}${d.rule_reference ? ` (${d.rule_reference})` : ""}`,
+        detail: `${d.plaintiff} v ${d.defendant}${d.case_number ? ` · ${d.case_number}` : ""} · ${d.matter_ref}`,
+        dueDate: d.due_date, daysUntil: days, dueLabel: daysUntilLabel(days)
+      });
+    }
+    for (const c of courtDates.rows) {
+      const days = c.days_until == null ? null : Number(c.days_until);
+      items.push({
+        id: `court-${c.id}`, category: "court-date", severity: days <= 3 ? "warning" : "info",
+        icon: "landmark", view: "litigation",
+        title: `${c.roll_type || "Court"} appearance — ${c.purpose || "hearing"}`,
+        detail: `${c.plaintiff} v ${c.defendant} · ${c.court}${c.court_time ? ` at ${c.court_time}` : ""}`,
+        dueDate: c.court_date, daysUntil: days, dueLabel: daysUntilLabel(days)
+      });
+    }
+    for (const c of clearances.rows) {
+      const rd = c.rates_clearance_expiry ? Math.round((new Date(c.rates_clearance_expiry) - new Date()) / 86400000) : null;
+      const ld = c.levy_clearance_expiry ? Math.round((new Date(c.levy_clearance_expiry) - new Date()) / 86400000) : null;
+      const which = [];
+      if (rd != null && rd <= 21) which.push(`rates ${daysUntilLabel(rd)}`);
+      if (ld != null && ld <= 21) which.push(`levy ${daysUntilLabel(ld)}`);
+      const minDays = Math.min(rd == null ? 9999 : rd, ld == null ? 9999 : ld);
+      items.push({
+        id: `clear-${c.id}`, category: "clearance-expiry", severity: minDays < 0 ? "critical" : minDays <= 7 ? "warning" : "info",
+        icon: "receipt", view: "conveyancing",
+        title: `Clearance expiring — ${which.join(", ")}`,
+        detail: `${c.seller_name} → ${c.buyer_name} · ${c.matter_ref}. Re-apply before it lapses or registration slips.`,
+        dueDate: c.soonest_expiry, daysUntil: minDays === 9999 ? null : minDays, dueLabel: which.join(", ")
+      });
+    }
+    for (const t of targetReg.rows) {
+      const days = t.days_until == null ? null : Number(t.days_until);
+      items.push({
+        id: `treg-${t.id}`, category: "target-registration", severity: days < 0 ? "warning" : "info",
+        icon: "home", view: "conveyancing",
+        title: `Target registration ${daysUntilLabel(days)}`,
+        detail: `${t.seller_name} → ${t.buyer_name} · ${t.matter_ref} · currently at ${String(t.current_stage).replace(/_/g, " ")}`,
+        dueDate: t.target_registration_date, daysUntil: days, dueLabel: daysUntilLabel(days)
+      });
+    }
+    for (const f of ficaExpiry.rows) {
+      const days = f.days_until == null ? null : Number(f.days_until);
+      items.push({
+        id: `fica-${f.id}`, category: "fica-expiry", severity: days < 0 ? "critical" : days <= 14 ? "warning" : "info",
+        icon: "shield", view: "fica",
+        title: `FICA ${days < 0 ? "expired" : "expiring"} — ${f.client_name}`,
+        detail: `${f.risk_rating} risk · re-verify to stay compliant before onboarding new instructions`,
+        dueDate: f.fica_expiry_date, daysUntil: days, dueLabel: daysUntilLabel(days)
+      });
+    }
+    for (const w of agedWip.rows) {
+      const ageDays = w.oldest_entry ? Math.round((new Date() - new Date(w.oldest_entry)) / 86400000) : null;
+      items.push({
+        id: `wip-${w.matter_ref}`, category: "unbilled-wip", severity: "info",
+        icon: "banknote", view: "billing",
+        title: `Unbilled WIP: R ${(Number(w.total_cents) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`,
+        detail: `${w.client_name} · ${w.matter_ref} · ${w.entry_count} entr${w.entry_count === 1 ? "y" : "ies"}, oldest ${ageDays} days. Draft an invoice.`,
+        dueDate: null, daysUntil: null, dueLabel: `${ageDays} days aged`
+      });
+    }
+
+    // Sort: critical first, then warning, then info; within each by soonest due.
+    const sevRank = { critical: 0, warning: 1, info: 2 };
+    items.sort((a, b) => {
+      if (sevRank[a.severity] !== sevRank[b.severity]) return sevRank[a.severity] - sevRank[b.severity];
+      const ad = a.daysUntil == null ? 9999 : a.daysUntil;
+      const bd = b.daysUntil == null ? 9999 : b.daysUntil;
+      return ad - bd;
+    });
+
+    const counts = {
+      critical: items.filter(i => i.severity === "critical").length,
+      warning: items.filter(i => i.severity === "warning").length,
+      info: items.filter(i => i.severity === "info").length,
+      total: items.length
+    };
+
+    // Optional AI brief over the top items.
+    let brief = null;
+    const briefAi = await getAiForFeature("ai-chat");
+    if (briefAi.apiKey && items.length > 0) {
+      const top = items.slice(0, 12).map(i => `- [${i.severity}] ${i.title} — ${i.detail} (${i.dueLabel})`).join("\n");
+      const prompt = [
+        "You are the morning briefing assistant for a South African law firm. Below are today's attention items.",
+        "Write a 2-3 sentence brief telling the practitioner what to prioritise first and why. Be specific and calm.",
+        "Reference the most time-critical items (prescription, dies induciae, expiring clearances). End without a sign-off.",
+        "",
+        top
+      ].join("\n");
+      try {
+        brief = await callAiProviderLogged(briefAi.provider, briefAi.apiKey, briefAi.model, "", prompt,
+          { tenantId: tid, userId: req.user.sub, feature: "ai-chat" });
+        if (brief) brief = brief.trim();
+      } catch { /* brief is optional */ }
+    }
+
+    res.json({ items, counts, brief, generatedAt: new Date().toISOString() });
+  } catch (error) { next(error); }
+});
+
 // ─── WHATSAPP ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_WA_TEMPLATES = [
