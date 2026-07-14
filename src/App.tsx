@@ -74,6 +74,7 @@ import { PlatformPricingPanel } from "./PlatformPricingPanel";
 import { HelpPanel } from "./HelpPanel";
 import { TenantTraining } from "./TenantTraining";
 import { Today } from "./Today";
+import { CommandPalette } from "./CommandPalette";
 
 const nav: NavItem[] = [
   { key: "today",     label: "Today", icon: Sun },
@@ -356,6 +357,20 @@ export function App() {
     loadWorkspaceData();
   }, [authUser?.id]);
 
+  // Global command palette (Ctrl/Cmd+K).
+  const [cmdkOpen, setCmdkOpen] = useState(false);
+  useEffect(() => {
+    if (!authUser) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setCmdkOpen(v => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [authUser]);
+
   // Hydrate every tenant-scoped feature from the backend in parallel after
   // login. Each loader is independent — Promise.allSettled lets one failing
   // endpoint not block the rest. Individual failures are swallowed; the
@@ -588,6 +603,23 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <CommandPalette
+        open={cmdkOpen}
+        onClose={() => setCmdkOpen(false)}
+        nav={nav}
+        isVisible={(key) => {
+          if (key === "training-guide" || key === "super-tenants") return isPlatformSuperAdmin;
+          if (key === "ai-library" || key === "today") return !isPlatformSuperAdmin;
+          return true;
+        }}
+        matters={matters}
+        conveyancingMatters={conveyancingMatters}
+        litigationMatters={litigationMatters}
+        invoices={invoices}
+        contracts={contracts}
+        ficaClients={ficaClients}
+        setActiveView={setActiveView}
+      />
       <Sidebar activeView={activeView} setActiveView={setActiveView} isPlatformSuperAdmin={isPlatformSuperAdmin} />
       <main className="main">
         <header className="topbar">

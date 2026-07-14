@@ -8,6 +8,120 @@
 
 .spin { animation: spin 0.8s linear infinite; }
 
+/* ─── Command palette (Ctrl/Cmd+K) ──────────────────────────────────────── */
+
+.cmdk-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(6, 13, 10, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  animation: fadeSlideUp 0.15s ease;
+}
+
+.cmdk {
+  width: min(640px, 92vw);
+  max-height: 66vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.35);
+  overflow: hidden;
+}
+
+.cmdk-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.cmdk-search-icon { color: var(--muted); flex-shrink: 0; }
+.cmdk-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  color: var(--ink);
+  padding: 0;
+  outline: none;
+}
+.cmdk-input::placeholder { color: var(--muted); }
+.cmdk-esc {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+
+.cmdk-results { overflow-y: auto; padding: 6px; }
+.cmdk-group { margin-bottom: 4px; }
+.cmdk-group-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 8px 12px 4px;
+}
+
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.cmdk-item.active { background: var(--green-light); }
+.cmdk-item-icon {
+  display: grid;
+  place-items: center;
+  width: 30px; height: 30px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.cmdk-item.active .cmdk-item-icon { background: rgba(23,122,95,0.16); color: var(--green-dark); }
+.cmdk-item-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.cmdk-item-label { font-size: 0.9rem; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmdk-item-sub { font-size: 0.78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmdk-item-enter { color: var(--green); flex-shrink: 0; }
+
+.cmdk-empty { padding: 32px; text-align: center; color: var(--muted); font-size: 0.9rem; }
+
+.cmdk-footer {
+  display: flex;
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.cmdk-footer kbd {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 3px;
+}
+
 /* ─── Today / morning brief ─────────────────────────────────────────────── */
 
 .today-view {
