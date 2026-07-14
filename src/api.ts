@@ -317,6 +317,16 @@ export async function createLitigationMatter(input: Omit<LitigationMatter, "id" 
   return request<{ matter: LitigationMatter }>("/api/litigation/matters", { method: "POST", body: JSON.stringify(input) });
 }
 
+export async function updateLitigationPrescription(matterId: string, input: {
+  causeOfActionDate: string;
+  prescriptionPeriodYears: number;
+  prescriptionDate?: string;
+  prescriptionInterrupted: boolean;
+  prescriptionNote: string;
+}) {
+  return request<{ matter: LitigationMatter }>(`/api/litigation/matters/${matterId}/prescription`, { method: "PUT", body: JSON.stringify(input) });
+}
+
 export async function createLitigationDeadline(matterId: string, input: Omit<LitigationDeadline, "id">) {
   return request<{ deadline: LitigationDeadline }>(`/api/litigation/matters/${matterId}/deadlines`, { method: "POST", body: JSON.stringify(input) });
 }

@@ -1969,9 +1969,26 @@ function litMatterFromRow(row, deadlines, courtDates, costOrders) {
     costsRecoveredCents: Number(row.costs_recovered_cents || 0),
     status: row.status,
     serviceDate: row.service_date ? String(row.service_date).slice(0, 10) : "",
+    causeOfActionDate: row.cause_of_action_date ? String(row.cause_of_action_date).slice(0, 10) : "",
+    prescriptionPeriodYears: row.prescription_period_years == null ? 3 : Number(row.prescription_period_years),
+    prescriptionDate: row.prescription_date ? String(row.prescription_date).slice(0, 10) : "",
+    prescriptionInterrupted: row.prescription_interrupted === true,
+    prescriptionNote: row.prescription_note || "",
     notes: row.notes || "",
     deadlines: deadlines || [], courtDates: courtDates || [], costOrders: costOrders || []
   };
+}
+
+// Prescription Act 68 of 1969: a manual prescription date always wins; otherwise
+// compute cause-of-action date + N years. Returns a YYYY-MM-DD string or null.
+function computePrescriptionDate(causeOfActionDate, periodYears, manualDate) {
+  if (manualDate) return String(manualDate).slice(0, 10);
+  if (!causeOfActionDate) return null;
+  const d = new Date(causeOfActionDate);
+  if (isNaN(d.getTime())) return null;
+  const years = Number(periodYears) > 0 ? Number(periodYears) : 3;
+  d.setUTCFullYear(d.getUTCFullYear() + years);
+  return d.toISOString().slice(0, 10);
 }
 
 app.get("/api/litigation/matters", authMiddleware, async (req, res, next) => {
@@ -1995,20 +2012,53 @@ app.get("/api/litigation/matters", authMiddleware, async (req, res, next) => {
 app.post("/api/litigation/matters", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const { matterRef, caseNumber, court, courtDivision, plaintiff, defendant, matterType,
-    claimAmountCents, serviceDate, notes } = req.body;
+    claimAmountCents, serviceDate, notes,
+    causeOfActionDate, prescriptionPeriodYears, prescriptionDate } = req.body;
   if (!matterRef || !court || !plaintiff || !defendant)
     return res.status(400).json({ error: "Matter ref, court, plaintiff and defendant are required." });
+  const periodYears = Number(prescriptionPeriodYears) > 0 ? Number(prescriptionPeriodYears) : 3;
+  const computedPrescription = computePrescriptionDate(causeOfActionDate, periodYears, prescriptionDate);
   try {
     const result = await pool.query(
       `insert into litigation_matters
         (tenant_id, matter_ref, case_number, court, court_division, plaintiff, defendant,
-         matter_type, claim_amount_cents, service_date, notes, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+         matter_type, claim_amount_cents, service_date, notes, created_by,
+         cause_of_action_date, prescription_period_years, prescription_date)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
       [req.user.tenantId, matterRef, caseNumber || null, court, courtDivision || null,
        plaintiff, defendant, matterType || "opposed_motion",
-       Number(claimAmountCents || 0), serviceDate || null, notes || null, req.user.sub]
+       Number(claimAmountCents || 0), serviceDate || null, notes || null, req.user.sub,
+       causeOfActionDate || null, periodYears, computedPrescription]
     );
     res.status(201).json({ matter: litMatterFromRow(result.rows[0], [], [], []) });
+  } catch (error) { next(error); }
+});
+
+// Update the prescription clock on a matter: cause-of-action date, period,
+// a manual override date, and the interrupted flag + note (service of process
+// or written acknowledgment of debt interrupts prescription — s 14/s 15).
+app.put("/api/litigation/matters/:id/prescription", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { causeOfActionDate, prescriptionPeriodYears, prescriptionDate,
+    prescriptionInterrupted, prescriptionNote } = req.body;
+  const periodYears = Number(prescriptionPeriodYears) > 0 ? Number(prescriptionPeriodYears) : 3;
+  const computedPrescription = computePrescriptionDate(causeOfActionDate, periodYears, prescriptionDate);
+  try {
+    const result = await pool.query(
+      `update litigation_matters
+         set cause_of_action_date      = $3,
+             prescription_period_years = $4,
+             prescription_date         = $5,
+             prescription_interrupted  = $6,
+             prescription_note         = $7,
+             updated_at                = now()
+       where id = $1 and tenant_id = $2
+       returning *`,
+      [req.params.id, req.user.tenantId, causeOfActionDate || null, periodYears,
+       computedPrescription, prescriptionInterrupted === true, prescriptionNote || null]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: "Matter not found." });
+    res.json({ matter: litMatterFromRow(result.rows[0], [], [], []) });
   } catch (error) { next(error); }
 });
 
@@ -2283,7 +2333,7 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const tid = req.user.tenantId;
   try {
-    const [litDeadlines, courtDates, clearances, targetReg, ficaExpiry, agedWip] = await Promise.all([
+    const [litDeadlines, prescription, courtDates, clearances, targetReg, ficaExpiry, agedWip] = await Promise.all([
       // Incomplete litigation deadlines: overdue or due within 45 days
       pool.query(
         `select d.id, d.description, d.rule_reference, d.due_date, d.priority,
@@ -2295,6 +2345,18 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
            and m.status = 'Active'
            and d.due_date <= current_date + 45
          order by d.due_date asc limit 40`, [tid]),
+      // Prescription clock: active matters whose claim prescribes within 180 days
+      // (or already has) and running has NOT been interrupted. Prescription Act 68/1969.
+      pool.query(
+        `select id, matter_ref, case_number, plaintiff, defendant,
+                prescription_date, prescription_period_years,
+                (prescription_date - current_date) as days_until
+         from litigation_matters
+         where tenant_id = $1 and status = 'Active'
+           and prescription_interrupted = false
+           and prescription_date is not null
+           and prescription_date <= current_date + 180
+         order by prescription_date asc limit 30`, [tid]).catch(() => ({ rows: [] })),
       // Upcoming court dates within 30 days
       pool.query(
         `select c.id, c.court_date, c.court_time, c.court, c.purpose, c.roll_type,
@@ -2365,6 +2427,21 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
         title: `${d.description}${d.rule_reference ? ` (${d.rule_reference})` : ""}`,
         detail: `${d.plaintiff} v ${d.defendant}${d.case_number ? ` · ${d.case_number}` : ""} · ${d.matter_ref}`,
         dueDate: d.due_date, daysUntil: days, dueLabel: daysUntilLabel(days)
+      });
+    }
+    for (const p of prescription.rows) {
+      const days = p.days_until == null ? null : Number(p.days_until);
+      // Critical inside 90 days or already prescribed; warning 90-180 days out.
+      const severity = days == null ? "warning" : days <= 90 ? "critical" : "warning";
+      const years = p.prescription_period_years == null ? 3 : Number(p.prescription_period_years);
+      items.push({
+        id: `presc-${p.id}`, category: "prescription", severity,
+        icon: "hourglass", view: "litigation",
+        title: days != null && days < 0
+          ? `Claim PRESCRIBED — ${p.plaintiff} v ${p.defendant}`
+          : `Claim prescribes ${daysUntilLabel(days)} — ${p.plaintiff} v ${p.defendant}`,
+        detail: `${p.matter_ref}${p.case_number ? ` · ${p.case_number}` : ""} · ${years}-year prescription. Interrupt by serving process or obtaining a written acknowledgment of debt.`,
+        dueDate: p.prescription_date, daysUntil: days, dueLabel: daysUntilLabel(days)
       });
     }
     for (const c of courtDates.rows) {

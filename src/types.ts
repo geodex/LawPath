@@ -472,6 +472,11 @@ export type LitigationMatter = {
   costsRecoveredCents: number;
   status: "Active" | "Settled" | "Abandoned" | "Judgment" | "Struck off";
   serviceDate: string;
+  causeOfActionDate: string;
+  prescriptionPeriodYears: number;
+  prescriptionDate: string;
+  prescriptionInterrupted: boolean;
+  prescriptionNote: string;
   deadlines: LitigationDeadline[];
   courtDates: CourtDate[];
   costOrders: CostOrder[];
