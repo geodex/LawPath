@@ -327,6 +327,19 @@ export async function updateLitigationPrescription(matterId: string, input: {
   return request<{ matter: LitigationMatter }>(`/api/litigation/matters/${matterId}/prescription`, { method: "PUT", body: JSON.stringify(input) });
 }
 
+export async function updateConveyancingDots(matterId: string, input: { dotsBarcode: string; dotsDeedsOffice: string }) {
+  return request<{ matter: ConveyancingMatter }>(`/api/conveyancing/matters/${matterId}/dots`, { method: "PUT", body: JSON.stringify(input) });
+}
+
+export async function pollConveyancingDots(matterId: string) {
+  return request<{ matter: ConveyancingMatter; poll: { polled: boolean; changed: boolean; status?: string; previous?: string | null; error?: string } }>(
+    `/api/conveyancing/matters/${matterId}/dots/poll`, { method: "POST", body: "{}" });
+}
+
+export async function ackConveyancingDots(matterId: string) {
+  return request<{ matter: ConveyancingMatter }>(`/api/conveyancing/matters/${matterId}/dots/ack`, { method: "POST", body: "{}" });
+}
+
 export async function createLitigationDeadline(matterId: string, input: Omit<LitigationDeadline, "id">) {
   return request<{ deadline: LitigationDeadline }>(`/api/litigation/matters/${matterId}/deadlines`, { method: "POST", body: JSON.stringify(input) });
 }

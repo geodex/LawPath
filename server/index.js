@@ -12,6 +12,7 @@ const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText, downloa
 const verifynow  = require("./verifynow");
 const lightstone  = require("./lightstone");
 const searchworks = require("./searchworks");
+const { pollMatter: pollDotsMatter } = require("./dots-poller");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -1852,6 +1853,13 @@ function convMatterFromRow(row) {
     ratesClearanceExpiry: row.rates_clearance_expiry ? String(row.rates_clearance_expiry).slice(0, 10) : "",
     levyClearanceExpiry: row.levy_clearance_expiry ? String(row.levy_clearance_expiry).slice(0, 10) : "",
     targetRegistrationDate: row.target_registration_date ? String(row.target_registration_date).slice(0, 10) : "",
+    dotsBarcode: row.dots_barcode || "",
+    dotsDeedsOffice: row.dots_deeds_office || "",
+    dotsLastStatus: row.dots_last_status || "",
+    dotsLastPolledAt: row.dots_last_polled_at ? new Date(row.dots_last_polled_at).toISOString() : "",
+    dotsStatusChangedAt: row.dots_status_changed_at ? new Date(row.dots_status_changed_at).toISOString() : "",
+    dotsDraftMessage: row.dots_draft_message || "",
+    dotsAckAt: row.dots_ack_at ? new Date(row.dots_ack_at).toISOString() : "",
     notes: row.notes || "",
     stages: buildDefaultStages(row.current_stage)
   };
@@ -1931,6 +1939,59 @@ app.put("/api/conveyancing/matters/:id/clearances", authMiddleware, async (req, 
        where id = $1 and tenant_id = $7 returning *`,
       [req.params.id, ratesClearanceStatus || null, levyClearanceStatus || null,
        ratesClearanceExpiry || null, levyClearanceExpiry || null, ficaStatus || null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
+    res.json({ matter: convMatterFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// Capture / update the DOTS lodgement barcode + deeds office so the daily
+// poller can track this matter.
+app.put("/api/conveyancing/matters/:id/dots", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { dotsBarcode, dotsDeedsOffice } = req.body;
+  try {
+    const result = await pool.query(
+      `update conveyancing_matters set
+         dots_barcode = $2,
+         dots_deeds_office = $3,
+         updated_at = now()
+       where id = $1 and tenant_id = $4 returning *`,
+      [req.params.id, (dotsBarcode || "").trim() || null, (dotsDeedsOffice || "").trim() || null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
+    res.json({ matter: convMatterFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// Poll this one matter against SearchWorks now (attorney-triggered). Costs a
+// SearchWorks credit — same code path as the daily sweep.
+app.post("/api/conveyancing/matters/:id/dots/poll", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const row = await pool.query(
+      `select id, tenant_id, matter_ref, seller_name, buyer_name,
+              dots_barcode, dots_deeds_office, dots_last_status
+       from conveyancing_matters where id = $1 and tenant_id = $2`,
+      [req.params.id, req.user.tenantId]
+    );
+    if (!row.rowCount) return res.status(404).json({ error: "Matter not found." });
+    if (!row.rows[0].dots_barcode) return res.status(400).json({ error: "No DOTS barcode captured for this matter." });
+
+    const poll = await pollDotsMatter(row.rows[0], { runByUserId: req.user.sub });
+    const updated = await pool.query("select * from conveyancing_matters where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]);
+    res.json({ matter: convMatterFromRow(updated.rows[0]), poll });
+  } catch (error) { next(error); }
+});
+
+// Attorney acknowledges the last DOTS change — clears it from the Today feed.
+app.post("/api/conveyancing/matters/:id/dots/ack", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const result = await pool.query(
+      `update conveyancing_matters set dots_ack_at = now(), updated_at = now()
+       where id = $1 and tenant_id = $2 returning *`,
+      [req.params.id, req.user.tenantId]
     );
     if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
     res.json({ matter: convMatterFromRow(result.rows[0]) });
@@ -2333,7 +2394,7 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const tid = req.user.tenantId;
   try {
-    const [litDeadlines, prescription, courtDates, clearances, targetReg, ficaExpiry, agedWip] = await Promise.all([
+    const [litDeadlines, prescription, courtDates, clearances, targetReg, ficaExpiry, agedWip, dotsChanges] = await Promise.all([
       // Incomplete litigation deadlines: overdue or due within 45 days
       pool.query(
         `select d.id, d.description, d.rule_reference, d.due_date, d.priority,
@@ -2413,7 +2474,17 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
            and entry_date <= current_date - 45
          group by matter_ref, client_name
          having sum(amount_cents + vat_amount_cents) >= 500000
-         order by total_cents desc limit 20`, [tid]).catch(() => ({ rows: [] }))
+         order by total_cents desc limit 20`, [tid]).catch(() => ({ rows: [] })),
+      // DOTS status movements not yet acknowledged by the attorney
+      pool.query(
+        `select id, matter_ref, seller_name, buyer_name, current_stage,
+                dots_last_status, dots_status_changed_at,
+                (current_date - dots_status_changed_at::date) as days_since
+         from conveyancing_matters
+         where tenant_id = $1
+           and dots_status_changed_at is not null
+           and (dots_ack_at is null or dots_status_changed_at > dots_ack_at)
+         order by dots_status_changed_at desc limit 20`, [tid]).catch(() => ({ rows: [] }))
     ]);
 
     const items = [];
@@ -2497,6 +2568,19 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
         title: `Unbilled WIP: R ${(Number(w.total_cents) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`,
         detail: `${w.client_name} · ${w.matter_ref} · ${w.entry_count} entr${w.entry_count === 1 ? "y" : "ies"}, oldest ${ageDays} days. Draft an invoice.`,
         dueDate: null, daysUntil: null, dueLabel: `${ageDays} days aged`
+      });
+    }
+    for (const d of dotsChanges.rows) {
+      const status = d.dots_last_status || "updated";
+      const isReg = /regist/i.test(status);
+      const daysSince = d.days_since == null ? null : Number(d.days_since);
+      items.push({
+        id: `dots-${d.id}`, category: "dots-update", severity: isReg ? "warning" : "info",
+        icon: "truck", view: "conveyancing",
+        title: `Deeds Office update — ${status}`,
+        detail: `${d.seller_name} → ${d.buyer_name} · ${d.matter_ref}. DOTS status moved to "${status}". A client update is drafted for your review.`,
+        dueDate: d.dots_status_changed_at, daysUntil: null,
+        dueLabel: daysSince == null ? "just now" : daysSince <= 0 ? "today" : `${daysSince}d ago`
       });
     }
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Building2, FileSearch, ExternalLink, Loader2, ShieldCheck, UserSearch } from "lucide-react";
 import { searchworksCall } from "./api";
 
-const DEEDS_OFFICES: { value: string; label: string }[] = [
+export const DEEDS_OFFICES: { value: string; label: string }[] = [
   { value: "1",  label: "Bloemfontein" },
   { value: "2",  label: "Cape Town" },
   { value: "3",  label: "Johannesburg" },

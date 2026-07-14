@@ -1,9 +1,9 @@
-import { Building2, CheckCircle2, ChevronDown, ChevronRight, FileSearch, Loader2, MapPin, Plus, ShieldCheck } from "lucide-react";
+import { Building2, CheckCircle2, ChevronDown, ChevronRight, FileSearch, Loader2, MapPin, Plus, RefreshCw, ShieldCheck, Truck } from "lucide-react";
 import { FormEvent, useCallback, useRef, useState } from "react";
-import { advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstonePropertyBundle, getLightstoneSectionalUnits, searchLightstoneAddress, updateConveyancingClearances } from "./api";
+import { ackConveyancingDots, advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstonePropertyBundle, getLightstoneSectionalUnits, pollConveyancingDots, searchLightstoneAddress, updateConveyancingClearances, updateConveyancingDots } from "./api";
 import type { LightstoneAddress, LightstonePropertyBundle, LightstoneSectionalUnit } from "./api";
 import type { ConveyancingMatter, ConveyancingStage } from "./types";
-import { SearchWorksPanel } from "./SearchWorksPanel";
+import { DEEDS_OFFICES, SearchWorksPanel } from "./SearchWorksPanel";
 
 const money = (cents: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(cents / 100);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -367,6 +367,56 @@ export function ConveyancingPipeline({
   const lsAbort = useRef<AbortController | null>(null);
   // VerifyNow: keyed by "matterId:checkKey"
   const [vnChecks, setVnChecks] = useState<VnChecks>({});
+  // DOTS tracking edit state, keyed by matter id
+  const [dotsEdit, setDotsEdit] = useState<Record<string, { barcode: string; office: string }>>({});
+  const [dotsBusy, setDotsBusy] = useState<string | null>(null);
+
+  function dotsFields(m: ConveyancingMatter) {
+    return dotsEdit[m.id] ?? { barcode: m.dotsBarcode, office: m.dotsDeedsOffice || "3" };
+  }
+  function setDotsField(id: string, patch: Partial<{ barcode: string; office: string }>) {
+    setDotsEdit(prev => ({ ...prev, [id]: { ...(prev[id] ?? { barcode: "", office: "3" }), ...patch } }));
+  }
+
+  async function handleDotsSave(m: ConveyancingMatter) {
+    const { barcode, office } = dotsFields(m);
+    setDotsBusy(m.id);
+    try {
+      const res = await updateConveyancingDots(m.id, { dotsBarcode: barcode, dotsDeedsOffice: office });
+      setMatters(prev => prev.map(x => x.id === m.id ? res.matter : x));
+      showToast("success", "DOTS barcode saved", `${m.matterRef} is now tracked.`);
+      setDotsEdit(prev => { const n = { ...prev }; delete n[m.id]; return n; });
+    } catch {
+      showToast("error", "Could not save", "DOTS barcode could not be saved.");
+    }
+    setDotsBusy(null);
+  }
+
+  async function handleDotsPoll(m: ConveyancingMatter) {
+    setDotsBusy(m.id);
+    try {
+      const res = await pollConveyancingDots(m.id);
+      setMatters(prev => prev.map(x => x.id === m.id ? res.matter : x));
+      if (res.poll.error) showToast("error", "DOTS check failed", res.poll.error);
+      else if (res.poll.changed) showToast("success", "Status changed", `DOTS moved to "${res.poll.status}". Client update drafted.`);
+      else showToast("info", "No change", `DOTS status unchanged${res.poll.status ? ` (${res.poll.status})` : ""}.`);
+    } catch {
+      showToast("error", "DOTS check failed", "Could not reach SearchWorks.");
+    }
+    setDotsBusy(null);
+  }
+
+  async function handleDotsAck(m: ConveyancingMatter) {
+    setDotsBusy(m.id);
+    try {
+      const res = await ackConveyancingDots(m.id);
+      setMatters(prev => prev.map(x => x.id === m.id ? res.matter : x));
+      showToast("success", "Acknowledged", "Cleared from Today.");
+    } catch {
+      showToast("error", "Could not acknowledge", "Please try again.");
+    }
+    setDotsBusy(null);
+  }
 
   const selected = matters.find(m => m.id === selectedId) ?? null;
   const totalFees = matters.reduce((s, m) => s + m.conveyancingFeeCents + m.vatOnFeeCents, 0);
@@ -404,6 +454,13 @@ export function ConveyancingPipeline({
       ratesClearanceExpiry: "",
       levyClearanceExpiry: "",
       targetRegistrationDate: String(f.get("targetRegistrationDate") || ""),
+      dotsBarcode: "",
+      dotsDeedsOffice: "",
+      dotsLastStatus: "",
+      dotsLastPolledAt: "",
+      dotsStatusChangedAt: "",
+      dotsDraftMessage: "",
+      dotsAckAt: "",
       notes: String(f.get("notes") || "")
     };
     try {
@@ -940,6 +997,61 @@ export function ConveyancingPipeline({
                       )}
                     </div>
                   )}
+
+                  {/* DOTS lodgement tracking */}
+                  <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "22px 0" }} />
+                  <h4 style={{ margin: "0 0 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                    <Truck size={16} color="var(--green)" /> DOTS lodgement tracking
+                  </h4>
+                  {(() => {
+                    const busy = dotsBusy === m.id;
+                    const fields = dotsFields(m);
+                    const dirty = fields.barcode !== m.dotsBarcode || fields.office !== (m.dotsDeedsOffice || "3");
+                    const unseen = !!m.dotsStatusChangedAt && (!m.dotsAckAt || m.dotsStatusChangedAt > m.dotsAckAt);
+                    return (
+                      <div className="conv-fee-summary" style={{ display: "grid", gap: 12 }}>
+                        <div className="sw-form-grid" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+                          <label style={{ display: "grid", gap: 4, fontSize: "0.85rem", fontWeight: 600 }}>
+                            Lodgement barcode
+                            <input value={fields.barcode} onChange={e => setDotsField(m.id, { barcode: e.target.value })} placeholder="Barcode captured at lodgement" />
+                          </label>
+                          <label style={{ display: "grid", gap: 4, fontSize: "0.85rem", fontWeight: 600 }}>
+                            Deeds Office
+                            <select value={fields.office} onChange={e => setDotsField(m.id, { office: e.target.value })}>
+                              {DEEDS_OFFICES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                          <button className="ghost small" disabled={busy || !dirty || !fields.barcode.trim()} onClick={() => handleDotsSave(m)}>
+                            {busy ? <Loader2 size={13} style={{ animation: "spin 0.8s linear infinite" }} /> : null} Save barcode
+                          </button>
+                          <button className="primary small" disabled={busy || !m.dotsBarcode} onClick={() => handleDotsPoll(m)}>
+                            {busy ? <Loader2 size={13} style={{ animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={13} />} Check DOTS now
+                          </button>
+                          {m.dotsLastStatus && (
+                            <span className="pill time-status-wip">Status: {m.dotsLastStatus}</span>
+                          )}
+                          {m.dotsLastPolledAt && (
+                            <small style={{ color: "var(--muted)" }}>Last checked {new Date(m.dotsLastPolledAt).toLocaleString("en-ZA")}</small>
+                          )}
+                        </div>
+                        <small style={{ color: "var(--muted)" }}>
+                          A daily job polls lodged matters automatically. "Check now" queries SearchWorks immediately (costs one credit).
+                        </small>
+                        {unseen && m.dotsDraftMessage && (
+                          <div className="inline-form-toggle" style={{ marginTop: 4, border: "1px solid var(--gold)", borderRadius: 8, padding: 12 }}>
+                            <strong style={{ fontSize: "0.86rem" }}>Client update drafted — review before sending</strong>
+                            <textarea readOnly value={m.dotsDraftMessage} rows={5} style={{ width: "100%", marginTop: 8, fontSize: "0.85rem" }} />
+                            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                              <button className="ghost small" disabled={busy} onClick={() => { navigator.clipboard?.writeText(m.dotsDraftMessage); showToast("info", "Copied", "Draft copied to clipboard."); }}>Copy draft</button>
+                              <button className="ghost small" disabled={busy} onClick={() => handleDotsAck(m)}>Mark handled</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* SearchWorks deeds office search */}
                   <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "22px 0" }} />

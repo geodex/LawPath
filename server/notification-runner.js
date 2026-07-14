@@ -5,9 +5,14 @@
 require("dotenv").config();
 
 const { runScheduledNotificationChecks } = require("./notifications");
+const { runDotsPolling } = require("./dots-poller");
 const { pool } = require("./db");
 
-runScheduledNotificationChecks()
+(async () => {
+  await runScheduledNotificationChecks();
+  // DOTS auto-polling: check lodged conveyancing matters for Deeds Office movement.
+  await runDotsPolling();
+})()
   .then(() => {
     console.info("[notification-runner] Complete.");
     return pool.end();

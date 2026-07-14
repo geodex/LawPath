@@ -453,6 +453,13 @@ export type ConveyancingMatter = {
   levyClearanceExpiry: string;
   stages: ConveyancingStageRecord[];
   targetRegistrationDate: string;
+  dotsBarcode: string;
+  dotsDeedsOffice: string;
+  dotsLastStatus: string;
+  dotsLastPolledAt: string;
+  dotsStatusChangedAt: string;
+  dotsDraftMessage: string;
+  dotsAckAt: string;
   notes: string;
 };
 

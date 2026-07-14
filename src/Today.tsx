@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, Banknote, Gavel, Home, Landmark, Receipt, RefreshCw,
-  Shield, Sparkles, Sun, CheckCircle2, ArrowRight
+  AlertTriangle, Banknote, Gavel, Home, Hourglass, Landmark, Receipt, RefreshCw,
+  Shield, Sparkles, Sun, Truck, CheckCircle2, ArrowRight
 } from "lucide-react";
 import { getTodayBrief } from "./api";
 import type { TodayBrief, TodayItem, ViewKey } from "./types";
 
 const ICONS: Record<string, React.ElementType> = {
   gavel: Gavel, landmark: Landmark, receipt: Receipt,
-  home: Home, shield: Shield, banknote: Banknote
+  home: Home, shield: Shield, banknote: Banknote,
+  hourglass: Hourglass, truck: Truck
 };
 
 const SEVERITY_ORDER: TodayItem["severity"][] = ["critical", "warning", "info"];
