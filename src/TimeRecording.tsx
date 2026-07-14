@@ -1,6 +1,7 @@
-import { Clock, FileText, Pause, Play, Plus, X } from "lucide-react";
+import { Check, Clock, FileText, Pause, Play, Plus, Sparkles, X } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { createTimeEntry, updateTimeEntryStatus } from "./api";
+import { createTimeEntry, suggestTimeEntries, updateTimeEntryStatus } from "./api";
+import type { SuggestedTimeEntry } from "./api";
 import type { TimeEntry } from "./types";
 
 const money = (cents: number) =>
@@ -161,6 +162,71 @@ export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log,
     setSubmitting(false);
   }
 
+  // ── AI end-of-day time capture ──────────────────────────────────────────
+  const [draftDate, setDraftDate] = useState(today());
+  const [drafting, setDrafting] = useState(false);
+  const [suggestions, setSuggestions] = useState<SuggestedTimeEntry[]>([]);
+  const [draftMeta, setDraftMeta] = useState<{ signalCount: number; message?: string; disclaimer?: string } | null>(null);
+  const [approvingIdx, setApprovingIdx] = useState<number | null>(null);
+
+  async function handleDraftDay() {
+    setDrafting(true);
+    setSuggestions([]);
+    setDraftMeta(null);
+    try {
+      const res = await suggestTimeEntries(draftDate);
+      setSuggestions(res.entries);
+      setDraftMeta({ signalCount: res.signalCount, message: res.message, disclaimer: res.disclaimer });
+      if (res.entries.length === 0) {
+        showToast("info", "Nothing to draft", res.message || "No billable activity found for that date.");
+      } else {
+        showToast("success", "Draft ready", `${res.entries.length} time entr${res.entries.length === 1 ? "y" : "ies"} drafted from ${res.signalCount} logged actions.`);
+      }
+    } catch (err) {
+      showToast("error", "Could not draft time", err instanceof Error ? err.message : "Please try again.");
+    }
+    setDrafting(false);
+  }
+
+  function updateSuggestion(idx: number, patch: Partial<SuggestedTimeEntry>) {
+    setSuggestions(prev => prev.map((s, i) => i === idx ? { ...s, ...patch } : s));
+  }
+
+  async function handleApproveSuggestion(idx: number) {
+    const s = suggestions[idx];
+    if (!s || !s.description.trim()) return;
+    setApprovingIdx(idx);
+    const payload: Omit<TimeEntry, "id"> = {
+      clientName: s.clientName || s.matterRef || "—",
+      matterRef: s.matterRef,
+      feeEarnerName: s.feeEarnerName,
+      entryDate: draftDate,
+      activityType: s.activityType,
+      description: s.description,
+      durationMinutes: s.durationMinutes,
+      rateCents: 0,
+      amountCents: 0,
+      vatAmountCents: 0,
+      status: "WIP",
+      isDisbursement: false,
+    };
+    try {
+      const res = await createTimeEntry(payload);
+      setEntries(prev => [res.entry, ...prev]);
+      setWipCents(prev => prev + res.entry.amountCents);
+      showToast("success", "Time entry recorded", `${s.durationMinutes} min · ${s.clientName || s.matterRef}. Set the rate on the entry to price it.`);
+      log(`Time recorded from AI draft: ${s.durationMinutes} min for ${s.clientName || s.matterRef}`);
+      setSuggestions(prev => prev.filter((_, i) => i !== idx));
+    } catch {
+      showToast("error", "Could not record", "Entry could not be saved. Try again.");
+    }
+    setApprovingIdx(null);
+  }
+
+  function handleDismissSuggestion(idx: number) {
+    setSuggestions(prev => prev.filter((_, i) => i !== idx));
+  }
+
   async function changeStatus(entry: TimeEntry, newStatus: TimeEntry["status"]) {
     try {
       const res = await updateTimeEntryStatus(entry.id, newStatus);
@@ -266,6 +332,72 @@ export function TimeRecording({ entries, setEntries, wipCents, setWipCents, log,
           <span className="eyebrow">Billed This Month</span>
           <strong>{money(billedThisMonth)}</strong>
         </div>
+      </div>
+
+      {/* AI end-of-day time capture */}
+      <div className="inline-form-toggle" style={{ marginTop: 16 }}>
+        <div className="panel-head" style={{ marginBottom: 10 }}>
+          <span className="eyebrow"><Sparkles size={15} /> Draft time from my day</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="date" value={draftDate} max={today()} onChange={e => setDraftDate(e.target.value)} />
+            <button className="primary small" onClick={handleDraftDay} disabled={drafting}>
+              {drafting ? "Drafting…" : "Draft today's time"}
+            </button>
+          </div>
+        </div>
+        <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--muted)" }}>
+          Reviews your logged searches, documents, AI usage and client messages for the chosen day and drafts billable entries. Estimates only — you confirm every line.
+        </p>
+
+        {draftMeta?.disclaimer && suggestions.length > 0 && (
+          <div className="inline-form-toggle" style={{ marginTop: 12, border: "1px solid var(--gold)", borderRadius: 8, padding: 10 }}>
+            <strong style={{ fontSize: "0.82rem" }}>⚠ {draftMeta.disclaimer}</strong>
+          </div>
+        )}
+
+        {suggestions.length > 0 && (
+          <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+            {suggestions.map((s, idx) => (
+              <div key={idx} className="inline-form-toggle" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                  <label style={{ display: "grid", gap: 4, fontSize: "0.8rem", fontWeight: 600 }}>
+                    Client
+                    <input value={s.clientName} onChange={e => updateSuggestion(idx, { clientName: e.target.value })} placeholder="Client name" />
+                  </label>
+                  <label style={{ display: "grid", gap: 4, fontSize: "0.8rem", fontWeight: 600 }}>
+                    Matter ref
+                    <input value={s.matterRef} onChange={e => updateSuggestion(idx, { matterRef: e.target.value })} placeholder="Matter reference" />
+                  </label>
+                </div>
+                <label style={{ display: "grid", gap: 4, fontSize: "0.8rem", fontWeight: 600, marginBottom: 8 }}>
+                  Description
+                  <textarea rows={2} value={s.description} onChange={e => updateSuggestion(idx, { description: e.target.value })} />
+                </label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <select value={s.activityType} onChange={e => updateSuggestion(idx, { activityType: e.target.value as TimeEntry["activityType"] })}>
+                    {Object.entries(activityLabels).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                  <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: "0.82rem" }}>
+                    <input type="number" min={0} step={6} value={s.durationMinutes} style={{ width: 72 }}
+                      onChange={e => updateSuggestion(idx, { durationMinutes: Math.max(0, parseInt(e.target.value || "0", 10)) })} />
+                    min
+                  </label>
+                  <span className={`pill ${s.confidence === "high" ? "recon-status-approved" : s.confidence === "medium" ? "time-status-wip" : ""}`} style={{ fontSize: "0.72rem" }}>
+                    {s.confidence} confidence · estimate
+                  </span>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                    <button className="ghost small" onClick={() => handleDismissSuggestion(idx)} disabled={approvingIdx === idx}>
+                      <X size={13} /> Dismiss
+                    </button>
+                    <button className="primary small" onClick={() => handleApproveSuggestion(idx)} disabled={approvingIdx === idx || !s.description.trim()}>
+                      <Check size={13} /> {approvingIdx === idx ? "Recording…" : "Approve & record"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Inline form */}

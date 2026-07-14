@@ -251,6 +251,28 @@ export async function updateTimeEntryStatus(id: string, status: TimeEntry["statu
   });
 }
 
+export type SuggestedTimeEntry = {
+  matterRef: string;
+  clientName: string;
+  activityType: TimeEntry["activityType"];
+  description: string;
+  durationMinutes: number;
+  confidence: "low" | "medium" | "high";
+  isEstimate: true;
+  feeEarnerName: string;
+};
+
+export async function suggestTimeEntries(date: string) {
+  return request<{
+    date: string;
+    entries: SuggestedTimeEntry[];
+    signalCount: number;
+    message?: string;
+    generatedBy?: { provider: string; model: string };
+    disclaimer?: string;
+  }>(`/api/time/suggest?date=${encodeURIComponent(date)}`);
+}
+
 // ─── POPIA ────────────────────────────────────────────────────────────────────
 
 export async function getPopiaRecords() {

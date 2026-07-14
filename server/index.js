@@ -1618,6 +1618,12 @@ app.put("/api/fica/clients/:id", authMiddleware, async (req, res, next) => {
 // TIER 1: TIME RECORDING
 // ─────────────────────────────────────────────────────────────────────────────
 
+const TIME_ACTIVITY_TYPES = [
+  "professional_fee", "attendance", "consultation", "research", "drafting",
+  "court_appearance", "correspondence", "telephone", "travel",
+  "disbursement", "disbursement_recovery"
+];
+
 function timeEntryFromRow(row) {
   return {
     id: row.id,
@@ -1680,6 +1686,105 @@ app.put("/api/time/entries/:id/status", authMiddleware, async (req, res, next) =
     );
     if (!result.rowCount) return res.status(404).json({ error: "Time entry not found." });
     res.json({ entry: timeEntryFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// AI end-of-day time capture. Reads the fee earner's own footprint for a day
+// across the sources that carry their fingerprint (activity log, deeds/DOTS
+// searches, AI usage, document analyses, outbound client WhatsApps), then asks
+// the AI to DRAFT conservative time entries. Nothing is saved — the attorney
+// reviews, edits and approves each line, which then posts via POST /time/entries.
+app.get("/api/time/suggest", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const tid = req.user.tenantId;
+  const uid = req.user.sub;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || "")) ? String(req.query.date) : new Date().toISOString().slice(0, 10);
+  const hhmm = (ts) => { try { return new Date(ts).toISOString().slice(11, 16); } catch { return "--:--"; } };
+  try {
+    const [me, acts, sw, aiUse, docs, wa] = await Promise.all([
+      pool.query("select name, email from users where id = $1", [uid]).catch(() => ({ rows: [] })),
+      pool.query(
+        `select action, entity_type, details, created_at from activity_log
+         where tenant_id = $1 and actor_user_id = $2 and created_at::date = $3::date
+         order by created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
+      pool.query(
+        `select service, input_ref, created_at from searchworks_usage_log
+         where tenant_id = $1 and user_id = $2 and created_at::date = $3::date and status = 'success'
+         order by created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
+      pool.query(
+        `select feature, model, created_at from ai_usage_log
+         where tenant_id = $1 and user_id = $2 and created_at::date = $3::date and status = 'ok'
+           and coalesce(feature,'') <> 'time-capture'
+         order by created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
+      pool.query(
+        `select file_name, document_type, parties, created_at from document_analyses
+         where tenant_id = $1 and created_by = $2 and created_at::date = $3::date
+         order by created_at limit 100`, [tid, uid, date]).catch(() => ({ rows: [] })),
+      pool.query(
+        `select matter_ref, message_body, sent_at from whatsapp_messages
+         where tenant_id = $1 and created_by = $2 and direction = 'outbound' and sent_at::date = $3::date
+         order by sent_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] }))
+    ]);
+
+    const lines = [];
+    for (const a of acts.rows) {
+      const d = a.details || {};
+      const ref = d.matterRef || d.matter_ref || d.clientName || d.client_name || "";
+      lines.push(`[${hhmm(a.created_at)}] action: ${a.action}${a.entity_type ? ` (${a.entity_type})` : ""}${ref ? ` — ${ref}` : ""}`);
+    }
+    for (const s of sw.rows) lines.push(`[${hhmm(s.created_at)}] deeds/DOTS search: ${s.service}${s.input_ref ? ` — ${s.input_ref}` : ""}`);
+    for (const x of aiUse.rows) lines.push(`[${hhmm(x.created_at)}] AI ${x.feature || "assist"} used`);
+    for (const doc of docs.rows) lines.push(`[${hhmm(doc.created_at)}] document: ${doc.document_type || "analysis"} — ${doc.file_name}${Array.isArray(doc.parties) && doc.parties.length ? ` (parties: ${doc.parties.slice(0, 3).join(", ")})` : ""}`);
+    for (const w of wa.rows) lines.push(`[${hhmm(w.sent_at)}] WhatsApp to client${w.matter_ref ? ` — ${w.matter_ref}` : ""}: ${String(w.message_body || "").replace(/\s+/g, " ").slice(0, 90)}`);
+
+    const signalCount = lines.length;
+    if (signalCount === 0) {
+      return res.json({ date, entries: [], signalCount: 0, message: `No recorded activity found for ${date}. Time capture reads your logged searches, documents, AI usage and client messages.` });
+    }
+
+    const ai = await getAiForFeature("ai-chat");
+    if (!ai.apiKey) return res.status(503).json({ error: "No AI provider is configured. Set one under Settings → API keys." });
+
+    const feeEarner = me.rows[0]?.name || me.rows[0]?.email || "Fee earner";
+    const system = [
+      "You are a time-capture assistant for a South African law firm.",
+      "From one fee earner's logged activity for a single day, draft conservative billable time entries for the attorney to review.",
+      "South African attorneys record time in 6-minute units — estimate durationMinutes as a multiple of 6, and err on the low side.",
+      "Group related actions on the same matter into a single entry. Never invent work that the log does not evidence.",
+      "Every entry is an ESTIMATE the attorney MUST confirm — it is never final.",
+      `activityType must be exactly one of: ${TIME_ACTIVITY_TYPES.join(", ")}.`,
+      'Respond with ONLY JSON, no prose: {"entries":[{"matterRef":"","clientName":"","activityType":"","description":"","durationMinutes":0,"confidence":"low|medium|high"}]}'
+    ].join("\n");
+    const userPrompt = `Fee earner: ${feeEarner}\nDate: ${date}\n\nLogged activity (${signalCount} signals):\n${lines.join("\n")}`;
+
+    let aiText = "";
+    try {
+      aiText = await callAiProviderLogged(ai.provider, ai.apiKey, ai.model, system, userPrompt,
+        { tenantId: tid, userId: uid, feature: "time-capture" });
+    } catch (err) {
+      return res.status(502).json({ error: "AI provider error: " + (err?.message || "unknown") });
+    }
+
+    const match = String(aiText || "").match(/\{[\s\S]*\}/);
+    let parsed = {};
+    try { parsed = match ? JSON.parse(match[0]) : {}; } catch { parsed = {}; }
+    const rawEntries = Array.isArray(parsed.entries) ? parsed.entries : [];
+    const entries = rawEntries.slice(0, 40).map(e => ({
+      matterRef: String(e.matterRef || e.matter_ref || "").slice(0, 120),
+      clientName: String(e.clientName || e.client_name || "").slice(0, 160),
+      activityType: TIME_ACTIVITY_TYPES.includes(e.activityType) ? e.activityType : "attendance",
+      description: String(e.description || "").slice(0, 600),
+      durationMinutes: Math.max(0, Math.round(Number(e.durationMinutes) || 0)),
+      confidence: ["low", "medium", "high"].includes(e.confidence) ? e.confidence : "low",
+      isEstimate: true,
+      feeEarnerName: feeEarner
+    })).filter(e => e.description);
+
+    res.json({
+      date, entries, signalCount,
+      generatedBy: { provider: ai.provider, model: ai.model },
+      disclaimer: "AI estimate drafted from your logged activity — review, adjust and confirm every line before recording. Nothing is saved until you approve it."
+    });
   } catch (error) { next(error); }
 });
 
