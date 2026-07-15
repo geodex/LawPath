@@ -137,8 +137,11 @@ export function Approvals({
               </div>
 
               {body && (
-                <textarea readOnly value={body} rows={4}
-                  style={{ width: "100%", marginTop: 10, fontSize: "0.84rem" }} />
+                // 4 rows suits a WhatsApp update; a drafted opinion with its
+                // schedule of authorities needs a real reading pane — an
+                // approver must be able to READ what they are signing off.
+                <textarea readOnly value={body} rows={body.length > 600 ? 16 : 4}
+                  style={{ width: "100%", marginTop: 10, fontSize: "0.84rem", fontFamily: body.length > 600 ? "var(--font-mono)" : undefined }} />
               )}
 
               {a.status === "pending" && (

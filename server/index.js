@@ -1633,7 +1633,11 @@ app.post("/api/ai/conversations/:id/draft", authMiddleware, async (req, res, nex
         `${citations.length} authorit${citations.length === 1 ? "y" : "ies"} cited, ${unverifiedCount} unverified.`,
         unverifiedCount > 0 ? "CONTAINS UNVERIFIED CITATIONS — do not approve before checking them on SAFLII." : "All citations verified against the corpus."
       ].join(" "),
-      payload: { docType, content, citations, unverifiedCount, conversationId: conversation.id, provider, model },
+      // `body` is the queue's convention for renderable drafted text — the
+      // Approvals view displays payload.body (see dots-poller for the other
+      // producer). Named anything else, the document arrives in the queue with
+      // its title and warning summary but its text invisible to the approver.
+      payload: { docType, body: content, citations, unverifiedCount, conversationId: conversation.id, provider, model },
       entityType: "ai_conversation",
       entityId: conversation.id,
       origin: "ai",
