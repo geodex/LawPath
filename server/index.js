@@ -16,6 +16,7 @@ const { pollMatter: pollDotsMatter } = require("./dots-poller");
 const { createApprovalRequest, APPROVER_ROLES } = require("./approvals");
 const courtRules = require("./court-rules");
 const grounding = require("./legal-grounding");
+const liveResearch = require("./live-research");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -4286,6 +4287,63 @@ app.post("/api/research-db/search", authMiddleware, async (req, res, next) => {
   const aiCtx = { tenantId: req.user.tenantId || null, userId: req.user.sub || null };
 
   try {
+    // Step 0: a citation-shaped query is an EXACT lookup, never fuzzy search.
+    //
+    // The testing attorney pasted a citation and got a summary of an unrelated
+    // case — because a citation that was not in the corpus fell through the
+    // fuzzy stages below until something matched on stray words. A citation
+    // names exactly one judgment; the only honest answers are that judgment or
+    // "not found". Order: exact local match, then a live Laws.Africa lookup
+    // filtered by work_frbr_uri (which also caches the judgment for next
+    // time), then an explicit not-found — never a fuzzy guess.
+    const citationShaped = liveResearch.extractCitationShape(query)
+      || (grounding.extractCitations(query)[0] || null);
+    if (citationShaped) {
+      let rows = (await pool.query(
+        "select * from legal_corpus_documents where regexp_replace(citation, '\\s+', ' ', 'g') ilike $1 limit 5",
+        [citationShaped]
+      )).rows;
+      let stage = "citation-exact-local";
+
+      if (!rows.length) {
+        // Only neutral citations map to a work URI; lookupByCitation returns
+        // null for SALR forms and on budget/key/API failure, all of which
+        // fall through to the honest not-found below.
+        const liveDoc = await liveResearch.lookupByCitation(citationShaped);
+        if (liveDoc) {
+          // The lookup cached it; re-select so the row carries its DB id.
+          rows = (await pool.query(
+            "select * from legal_corpus_documents where frbr_uri = $1 limit 1",
+            [liveDoc.frbr_uri]
+          )).rows;
+          stage = "citation-exact-live";
+        }
+      }
+
+      const aiSummary = rows.length
+        ? `Exact match for citation ${citationShaped}. Attorney review required.`
+        : `Citation ${citationShaped} was not found — not in the firm's corpus and not returned by Laws.Africa. It may be very recent, from a court we do not index, or the citation may be mistyped. Verify it on SAFLII before relying on it. No fuzzy guess is offered for a citation: it names exactly one judgment.`;
+      const citations = rows.map(d => ({ title: d.title, citation: d.citation || "", url: d.source_url || "" }));
+
+      if (req.user.tenantId) {
+        await pool.query(
+          "insert into tenant_research_queries (tenant_id, query_text, results_count, ai_summary, citations, created_by) values ($1,$2,$3,$4,$5,$6)",
+          [req.user.tenantId, query, rows.length, aiSummary, JSON.stringify(citations), req.user.sub]
+        ).catch(err => console.warn("[research] tenant_research_queries insert failed:", err.message));
+      }
+
+      console.info(`[research] citation query "${citationShaped}" stage=${rows.length ? stage : "citation-not-found"} rows=${rows.length}`);
+      return res.json({
+        documents: rows.map(d => ({ ...corpusDocFromRow(d), relevanceReason: `Exact match for ${citationShaped}` })),
+        aiSummary,
+        citations,
+        queryExpansion: null,
+        aiRanked: false,
+        stage: rows.length ? stage : "citation-not-found",
+        corpusSize: null
+      });
+    }
+
     // Step 1: Expand the natural-language query into tsquery-friendly terms.
     // Skip for short keyword-only queries (≤ 3 words) where the user clearly
     // knows what they want.
