@@ -311,7 +311,9 @@ export type AiChatMessage = {
    */
   grounding?: {
     sourcesUsed: number;
-    sources: { tag: string; title: string; citation: string | null; court: string | null; year: number | null; sourceUrl: string | null }[];
+    /** True when a live Laws.Africa retrieval contributed to the sources (vs local corpus only). */
+    liveUsed?: boolean;
+    sources: { tag: string; title: string; citation: string | null; court: string | null; year: number | null; sourceUrl: string | null; live?: boolean }[];
     citations: { citation: string; verified: boolean; title: string | null; court: string | null; year: number | null; sourceUrl: string | null }[];
     unverifiedCount: number;
   } | null;

@@ -94,7 +94,7 @@ async function retrieveCorpusContext({ query, limit = 6, preferSuperiorCourts = 
   if (q.length < 3) return [];
   try {
     const r = await pool.query(
-      `select id, title, citation, court, year, decision_date, summary, full_text_snippet, source_url,
+      `select id, frbr_uri, title, citation, court, year, decision_date, summary, full_text_snippet, source_url,
               ts_rank(
                 to_tsvector('english', coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(full_text_snippet,'')),
                 plainto_tsquery('english', $1)
@@ -112,6 +112,66 @@ async function retrieveCorpusContext({ query, limit = 6, preferSuperiorCourts = 
     console.warn("[grounding] corpus retrieval failed:", err.message);
     return [];
   }
+}
+
+/**
+ * The retrieval the chat should actually use: local corpus + live Knowledge
+ * Base, merged.
+ *
+ * WHY BOTH: the local corpus only holds what past indexer runs and past
+ * research happened to cache. The attorney's own words are the best KB query
+ * that will ever exist for his question, so they go to Laws.Africa live — and
+ * every identified result is cached through the indexer's own upsert on the
+ * way past, so the corpus grows around what the firm actually researches.
+ *
+ * Order of the merge, most-trustworthy first:
+ *   1. An exact citation lookup, when the query contains a citation shape.
+ *      Filtered by work_frbr_uri, verified against the requested URI — the
+ *      "pasted a citation, got an unrelated case" failure cannot happen here.
+ *   2. Live semantic results (Laws.Africa's ranking, fresher than our FTS).
+ *   3. Local FTS results not already present (the curated seeds live here).
+ *
+ * Budget spend per chat message: ONE live call — the citation lookup when the
+ * query contains a citation, the semantic retrieve otherwise. Never both.
+ *
+ * Degrades to local-only whenever live retrieval cannot run (no key, daily
+ * budget spent, API down): identical behaviour to before this function
+ * existed. Grounding must never be less available than it was.
+ */
+async function retrieveGroundingSources({ query, limit = 6 }) {
+  // Required lazily so a broken live module can never take grounding down.
+  let live = null;
+  try { live = require("./live-research"); } catch { /* local-only */ }
+
+  const docs = [];
+  const seen = new Set();
+  const push = (d) => {
+    // Citation first: it is the judgment's legal identity and both the live
+    // and local shapes carry it, so the same case arriving via both routes
+    // collapses onto one entry even if one side lacks the FRBR URI.
+    const key = d.citation || d.frbr_uri || `${d.title}|${d.year}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    docs.push(d);
+  };
+
+  let liveUsed = false;
+  if (live) {
+    const cited = live.extractCitationShape(query);
+    if (cited) {
+      const exact = await live.lookupByCitation(cited);
+      liveUsed = true;
+      if (exact) push(exact);
+    } else {
+      const r = await live.retrieveLive({ query, topK: Math.max(limit, 10) });
+      liveUsed = r.live;
+      for (const d of r.docs.slice(0, limit)) push(d);
+    }
+  }
+
+  for (const d of await retrieveCorpusContext({ query, limit })) push(d);
+
+  return { docs: docs.slice(0, limit), liveUsed };
 }
 
 // Render retrieved judgments as the model's SOURCES block.
@@ -143,6 +203,6 @@ function groundingInstruction(hasSources) {
 }
 
 module.exports = {
-  extractCitations, verifyCitations, retrieveCorpusContext,
+  extractCitations, verifyCitations, retrieveCorpusContext, retrieveGroundingSources,
   formatSources, groundingInstruction, PREFERRED_COURT_PATTERNS
 };

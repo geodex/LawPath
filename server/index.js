@@ -454,9 +454,12 @@ async function callAiAssistant({ message, agentKey, context, logCtx }) {
     };
   }
 
-  // Ground every answer in the firm's corpus. The model must never supply South
-  // African case law from memory — it confabulates citations that look real.
-  const sources = await grounding.retrieveCorpusContext({ query: message, limit: 6 });
+  // Ground every answer in the firm's corpus PLUS a live Knowledge Base
+  // retrieval with the user's own words (cached into the corpus on the way
+  // past). The model must never supply South African case law from memory — it
+  // confabulates citations that look real. Degrades to corpus-only when the
+  // daily API budget is spent or the API is down.
+  const { docs: sources, liveUsed } = await grounding.retrieveGroundingSources({ query: message, limit: 6 });
 
   const systemPrompt = [
     "You are LawPath SA, an AI-native legal practice assistant for South African law firms.",
@@ -490,9 +493,11 @@ async function callAiAssistant({ message, agentKey, context, logCtx }) {
     provider, model, content,
     grounding: {
       sourcesUsed: sources.length,
+      liveUsed,
       sources: sources.map((s, i) => ({
         tag: `S${i + 1}`, title: s.title, citation: s.citation,
-        court: s.court, year: s.year, sourceUrl: s.source_url
+        court: s.court, year: s.year, sourceUrl: s.source_url,
+        live: !!s.live
       })),
       citations,
       unverifiedCount: citations.filter(c => !c.verified).length
