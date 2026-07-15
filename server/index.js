@@ -1352,6 +1352,106 @@ app.post("/api/ai/chat", authMiddleware, async (req, res, next) => {
   }
 });
 
+// ─── RESEARCH / CHAT HISTORY ─────────────────────────────────────────────────
+//
+// The conversations were always stored (ai_conversations / ai_messages) — there
+// was simply no way to see them. The testing attorney looked for his previous
+// research sessions and could not find them; that alone made the tool feel
+// stateless. List, reopen, continue.
+//
+// Scoped to the requesting USER, not the whole tenant: research is often
+// half-formed thinking, and colleagues' sessions appearing unasked would
+// surprise people. Firm-wide sharing can become a deliberate feature later.
+
+app.get("/api/ai/conversations", authMiddleware, async (req, res, next) => {
+  const isSuperAdmin = req.user.role === "platform_super_admin";
+  if (!req.user.tenantId && !isSuperAdmin) return res.status(403).json({ error: "Tenant context required." });
+  const agentKey = req.query.agentKey ? String(req.query.agentKey) : null;
+  try {
+    const params = [req.user.tenantId || null, req.user.sub];
+    let where = "c.tenant_id is not distinct from $1 and c.user_id = $2";
+    if (agentKey) { params.push(agentKey); where += ` and c.agent_key = $${params.length}`; }
+    const r = await pool.query(
+      `select c.id, c.agent_key, c.title, c.created_at, c.updated_at,
+              (select count(*)::int from ai_messages m where m.conversation_id = c.id and m.role in ('user','assistant')) as message_count,
+              (select m.content from ai_messages m where m.conversation_id = c.id and m.role = 'user' order by m.created_at desc limit 1) as last_question
+         from ai_conversations c
+        where ${where}
+        order by c.updated_at desc
+        limit 50`, params);
+    res.json({
+      conversations: r.rows.map(row => ({
+        id: row.id,
+        agentKey: row.agent_key,
+        title: row.title,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        messageCount: row.message_count,
+        lastQuestion: row.last_question ? String(row.last_question).slice(0, 140) : null
+      }))
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/ai/conversations/:id", authMiddleware, async (req, res, next) => {
+  const isSuperAdmin = req.user.role === "platform_super_admin";
+  if (!req.user.tenantId && !isSuperAdmin) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const conv = await pool.query(
+      "select * from ai_conversations where id = $1 and tenant_id is not distinct from $2 and user_id = $3",
+      [req.params.id, req.user.tenantId || null, req.user.sub]
+    );
+    if (!conv.rowCount) return res.status(404).json({ error: "Conversation not found." });
+
+    const msgs = (await pool.query(
+      `select id, role, content, model, created_at from ai_messages
+        where conversation_id = $1 and role in ('user','assistant')
+        order by created_at`, [req.params.id])).rows;
+
+    // Grounding verdicts are not persisted per message — they were computed
+    // against the corpus as it stood at answer time. Re-verify NOW, against
+    // the corpus as it stands today. This is deliberate, not a workaround: a
+    // citation that has since been indexed upgrades honestly to verified, and
+    // one that was never real stays flagged every time the session is opened.
+    const messages = [];
+    for (const m of msgs) {
+      let groundingBlock = null;
+      if (m.role === "assistant") {
+        const cited = grounding.extractCitations(m.content);
+        if (cited.length) {
+          const citations = await grounding.verifyCitations(cited);
+          groundingBlock = {
+            sourcesUsed: 0,
+            liveUsed: false,
+            sources: [],
+            citations,
+            unverifiedCount: citations.filter(c => !c.verified).length
+          };
+        }
+      }
+      messages.push({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        model: m.model || null,
+        createdAt: m.created_at,
+        grounding: groundingBlock
+      });
+    }
+
+    res.json({
+      conversation: {
+        id: conv.rows[0].id,
+        agentKey: conv.rows[0].agent_key,
+        title: conv.rows[0].title,
+        createdAt: conv.rows[0].created_at,
+        updatedAt: conv.rows[0].updated_at
+      },
+      messages
+    });
+  } catch (error) { next(error); }
+});
+
 // ─── DRAFT OPINION / LETTER FROM A RESEARCH CONVERSATION ────────────────────
 //
 // The attorney's stated workflow: research → draft opinion → go read the actual

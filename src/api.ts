@@ -204,6 +204,34 @@ export async function sendAiChat(input: { message: string; agentKey: AiAgentKey;
   });
 }
 
+export type AiConversationSummary = {
+  id: string;
+  agentKey: AiAgentKey;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  lastQuestion: string | null;
+};
+
+/** The user's own past conversations, newest first. */
+export async function listAiConversations(agentKey?: AiAgentKey) {
+  const qs = agentKey ? `?agentKey=${encodeURIComponent(agentKey)}` : "";
+  return request<{ conversations: AiConversationSummary[] }>(`/api/ai/conversations${qs}`);
+}
+
+/**
+ * Reopen a conversation. Assistant messages come back with their citations
+ * re-verified against the corpus AS IT STANDS TODAY — a citation indexed since
+ * the session honestly upgrades to verified; an invented one stays flagged.
+ */
+export async function getAiConversation(id: string) {
+  return request<{
+    conversation: { id: string; agentKey: AiAgentKey; title: string; createdAt: string; updatedAt: string };
+    messages: { id: string; role: "user" | "assistant"; content: string; model: string | null; createdAt: string; grounding: ChatGrounding | null }[];
+  }>(`/api/ai/conversations/${id}`);
+}
+
 /**
  * Turn a research conversation into a drafted opinion or letter, in one step.
  * The draft cites only corpus-verified authorities, carries a SCHEDULE OF

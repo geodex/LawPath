@@ -13,6 +13,7 @@ import {
   Clock3,
   FilePenLine,
   FileText,
+  History as HistoryIcon,
   Home,
   KeyRound,
   LibraryBig,
@@ -48,7 +49,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, draftFromConversation, forgotPassword, getAccountingData, getActivity, getAgentNetwork, getAnalytics, getAppointments, getBootstrapSettings, getContracts, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getMatters, getPopiaRecords, getSignatureRequests, getTasks, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
+import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, draftFromConversation, forgotPassword, getAiConversation, listAiConversations, type AiConversationSummary, getAccountingData, getActivity, getAgentNetwork, getAnalytics, getAppointments, getBootstrapSettings, getContracts, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getMatters, getPopiaRecords, getSignatureRequests, getTasks, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 // Seed data from ./data is intentionally not imported here. Each tenant
 // starts with empty workspaces and populates real data via the API.
 import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AiFeature, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
@@ -353,6 +354,8 @@ export function App() {
   const [aiConversationId, setAiConversationId] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiContextSummary, setAiContextSummary] = useState("Tenant context will appear after the first AI response.");
+  // A reopened conversation keeps its own agent, whatever view the user is on.
+  const [aiAgentOverride, setAiAgentOverride] = useState<AiAgentKey | null>(null);
   const [activity, setActivity] = useState<string[]>([]);
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
@@ -362,7 +365,7 @@ export function App() {
 
   const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
   const hasTenantContext = Boolean(authUser?.tenantId);
-  const activeAgent = viewAgentMap[activeView];
+  const activeAgent = aiAgentOverride ?? viewAgentMap[activeView];
 
   useEffect(() => {
     if (!authUser) return;
@@ -627,6 +630,35 @@ export function App() {
     } finally {
       setAiBusy(false);
     }
+  }
+
+  // ── Research history: list, reopen, continue ──────────────────────────────
+  async function loadAiHistory() {
+    const response = await listAiConversations();
+    return response.conversations;
+  }
+
+  async function openAiConversation(id: string) {
+    setAiBusy(true);
+    try {
+      const response = await getAiConversation(id);
+      setAiConversationId(response.conversation.id);
+      setAiAgentOverride(response.conversation.agentKey);
+      setAiMessages(response.messages.map((m) => ({
+        id: m.id, role: m.role, content: m.content, grounding: m.grounding ?? undefined
+      })));
+      log(`Reopened conversation: ${response.conversation.title}`);
+    } catch (error) {
+      showToast("error", "Could not reopen conversation", error instanceof Error ? error.message : "Try again.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  function newAiChat() {
+    setAiConversationId(null);
+    setAiAgentOverride(null);
+    setAiMessages([{ id: uid("AI"), role: "assistant", content: "New conversation. Ask me to draft, research, summarise a matter, or prepare a client update." }]);
   }
 
   if (!authUser) {
@@ -913,6 +945,9 @@ export function App() {
         askAi={askAi}
         canDraft={!!aiConversationId}
         onDraft={draftFromChat}
+        loadHistory={loadAiHistory}
+        onOpenConversation={openAiConversation}
+        onNewChat={newAiChat}
       />
       {authUser.tenantId && !tenantProfile.onboardingCompleted && (
         <OnboardingFlow
@@ -1193,7 +1228,10 @@ function AIAssistantPanel({
   contextSummary,
   askAi,
   canDraft,
-  onDraft
+  onDraft,
+  loadHistory,
+  onOpenConversation,
+  onNewChat
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -1204,8 +1242,27 @@ function AIAssistantPanel({
   askAi: (message: string, agentKey?: AiAgentKey) => Promise<void>;
   canDraft: boolean;
   onDraft: (docType: "opinion" | "letter") => Promise<void>;
+  loadHistory: () => Promise<AiConversationSummary[]>;
+  onOpenConversation: (id: string) => Promise<void>;
+  onNewChat: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyItems, setHistoryItems] = useState<AiConversationSummary[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
+
+  async function toggleHistory() {
+    if (historyOpen) { setHistoryOpen(false); return; }
+    setHistoryOpen(true);
+    setHistoryBusy(true);
+    try {
+      setHistoryItems(await loadHistory());
+    } catch {
+      setHistoryItems([]);
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
   const quickPrompts: Record<AiAgentKey, string[]> = {
     general: ["What should I focus on today?", "Summarise this firm's current workload."],
     drafting: ["Review the current document intake for missing fields.", "Draft a clause checklist for this document."],
@@ -1235,7 +1292,11 @@ function AIAssistantPanel({
               <p className="eyebrow">AI native workspace</p>
               <strong>{aiAgentLabels[activeAgent]}</strong>
             </div>
-            <button className="small" onClick={() => setOpen(false)}><X size={16} /></button>
+            <div className="ai-panel-tools">
+              <button className="small" title="Start a new conversation" onClick={() => { setHistoryOpen(false); onNewChat(); }}><Plus size={16} /></button>
+              <button className={`small${historyOpen ? " active" : ""}`} title="Previous conversations" onClick={toggleHistory}><HistoryIcon size={16} /></button>
+              <button className="small" onClick={() => setOpen(false)}><X size={16} /></button>
+            </div>
           </div>
           <div className="ai-context">
             <ShieldCheck size={16} />
@@ -1246,16 +1307,40 @@ function AIAssistantPanel({
               <button className="small" key={prompt} disabled={busy} onClick={() => askAi(prompt, activeAgent)}>{prompt}</button>
             ))}
           </div>
-          <div className="ai-messages">
-            {messages.map((message) => (
-              <article className={`ai-message ${message.role}`} key={message.id}>
-                <span>{message.role === "user" ? "You" : "LawPath AI"}</span>
-                <p>{message.content}</p>
-                {message.grounding && <CitationVerdict grounding={message.grounding} />}
-              </article>
-            ))}
-            {busy && <article className="ai-message assistant"><span>LawPath AI</span><p>Thinking with tenant context...</p></article>}
-          </div>
+          {historyOpen ? (
+            <div className="ai-history">
+              <p className="eyebrow">Your previous conversations</p>
+              {historyBusy && <p className="ai-history-empty">Loading…</p>}
+              {!historyBusy && historyItems.length === 0 && (
+                <p className="ai-history-empty">No previous conversations yet. They are saved automatically as you work.</p>
+              )}
+              {!historyBusy && historyItems.map((item) => (
+                <button
+                  key={item.id}
+                  className="ai-history-item"
+                  disabled={busy}
+                  onClick={async () => { await onOpenConversation(item.id); setHistoryOpen(false); }}
+                >
+                  <strong>{item.title}</strong>
+                  {item.lastQuestion && <span className="ai-history-snippet">{item.lastQuestion}</span>}
+                  <span className="ai-history-meta">
+                    {aiAgentLabels[item.agentKey] ?? item.agentKey} · {item.messageCount} message{item.messageCount === 1 ? "" : "s"} · {new Date(item.updatedAt).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="ai-messages">
+              {messages.map((message) => (
+                <article className={`ai-message ${message.role}`} key={message.id}>
+                  <span>{message.role === "user" ? "You" : "LawPath AI"}</span>
+                  <p>{message.content}</p>
+                  {message.grounding && <CitationVerdict grounding={message.grounding} />}
+                </article>
+              ))}
+              {busy && <article className="ai-message assistant"><span>LawPath AI</span><p>Thinking with tenant context...</p></article>}
+            </div>
+          )}
           {canDraft && (
             <div className="ai-draft-actions">
               <button className="small" disabled={busy} onClick={() => onDraft("opinion")} title="Draft a formal opinion from this conversation. It goes to the approval queue — an attorney must sign it off.">
