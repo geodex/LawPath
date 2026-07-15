@@ -2435,6 +2435,114 @@ app.get("/api/matters", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── CONFLICT CHECK ──────────────────────────────────────────────────────────
+// Searching existing clients, matters and opposing parties before accepting an
+// instruction is a professional duty. Deliberately over-inclusive: matching is
+// loose substring, both directions, because a spurious hit costs an attorney
+// seconds to dismiss while a missed conflict is a conduct problem. Recall over
+// precision — the human decides, this only surfaces.
+const nameHit = (hay, needle) =>
+  !!hay && !!needle && String(hay).toLowerCase().includes(String(needle).toLowerCase());
+
+app.post("/api/conflicts/check", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const tid = req.user.tenantId;
+  const clientName = String(req.body?.clientName || "").trim();
+  const opposing = Array.isArray(req.body?.opposingParties)
+    ? req.body.opposingParties.map(s => String(s || "").trim()).filter(Boolean) : [];
+  const subjects = [
+    ...(clientName ? [{ name: clientName, side: "client" }] : []),
+    ...opposing.map(n => ({ name: n, side: "opposing" }))
+  ];
+  if (!subjects.length) return res.status(400).json({ error: "Provide a proposed client and/or at least one opposing party." });
+  // A 1-2 character name would match nearly every row — refuse rather than
+  // drown the attorney in noise they'd learn to click through.
+  const tooShort = subjects.filter(s => s.name.length < 3).map(s => s.name);
+  if (tooShort.length) return res.status(400).json({ error: `Names must be at least 3 characters: ${tooShort.join(", ")}` });
+
+  const patterns = subjects.map(s => `%${s.name}%`);
+  const q = (sql, params) => pool.query(sql, params).catch(() => ({ rows: [] }));
+  try {
+    const [mat, lit, conv, fica, cli] = await Promise.all([
+      q(`select id, matter_number, title, client_name, client_role from matters
+         where tenant_id = $1 and (client_name ilike any($2::text[]) or title ilike any($2::text[])) limit 100`, [tid, patterns]),
+      q(`select id, matter_id, matter_ref, plaintiff, defendant, acting_for, status from litigation_matters
+         where tenant_id = $1 and (plaintiff ilike any($2::text[]) or defendant ilike any($2::text[])) limit 100`, [tid, patterns]),
+      q(`select id, matter_id, matter_ref, seller_name, buyer_name, bond_bank, acting_for from conveyancing_matters
+         where tenant_id = $1 and (seller_name ilike any($2::text[]) or buyer_name ilike any($2::text[]) or bond_bank ilike any($2::text[])) limit 100`, [tid, patterns]),
+      q(`select id, client_name, fica_status from fica_clients
+         where tenant_id = $1 and client_name ilike any($2::text[]) limit 100`, [tid, patterns]),
+      q(`select id, full_name, registered_name, trading_name from clients
+         where tenant_id = $1 and (full_name ilike any($2::text[]) or registered_name ilike any($2::text[]) or trading_name ilike any($2::text[])) limit 100`, [tid, patterns])
+    ]);
+
+    const hits = [];
+    const push = (s, o) => {
+      // Acting against our own client is the serious one; having previously
+      // acted against the proposed client is a judgement call, not a bar.
+      const severity = s.side === "opposing" && o.wasOurClient ? "critical"
+                     : s.side === "client" && o.wasOurClient === false ? "warning"
+                     : "info";
+      hits.push({ searchedName: s.name, searchedSide: s.side, severity, ...o });
+    };
+
+    for (const s of subjects) {
+      for (const r of mat.rows) {
+        if (nameHit(r.client_name, s.name)) push(s, { source: "matter", ref: r.matter_number, matterId: r.id, matchedName: r.client_name, matchedRole: r.client_role || "client", wasOurClient: true, detail: r.title || "" });
+        else if (nameHit(r.title, s.name)) push(s, { source: "matter", ref: r.matter_number, matterId: r.id, matchedName: r.title, matchedRole: "mentioned in title", wasOurClient: null, detail: `Client: ${r.client_name}` });
+      }
+      for (const r of lit.rows) {
+        const side = nameHit(r.plaintiff, s.name) ? "plaintiff" : nameHit(r.defendant, s.name) ? "defendant" : null;
+        if (!side) continue;
+        push(s, {
+          source: "litigation", ref: r.matter_ref, matterId: r.matter_id,
+          matchedName: side === "plaintiff" ? r.plaintiff : r.defendant, matchedRole: side,
+          wasOurClient: r.acting_for ? r.acting_for === side : null,
+          detail: `${r.plaintiff} v ${r.defendant}${r.status ? ` · ${r.status}` : ""}${r.acting_for ? "" : " · acting-for not stated"}`
+        });
+      }
+      for (const r of conv.rows) {
+        const side = nameHit(r.seller_name, s.name) ? "seller" : nameHit(r.buyer_name, s.name) ? "buyer" : nameHit(r.bond_bank, s.name) ? "bank" : null;
+        if (!side) continue;
+        push(s, {
+          source: "conveyancing", ref: r.matter_ref, matterId: r.matter_id,
+          matchedName: side === "seller" ? r.seller_name : side === "buyer" ? r.buyer_name : r.bond_bank,
+          matchedRole: side, wasOurClient: r.acting_for ? r.acting_for === side : null,
+          detail: `${r.seller_name} → ${r.buyer_name}${r.acting_for ? "" : " · acting-for not stated"}`
+        });
+      }
+      for (const r of fica.rows) {
+        if (nameHit(r.client_name, s.name)) push(s, { source: "fica", ref: "", matterId: null, matchedName: r.client_name, matchedRole: "FICA client", wasOurClient: true, detail: `FICA status: ${r.fica_status}` });
+      }
+      for (const r of cli.rows) {
+        const n = [r.full_name, r.registered_name, r.trading_name].find(x => nameHit(x, s.name));
+        if (n) push(s, { source: "client", ref: "", matterId: null, matchedName: n, matchedRole: "existing client", wasOurClient: true, detail: "On the client roll" });
+      }
+    }
+
+    const counts = {
+      critical: hits.filter(h => h.severity === "critical").length,
+      warning: hits.filter(h => h.severity === "warning").length,
+      info: hits.filter(h => h.severity === "info").length
+    };
+
+    // A conflict check is a professional duty — record that it was run, by whom,
+    // over which names, and what it found. The audit trail is the point.
+    await pool.query(
+      `insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details)
+       values ($1,$2,'conflict_check',null,'checked',$3)`,
+      [tid, req.user.sub, { subjects, counts, hitCount: hits.length }]
+    ).catch(() => { /* never fail the check because of logging */ });
+
+    res.json({
+      checked: subjects, hits, counts,
+      clear: hits.length === 0,
+      checkedAt: new Date().toISOString(),
+      disclaimer: "Automated search of this firm's own records only. It cannot see matters outside this workspace, and name matching is approximate — an attorney must still apply their own knowledge before accepting the mandate."
+    });
+  } catch (error) { next(error); }
+});
+
 // ─── MATTER FILE ─────────────────────────────────────────────────────────────
 // One file, joined by the matter spine (docs/matter-spine-plan.md): the whole
 // matter in one payload — the domain pipeline, money (WIP + trust + invoices),

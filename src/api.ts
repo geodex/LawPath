@@ -870,6 +870,32 @@ export async function getMatters() {
   return request<{ matters: Matter[] }>("/api/matters");
 }
 
+export type ConflictHit = {
+  searchedName: string;
+  searchedSide: "client" | "opposing";
+  severity: "critical" | "warning" | "info";
+  source: "matter" | "litigation" | "conveyancing" | "fica" | "client";
+  ref: string;
+  matterId: string | null;
+  matchedName: string;
+  matchedRole: string;
+  wasOurClient: boolean | null;
+  detail: string;
+};
+
+export type ConflictResult = {
+  checked: { name: string; side: "client" | "opposing" }[];
+  hits: ConflictHit[];
+  counts: { critical: number; warning: number; info: number };
+  clear: boolean;
+  checkedAt: string;
+  disclaimer: string;
+};
+
+export async function checkConflicts(input: { clientName?: string; opposingParties?: string[] }) {
+  return request<ConflictResult>("/api/conflicts/check", { method: "POST", body: JSON.stringify(input) });
+}
+
 export type MatterFile = {
   matter: Matter;
   litigation: LitigationMatter | null;

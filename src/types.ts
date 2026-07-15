@@ -647,7 +647,7 @@ export type ViewKey =
   | "today" | "overview" | "matter-file" | "clients" | "drafting" | "research" | "secretary" | "billing"
   | "booking" | "portal" | "training-guide" | "settings"
   | "trust" | "fica" | "time" | "popia"
-  | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting"
+  | "conveyancing" | "litigation" | "conflicts" | "whatsapp" | "cipc" | "documents" | "accounting"
   | "research-db" | "esignature" | "agents" | "analytics"
   | "staff" | "billing-portal" | "ai-library" | "super-tenants";
 
