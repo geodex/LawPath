@@ -1447,10 +1447,11 @@ app.post("/api/trust/transactions", authMiddleware, async (req, res, next) => {
 
     const result = await pool.query(
       `insert into trust_transactions
-        (tenant_id, trust_account_id, client_name, description, reference, entry_type, amount_cents, value_date, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (tenant_id, trust_account_id, client_name, description, reference, entry_type, amount_cents, value_date, created_by, matter_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        returning *`,
-      [req.user.tenantId, accountId, clientName, description, reference || null, entryType, Number(amountCents), valueDate || new Date().toISOString().slice(0, 10), req.user.sub]
+      [req.user.tenantId, accountId, clientName, description, reference || null, entryType, Number(amountCents), valueDate || new Date().toISOString().slice(0, 10), req.user.sub,
+       await resolveSpineMatterId(req.user.tenantId, reference)]
     );
     await pool.query(
       `insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details)
@@ -1661,14 +1662,16 @@ app.post("/api/time/entries", authMiddleware, async (req, res, next) => {
   const amount = Number(amountCents) || Math.round((Number(durationMinutes) / 60) * Number(rateCents));
   const vat = Math.round(amount * 0.15);
   try {
+    // Matter spine: link the entry to its matter when the ref resolves.
+    const spineId = await resolveSpineMatterId(req.user.tenantId, matterRef);
     const result = await pool.query(
       `insert into time_entries
         (tenant_id, client_name, matter_ref, fee_earner_name, entry_date, activity_type, description,
-         duration_minutes, rate_cents, amount_cents, vat_amount_cents, is_disbursement, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
+         duration_minutes, rate_cents, amount_cents, vat_amount_cents, is_disbursement, created_by, matter_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning *`,
       [req.user.tenantId, clientName, matterRef || null, feeEarnerName, entryDate || new Date().toISOString().slice(0, 10),
        activityType || "professional_fee", description, Number(durationMinutes || 0),
-       Number(rateCents || 0), amount, vat, Boolean(isDisbursement), req.user.sub]
+       Number(rateCents || 0), amount, vat, Boolean(isDisbursement), req.user.sub, spineId]
     );
     res.status(201).json({ entry: timeEntryFromRow(result.rows[0]) });
   } catch (error) { next(error); }
@@ -1992,17 +1995,28 @@ app.post("/api/conveyancing/matters", authMiddleware, async (req, res, next) => 
   if (actingFor && !CONVEYANCING_ACTING_FOR.includes(actingFor))
     return res.status(400).json({ error: "actingFor must be 'seller', 'buyer' or 'bank'." });
   try {
+    const spineId = await ensureSpineMatter({
+      tenantId: req.user.tenantId,
+      matterNumber: matterRef,
+      title: `${sellerName} → ${buyerName}`,
+      clientName: actingFor === "seller" ? sellerName : actingFor === "buyer" ? buyerName
+                : actingFor === "bank" ? (bondBank || null) : null,
+      clientRole: actingFor,
+      matterType: "conveyancing",
+      stage: "instruction_received",
+      createdBy: req.user.sub
+    });
     const result = await pool.query(
       `insert into conveyancing_matters
         (tenant_id, matter_ref, matter_type, seller_name, buyer_name, property_description, erf_number,
          purchase_price_cents, transfer_duty_cents, conveyancing_fee_cents, vat_on_fee_cents,
-         estate_agent, bond_bank, target_registration_date, notes, created_by, acting_for)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
+         estate_agent, bond_bank, target_registration_date, notes, created_by, acting_for, matter_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) returning *`,
       [req.user.tenantId, matterRef, matterType || "transfer", sellerName, buyerName, propertyDescription,
        erfNumber || null, Number(purchasePriceCents || 0), Number(transferDutyCents || 0),
        Number(conveyancingFeeCents || 0), Number(vatOnFeeCents || 0),
        estateAgent || null, bondBank || null, targetRegistrationDate || null, notes || null, req.user.sub,
-       actingFor || null]
+       actingFor || null, spineId]
     );
     await pool.query(
       "insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details) values ($1,$2,'conveyancing_matter',$3,'created',$4)",
@@ -2153,6 +2167,48 @@ function costOrderFromRow(row) {
 const LITIGATION_ACTING_FOR = ["plaintiff", "defendant"];
 const CONVEYANCING_ACTING_FOR = ["seller", "buyer", "bank"];
 
+// Matter spine (docs/matter-spine-plan.md): insert-or-get the canonical `matters`
+// row for a domain matter, so every new litigation/conveyancing file is born
+// linked rather than waiting on a backfill. Keyed on the existing unique
+// (tenant_id, matter_number) so it is safe to call repeatedly.
+//
+// Returns null when the client is unknown (no acting_for stated) — the domain
+// matter is still created, just unlinked, and the backfill picks it up once an
+// attorney says which side the firm acts for. Never guesses the client.
+async function ensureSpineMatter({ tenantId, matterNumber, title, clientName, clientRole, matterType, stage, createdBy }) {
+  if (!tenantId || !matterNumber || !clientName) return null;
+  try {
+    const ins = await pool.query(
+      `insert into matters (tenant_id, matter_number, title, client_name, client_role, matter_type, stage, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (tenant_id, matter_number) do nothing
+       returning id`,
+      [tenantId, matterNumber, String(title || matterNumber).slice(0, 300), clientName,
+       clientRole || null, matterType, stage || "Intake", createdBy || null]
+    );
+    if (ins.rows[0]?.id) return ins.rows[0].id;
+    const existing = await pool.query(
+      "select id from matters where tenant_id = $1 and matter_number = $2", [tenantId, matterNumber]);
+    return existing.rows[0]?.id || null;
+  } catch (err) {
+    // The spine is additive — never fail a matter creation because of it.
+    console.warn("[matter-spine] could not link matter:", err.message);
+    return null;
+  }
+}
+
+// Resolve a free-text matter reference to a spine matter_id, for leaf rows
+// (time entries, trust transactions) created with a matterRef string.
+async function resolveSpineMatterId(tenantId, matterRef) {
+  if (!tenantId || !matterRef || !String(matterRef).trim()) return null;
+  try {
+    const r = await pool.query(
+      "select id from matters where tenant_id = $1 and lower(trim(matter_number)) = lower(trim($2)) limit 1",
+      [tenantId, String(matterRef)]);
+    return r.rows[0]?.id || null;
+  } catch { return null; }
+}
+
 function litMatterFromRow(row, deadlines, courtDates, costOrders) {
   return {
     id: row.id, matterRef: row.matter_ref, caseNumber: row.case_number || "",
@@ -2216,16 +2272,26 @@ app.post("/api/litigation/matters", authMiddleware, async (req, res, next) => {
   const periodYears = Number(prescriptionPeriodYears) > 0 ? Number(prescriptionPeriodYears) : 3;
   const computedPrescription = computePrescriptionDate(causeOfActionDate, periodYears, prescriptionDate);
   try {
+    const spineId = await ensureSpineMatter({
+      tenantId: req.user.tenantId,
+      matterNumber: matterRef,
+      title: `${plaintiff} v ${defendant}`,
+      clientName: actingFor === "plaintiff" ? plaintiff : actingFor === "defendant" ? defendant : null,
+      clientRole: actingFor,
+      matterType: "litigation",
+      stage: "pleadings",
+      createdBy: req.user.sub
+    });
     const result = await pool.query(
       `insert into litigation_matters
         (tenant_id, matter_ref, case_number, court, court_division, plaintiff, defendant,
          matter_type, claim_amount_cents, service_date, notes, created_by,
-         cause_of_action_date, prescription_period_years, prescription_date, acting_for)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning *`,
+         cause_of_action_date, prescription_period_years, prescription_date, acting_for, matter_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
       [req.user.tenantId, matterRef, caseNumber || null, court, courtDivision || null,
        plaintiff, defendant, matterType || "opposed_motion",
        Number(claimAmountCents || 0), serviceDate || null, notes || null, req.user.sub,
-       causeOfActionDate || null, periodYears, computedPrescription, actingFor || null]
+       causeOfActionDate || null, periodYears, computedPrescription, actingFor || null, spineId]
     );
     res.status(201).json({ matter: litMatterFromRow(result.rows[0], [], [], []) });
   } catch (error) { next(error); }
