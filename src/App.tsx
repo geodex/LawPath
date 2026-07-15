@@ -780,6 +780,7 @@ export function App() {
             setQueries={setResearchQueries}
             log={log}
             showToast={showToast}
+            canReindex={isPlatformSuperAdmin}
           />
         )}
         {activeView === "esignature" && (

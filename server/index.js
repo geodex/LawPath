@@ -3709,7 +3709,12 @@ app.get("/api/research-db/documents/:id/text", authMiddleware, async (req, res, 
   } catch (error) { next(error); }
 });
 
+// Re-indexing mutates a PLATFORM corpus source (legal_corpus_sources carries no
+// tenant_id — the row is shared by every tenant), so this is a platform-admin
+// operation, not a tenant one. Previously any authenticated user could flip a
+// shared source's index_status.
 app.post("/api/research-db/sources/:id/index", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
   try {
     const result = await pool.query("update legal_corpus_sources set index_status='indexing', updated_at=now() where id=$1 returning *", [req.params.id]);
     if (!result.rowCount) return res.status(404).json({ error: "Source not found." });

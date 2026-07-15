@@ -242,7 +242,7 @@ const SOURCE_TYPE_COLOURS: Record<LegalCorpusSource["sourceType"], string> = {
 };
 
 export function LegalResearchDB({
-  sources, setSources, documents, setDocuments, queries, setQueries, log, showToast
+  sources, setSources, documents, setDocuments, queries, setQueries, log, showToast, canReindex = false
 }: {
   sources: LegalCorpusSource[];
   setSources: React.Dispatch<React.SetStateAction<LegalCorpusSource[]>>;
@@ -252,6 +252,8 @@ export function LegalResearchDB({
   setQueries: React.Dispatch<React.SetStateAction<ResearchQuery[]>>;
   log: (msg: string) => void;
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
+  /** Re-indexing a shared platform corpus source is a platform-admin action. */
+  canReindex?: boolean;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -462,9 +464,11 @@ export function LegalResearchDB({
                 <span className={`index-status-${src.indexStatus}`} style={{ fontSize: "0.8rem" }}>
                   {src.indexStatus === "indexing" ? "⟳ Indexing..." : src.indexStatus === "indexed" ? "✓ Indexed" : src.indexStatus === "failed" ? "✗ Failed" : src.indexStatus === "update_available" ? "↑ Update" : "Pending"}
                 </span>
-                <button className="ghost small" disabled={indexing === src.id} onClick={() => handleReindex(src)}>
-                  <RefreshCw size={13} /> {indexing === src.id ? "Indexing..." : "Re-index"}
-                </button>
+                {canReindex && (
+                  <button className="ghost small" disabled={indexing === src.id} onClick={() => handleReindex(src)}>
+                    <RefreshCw size={13} /> {indexing === src.id ? "Indexing..." : "Re-index"}
+                  </button>
+                )}
               </div>
             </div>
           ))}
