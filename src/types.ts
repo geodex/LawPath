@@ -3,7 +3,10 @@ import type { LucideIcon } from "lucide-react";
 
 
 export type Matter = {
+  /** Human matter number, e.g. "M-123456". */
   id: string;
+  /** Spine PK — use this to open the Matter File. */
+  uuid: string;
   title: string;
   client: string;
   matterType: string;
@@ -641,7 +644,7 @@ export type TodayBrief = {
 };
 
 export type ViewKey =
-  | "today" | "overview" | "clients" | "drafting" | "research" | "secretary" | "billing"
+  | "today" | "overview" | "matter-file" | "clients" | "drafting" | "research" | "secretary" | "billing"
   | "booking" | "portal" | "training-guide" | "settings"
   | "trust" | "fica" | "time" | "popia"
   | "conveyancing" | "litigation" | "whatsapp" | "cipc" | "documents" | "accounting"

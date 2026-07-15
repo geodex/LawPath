@@ -61,6 +61,7 @@ import { CipcSearch } from "./CipcSearch";
 import { DocumentIntelligence } from "./DocumentIntelligence";
 import { AccountingSync } from "./AccountingSync";
 import { LegalResearchDB } from "./LegalResearchDB";
+import { MatterFile } from "./MatterFile";
 import { ESignature } from "./ESignature";
 import { AgentNetwork } from "./AgentNetwork";
 import { PracticeAnalytics } from "./PracticeAnalytics";
@@ -128,6 +129,7 @@ const navGroups: NavGroup[] = [
 const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   today: "general",
   overview: "general",
+  "matter-file": "general",
   clients: "general",
   drafting: "drafting",
   research: "research",
@@ -346,6 +348,10 @@ export function App() {
   const [activity, setActivity] = useState<string[]>([]);
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
+  // Matter File: the spine's payoff — one page per matter.
+  const [openMatterUuid, setOpenMatterUuid] = useState<string | null>(null);
+  const openMatterFile = (uuid: string) => { setOpenMatterUuid(uuid); setActiveView("matter-file"); };
+
   const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
   const hasTenantContext = Boolean(authUser?.tenantId);
   const activeAgent = viewAgentMap[activeView];
@@ -658,7 +664,8 @@ export function App() {
         </header>
 
         {activeView === "today" && <Today userName={authUser?.fullName} setActiveView={setActiveView} />}
-        {activeView === "overview" && <Overview matters={matters} tasks={tasks} invoices={invoices} research={research} activity={activity} setActiveView={setActiveView} />}
+        {activeView === "overview" && <Overview matters={matters} tasks={tasks} invoices={invoices} research={research} activity={activity} setActiveView={setActiveView} onOpenMatter={openMatterFile} />}
+        {activeView === "matter-file" && openMatterUuid && <MatterFile matterUuid={openMatterUuid} onBack={() => setActiveView("overview")} />}
         {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} tenantProfile={tenantProfile} />}
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
         {activeView === "clients" && <Clients showToast={showToast} log={log} />}
@@ -1439,7 +1446,8 @@ function Overview({
   invoices,
   research,
   activity,
-  setActiveView
+  setActiveView,
+  onOpenMatter
 }: {
   matters: Matter[];
   tasks: WorkTask[];
@@ -1447,6 +1455,7 @@ function Overview({
   research: ResearchItem[];
   activity: string[];
   setActiveView: (view: ViewKey) => void;
+  onOpenMatter: (uuid: string) => void;
 }) {
   const outstanding = invoices.reduce((sum, invoice) => sum + invoice.amountCents - invoice.paidCents, 0);
   const avgProgress = Math.round(matters.reduce((sum, matter) => sum + matter.progress, 0) / matters.length);
@@ -1475,7 +1484,7 @@ function Overview({
 
       <section className="split">
         <Panel title="Live matters" action={<button className="small" onClick={() => setActiveView("portal")}>Open portal</button>}>
-          <div className="matter-list">{matters.map((matter) => <MatterCard key={matter.id} matter={matter} />)}</div>
+          <div className="matter-list">{matters.map((matter) => <MatterCard key={matter.id} matter={matter} onOpen={onOpenMatter} />)}</div>
         </Panel>
         <Panel title="Practice activity" badge="Live workspace">
           <div className="timeline">{activity.map((item) => <div key={item}><span /><p>{item}</p></div>)}</div>
@@ -3740,9 +3749,14 @@ function Panel({ title, badge, action, children }: { title: string; badge?: stri
   );
 }
 
-function MatterCard({ matter, client = false }: { matter: Matter; client?: boolean }) {
+function MatterCard({ matter, client = false, onOpen }: { matter: Matter; client?: boolean; onOpen?: (uuid: string) => void }) {
   return (
-    <article className={`matter ${client ? "client" : ""}`}>
+    <article
+      className={`matter ${client ? "client" : ""}`}
+      onClick={onOpen && matter.uuid ? () => onOpen(matter.uuid) : undefined}
+      style={onOpen && matter.uuid ? { cursor: "pointer" } : undefined}
+      title={onOpen && matter.uuid ? "Open matter file" : undefined}
+    >
       <div className="matter-title">
         <div>
           <strong>{matter.title}</strong>

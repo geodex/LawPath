@@ -3,6 +3,7 @@ import type { Appointment, ContractDraft, Invoice, Matter, ResearchItem, WorkTas
 export const matters: Matter[] = [
   {
     id: "M-1048",
+    uuid: "00000000-0000-0000-0000-000000001048",
     title: "Mokoena to Dlamini transfer",
     client: "Thandi Mokoena",
     role: "Seller",
@@ -18,6 +19,7 @@ export const matters: Matter[] = [
   },
   {
     id: "M-1049",
+    uuid: "00000000-0000-0000-0000-000000001049",
     title: "Ndlovu shareholder agreement",
     client: "Sipho Ndlovu",
     role: "Founder",
@@ -33,6 +35,7 @@ export const matters: Matter[] = [
   },
   {
     id: "M-1050",
+    uuid: "00000000-0000-0000-0000-000000001050",
     title: "Estate late Naidoo",
     client: "Priya Naidoo",
     role: "Executor",

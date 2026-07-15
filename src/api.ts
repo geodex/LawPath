@@ -870,6 +870,24 @@ export async function getMatters() {
   return request<{ matters: Matter[] }>("/api/matters");
 }
 
+export type MatterFile = {
+  matter: Matter;
+  litigation: LitigationMatter | null;
+  conveyancing: ConveyancingMatter | null;
+  money: { wipCents: number; billedCents: number; invoicedCents: number; paidCents: number; trustBalanceCents: number };
+  timeEntries: TimeEntry[];
+  trustTransactions: TrustTransaction[];
+  invoices: Invoice[];
+  ficaClients: FicaClient[];
+  documents: DocumentAnalysis[];
+  correspondence: { id: string; direction: "inbound" | "outbound"; body: string; status: string; sentAt: string }[];
+  diary: { deadlines: LitigationDeadline[]; courtDates: CourtDate[] };
+};
+
+export async function getMatterFile(matterUuid: string) {
+  return request<MatterFile>(`/api/matters/${matterUuid}/file`);
+}
+
 export async function createMatter(input: Omit<Matter, "id">) {
   return request<{ matter: Matter }>("/api/matters", { method: "POST", body: JSON.stringify(input) });
 }

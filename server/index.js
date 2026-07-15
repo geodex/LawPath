@@ -2405,7 +2405,10 @@ app.post("/api/litigation/matters/:id/cost-orders", authMiddleware, async (req, 
 
 function matterFromRow(r) {
   return {
+    // `id` is the human matter number (kept as-is — callers rely on it).
+    // `uuid` is the real PK, needed to open the Matter File / join the spine.
     id: r.matter_number,
+    uuid: r.id,
     title: r.title || "",
     client: r.client_name || "",
     matterType: r.matter_type || "",
@@ -2429,6 +2432,75 @@ app.get("/api/matters", authMiddleware, async (req, res, next) => {
       [req.user.tenantId]
     );
     res.json({ matters: result.rows.map(matterFromRow) });
+  } catch (error) { next(error); }
+});
+
+// ─── MATTER FILE ─────────────────────────────────────────────────────────────
+// One file, joined by the matter spine (docs/matter-spine-plan.md): the whole
+// matter in one payload — the domain pipeline, money (WIP + trust + invoices),
+// parties/FICA, documents, correspondence and diary. Read-only.
+app.get("/api/matters/:id/file", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const tid = req.user.tenantId;
+  const id = req.params.id;
+  const q = (sql, params) => pool.query(sql, params).catch(() => ({ rows: [] }));
+  try {
+    const matter = await pool.query("select * from matters where id = $1 and tenant_id = $2", [id, tid]);
+    if (!matter.rowCount) return res.status(404).json({ error: "Matter not found." });
+    const m = matter.rows[0];
+
+    const [lit, conv, time, trust, inv, fica, docs, wa] = await Promise.all([
+      q("select * from litigation_matters where matter_id = $1 and tenant_id = $2 limit 1", [id, tid]),
+      q("select * from conveyancing_matters where matter_id = $1 and tenant_id = $2 limit 1", [id, tid]),
+      q("select * from time_entries where matter_id = $1 and tenant_id = $2 order by entry_date desc limit 200", [id, tid]),
+      q("select * from trust_transactions where matter_id = $1 and tenant_id = $2 order by value_date desc limit 200", [id, tid]),
+      q("select * from invoices where matter_id = $1 and tenant_id = $2 order by created_at desc limit 50", [id, tid]),
+      q("select * from fica_clients where matter_id = $1 and tenant_id = $2 limit 20", [id, tid]),
+      q("select * from document_analyses where matter_id = $1 and tenant_id = $2 order by created_at desc limit 50", [id, tid]),
+      // Correspondence still keys off the matter ref — WhatsApp has no matter_id.
+      q("select * from whatsapp_messages where tenant_id = $1 and matter_ref = $2 order by sent_at desc limit 50", [tid, m.matter_number])
+    ]);
+
+    // Diary comes from the linked litigation matter, when there is one.
+    let deadlines = [], courtDates = [];
+    if (lit.rows[0]) {
+      const [d, c] = await Promise.all([
+        q("select * from litigation_deadlines where matter_id = $1 and tenant_id = $2 order by due_date", [lit.rows[0].id, tid]),
+        q("select * from court_dates where matter_id = $1 and tenant_id = $2 order by court_date", [lit.rows[0].id, tid])
+      ]);
+      deadlines = d.rows.map(litDeadlineFromRow);
+      courtDates = c.rows.map(courtDateFromRow);
+    }
+
+    // Money rollup. Trust balance uses the same formula as the trust ledger —
+    // never a second opinion on a trust balance.
+    const bal = await q(
+      `select coalesce(sum(case when entry_type in ('receipt','transfer_in') then amount_cents else -amount_cents end), 0) as balance
+       from trust_transactions where matter_id = $1 and tenant_id = $2`, [id, tid]);
+    const wipCents = time.rows.filter(t => t.status === "WIP").reduce((s, t) => s + Number(t.amount_cents || 0), 0);
+    const billedCents = time.rows.filter(t => t.status === "Billed").reduce((s, t) => s + Number(t.amount_cents || 0), 0);
+    const invoicedCents = inv.rows.reduce((s, i) => s + Number(i.amount_cents || 0), 0);
+    const paidCents = inv.rows.reduce((s, i) => s + Number(i.paid_cents || 0), 0);
+
+    res.json({
+      matter: matterFromRow(m),
+      litigation: lit.rows[0] ? litMatterFromRow(lit.rows[0], deadlines, courtDates, []) : null,
+      conveyancing: conv.rows[0] ? convMatterFromRow(conv.rows[0]) : null,
+      money: {
+        wipCents, billedCents, invoicedCents, paidCents,
+        trustBalanceCents: Number(bal.rows[0]?.balance || 0)
+      },
+      timeEntries: time.rows.map(timeEntryFromRow),
+      trustTransactions: trust.rows.map(trustTransactionFromRow),
+      invoices: inv.rows.map(r => invoiceFromRow(r, [], [])),
+      ficaClients: fica.rows.map(r => ficaClientFromRow(r, [])),
+      documents: docs.rows.map(docAnalysisFromRow),
+      correspondence: wa.rows.map(r => ({
+        id: r.id, direction: r.direction, body: r.message_body,
+        status: r.status, sentAt: r.sent_at ? new Date(r.sent_at).toISOString() : ""
+      })),
+      diary: { deadlines, courtDates }
+    });
   } catch (error) { next(error); }
 });
 
@@ -3951,15 +4023,16 @@ app.post("/api/invoices", authMiddleware, async (req, res, next) => {
     const invResult = await client.query(
       `insert into invoices
         (tenant_id, invoice_number, client_name, client_email, matter_ref, subtotal_cents, vat_cents,
-         amount_cents, paid_cents, currency, status, issued_at, due_at, notes, terms, payment_ref, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,0,'ZAR','Draft',$9,$10,$11,$12,$13,$14)
+         amount_cents, paid_cents, currency, status, issued_at, due_at, notes, terms, payment_ref, created_by, matter_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,0,'ZAR','Draft',$9,$10,$11,$12,$13,$14,$15)
        returning *`,
       [
         req.user.tenantId, invoiceNumber, clientName, clientEmail || null, matterRef || null,
         subtotalCents, vatCents, totalCents, today,
         dueAt || null, notes || null,
         terms || "Payment is due within 30 days of invoice date. Interest at 2% per month accrues on overdue amounts.",
-        paymentRef || null, req.user.sub
+        paymentRef || null, req.user.sub,
+        await resolveSpineMatterId(req.user.tenantId, matterRef)
       ]
     );
     const invoiceId = invResult.rows[0].id;
