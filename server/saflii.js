@@ -1,7 +1,7 @@
 // server/saflii.js
 // SA Legal Corpus indexer — powered by the Laws.Africa Knowledge Base API.
 // Sandbox plan: 30 calls/min, 100 calls/day. Each call returns up to 20 results.
-// Queries both SA Judgments and SA Legislation KBs (80/20 split).
+// Queries the SA JUDGMENTS knowledge base only (judgments-za).
 // Run daily to grow the corpus — shuffled topics ensure variety across runs.
 //
 // Usage: node server/saflii.js [--queries 95] [--top-k 20]
@@ -10,9 +10,16 @@
 //   LAWS_AFRICA_API_KEY  — Bearer token from https://platform.laws.africa/api-keys/
 //   DATABASE_URL         — PostgreSQL connection string
 //
-// Each run picks a batch of legal-topic queries, retrieves matching judgments
-// from the Knowledge Base, and upserts them into legal_corpus_documents.
-// Re-running is safe — duplicates are skipped via source_url uniqueness.
+// Each run picks a batch of legal-topic queries, retrieves matching judgments,
+// and upserts them into legal_corpus_documents keyed on the work FRBR URI.
+//
+// IDENTITY IS PARSED FROM metadata.work_frbr_uri, NEVER FROM THE PROSE. See
+// resolveIdentity below, and migration 031 for how ~8,955 anonymous rows got
+// into the corpus and why an unnameable row is refused rather than stored.
+//
+// Re-running is safe: dedup is enforced by a unique index on frbr_uri, and a
+// judgment already held is upgraded in place only when the incoming row carries
+// more text than the stored one.
 
 require("dotenv").config();
 
@@ -430,7 +437,7 @@ async function ensureSourceRecord(courtLabel) {
   return result.rows[0].id;
 }
 
-// Index one result. Returns 'new' | 'duplicate' | a rejection reason string.
+// Index one result. Returns 'new' | 'upgraded' | 'duplicate' | a rejection reason.
 //
 // The old version's dedup check sat inside `if (publicUrl)`. Since publicUrl was
 // always undefined (wrong nesting level), the check never ran and every run
@@ -438,6 +445,20 @@ async function ensureSourceRecord(courtLabel) {
 // distinct texts. Dedup is now unconditional and enforced by the database, on
 // the work FRBR URI (migration 031), so it cannot be skipped by a field being
 // absent.
+//
+// On conflict it UPGRADES rather than skips, when the incoming row carries more
+// text than the one already stored. That is what repairs the 504 curated seeds:
+// they hold a correct citation but only a ~103-character one-line summary and a
+// fabricated YYYY-01-01 decision date. Once corpus-frbr-backfill.js gives them
+// the frbr_uri their citation already implies, the next run that retrieves the
+// same judgment replaces the stub with the full Laws.Africa summary, the real
+// handing-down date and the authoritative title — in place, at no extra API
+// cost. (Full judgment text is not available to us: SAFLII and lawlibrary.org.za
+// are both behind bot protection, and the Laws.Africa content API returns
+// "You do not have permission to perform this action" on the AI KB plan.)
+//
+// Strictly-greater on length, so a run that returns a shorter passage for a
+// judgment we already hold richly cannot degrade it.
 async function indexResult(item) {
   const id = resolveIdentity(item);
   if (!id.ok) return id.reason;
@@ -450,8 +471,21 @@ async function indexResult(item) {
       (source_id, frbr_uri, title, citation, court, decision_date, jurisdiction, document_type,
        summary, full_text_snippet, source_url, tags, year)
      values ($1,$2,$3,$4,$5,$6,'South Africa','judgment',$7,$8,$9,$10,$11)
-     on conflict (frbr_uri) where frbr_uri is not null do nothing
-     returning id`,
+     on conflict (frbr_uri) where frbr_uri is not null do update
+        set source_id         = excluded.source_id,
+            title             = excluded.title,
+            citation          = excluded.citation,
+            court             = excluded.court,
+            decision_date     = excluded.decision_date,
+            summary           = excluded.summary,
+            full_text_snippet = excluded.full_text_snippet,
+            source_url        = excluded.source_url,
+            tags              = excluded.tags,
+            year              = excluded.year,
+            indexed_at        = now()
+      where length(coalesce(excluded.full_text_snippet, '')) >
+            length(coalesce(legal_corpus_documents.full_text_snippet, ''))
+     returning (xmax = 0) as inserted`,
     [
       sourceId,
       d.frbrUri,
@@ -466,7 +500,10 @@ async function indexResult(item) {
       d.year
     ]
   );
-  return res.rowCount ? "new" : "duplicate";
+  // No row back means the conflict fired but the upgrade condition did not: we
+  // already hold this judgment at least as richly.
+  if (!res.rowCount) return "duplicate";
+  return res.rows[0].inserted ? "new" : "upgraded";
 }
 
 async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
@@ -481,6 +518,7 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
   console.info(`[indexer] Will run up to ${maxQueries} queries, ${topK} results each.`);
   const start = Date.now();
   let totalNew = 0;
+  let totalUpgraded = 0;
   let totalDuplicate = 0;
   let totalRejected = 0;
   let apiCalls = 0;
@@ -543,12 +581,13 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
       const results = await queryKnowledgeBase(apiKey, kbCode, query, topK);
       apiCalls++;
       const items = results.results || results.items || results || [];
-      let batchNew = 0, batchDup = 0, batchRej = 0;
+      let batchNew = 0, batchUp = 0, batchDup = 0, batchRej = 0;
 
       for (const item of items) {
         try {
           const outcome = await indexResult(item);
           if (outcome === "new") { batchNew++; totalNew++; }
+          else if (outcome === "upgraded") { batchUp++; totalUpgraded++; }
           else if (outcome === "duplicate") { batchDup++; totalDuplicate++; }
           else {
             batchRej++;
@@ -560,7 +599,7 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
         }
       }
 
-      console.info(`[indexer]   ${items.length} results → ${batchNew} new, ${batchDup} dup, ${batchRej} rejected`);
+      console.info(`[indexer]   ${items.length} results → ${batchNew} new, ${batchUp} upgraded, ${batchDup} dup, ${batchRej} rejected`);
 
       // Respect rate limits — 2 seconds between calls (30/min limit)
       await delay(2100);
@@ -597,7 +636,7 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-  console.info(`[indexer] Complete in ${elapsed}s — ${totalNew} new, ${totalDuplicate} duplicate, ${totalRejected} rejected (${apiCalls} API calls used).`);
+  console.info(`[indexer] Complete in ${elapsed}s — ${totalNew} new, ${totalUpgraded} upgraded, ${totalDuplicate} duplicate, ${totalRejected} rejected (${apiCalls} API calls used).`);
   console.info(`[indexer] Free tier: 100 calls/day. Used ${apiCalls}. ${Math.max(0, 100 - apiCalls)} remaining today.`);
 
   await pool.end().catch(() => {});
