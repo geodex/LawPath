@@ -400,7 +400,11 @@ async function fetchKnowledgeBases(apiKey) {
   return res.json();
 }
 
-async function queryKnowledgeBase(apiKey, kbCode, text, topK = 20) {
+// filters merge over the SA default. Live research passes work_frbr_uri here
+// for exact citation lookup — the retrieve API accepts work_frbr_uri /
+// work_frbr_uri__in / expression_frbr_uri / frbr_doctype etc. as documented at
+// developers.laws.africa/knowledge-bases/filters.
+async function queryKnowledgeBase(apiKey, kbCode, text, topK = 20, filters = {}) {
   const res = await fetch(`${API_BASE}/knowledge-bases/${kbCode}/retrieve`, {
     method: "POST",
     headers: {
@@ -410,7 +414,7 @@ async function queryKnowledgeBase(apiKey, kbCode, text, topK = 20) {
     body: JSON.stringify({
       text,
       top_k: topK,
-      filters: { frbr_country: "za" }
+      filters: { frbr_country: "za", ...filters }
     })
   });
   if (!res.ok) {
@@ -601,9 +605,23 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
 
       console.info(`[indexer]   ${items.length} results → ${batchNew} new, ${batchUp} upgraded, ${batchDup} dup, ${batchRej} rejected`);
 
+      // Feed the shared daily meter (033). Live research shares the same 100
+      // calls/day and its budget guard is blind to the batch without this.
+      // best-effort: a metering failure must not abort an indexing run.
+      await pool.query(
+        `insert into laws_africa_usage_log (query_kind, kb_code, results, new_docs, upgraded)
+         values ('indexer', $1, $2, $3, $4)`,
+        [kbCode, items.length, batchNew, batchUp]
+      ).catch(err => console.warn(`[indexer]   usage log failed: ${err.message}`));
+
       // Respect rate limits — 2 seconds between calls (30/min limit)
       await delay(2100);
     } catch (err) {
+      await pool.query(
+        `insert into laws_africa_usage_log (query_kind, kb_code, status, error_code)
+         values ('indexer', $1, 'error', $2)`,
+        [kbCode, String(err.message).slice(0, 200)]
+      ).catch(() => {});
       if (err.message.includes("429")) {
         console.warn("[indexer] Rate limited — stopping. Re-run tomorrow to continue.");
         break;
@@ -663,6 +681,6 @@ if (require.main === module) {
 // replaced was only reachable through a live API call, which is a large part of
 // why it went ~9,000 rows without anyone noticing it was discarding every field.
 module.exports = {
-  runIndexer, QUERY_TOPICS, indexResult,
+  runIndexer, QUERY_TOPICS, indexResult, queryKnowledgeBase,
   parseWorkUri, courtFromFrbrCode, citationFromWorkUri, resolveIdentity
 };
