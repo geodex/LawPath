@@ -15,6 +15,7 @@ const searchworks = require("./searchworks");
 const { pollMatter: pollDotsMatter } = require("./dots-poller");
 const { createApprovalRequest, APPROVER_ROLES } = require("./approvals");
 const courtRules = require("./court-rules");
+const grounding = require("./legal-grounding");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -453,11 +454,18 @@ async function callAiAssistant({ message, agentKey, context, logCtx }) {
     };
   }
 
+  // Ground every answer in the firm's corpus. The model must never supply South
+  // African case law from memory — it confabulates citations that look real.
+  const sources = await grounding.retrieveCorpusContext({ query: message, limit: 6 });
+
   const systemPrompt = [
     "You are LawPath SA, an AI-native legal practice assistant for South African law firms.",
     "Use only the tenant-scoped context supplied. Do not invent database facts. Keep attorney review requirements explicit.",
     context.agent.instruction,
-    `Current agent key: ${agentKey}.`
+    `Current agent key: ${agentKey}.`,
+    "",
+    grounding.groundingInstruction(sources.length > 0),
+    sources.length ? grounding.formatSources(sources) : ""
   ].join("\n");
 
   const userPrompt = [
@@ -473,7 +481,23 @@ async function callAiAssistant({ message, agentKey, context, logCtx }) {
     feature: "ai-chat"
   });
 
-  return { provider, model, content };
+  // Verify rather than trust. The prompt above is a request; this is the check.
+  // Every citation in the answer is looked up in the corpus, and anything we
+  // cannot confirm is returned as unverified so the UI can say so plainly.
+  const citations = await grounding.verifyCitations(grounding.extractCitations(content));
+
+  return {
+    provider, model, content,
+    grounding: {
+      sourcesUsed: sources.length,
+      sources: sources.map((s, i) => ({
+        tag: `S${i + 1}`, title: s.title, citation: s.citation,
+        court: s.court, year: s.year, sourceUrl: s.source_url
+      })),
+      citations,
+      unverifiedCount: citations.filter(c => !c.verified).length
+    }
+  };
 }
 
 app.get("/api/health", async (_req, res) => {
@@ -1309,7 +1333,10 @@ app.post("/api/ai/chat", authMiddleware, async (req, res, next) => {
       answer: ai.content,
       contextSummary,
       model: ai.model,
-      provider: ai.provider
+      provider: ai.provider,
+      // Which judgments grounded the answer, and the verification verdict on
+      // every citation it contains. The UI must surface unverified ones.
+      grounding: ai.grounding || null
     });
   } catch (error) {
     await client.query("rollback").catch(() => undefined);

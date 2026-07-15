@@ -173,6 +173,22 @@ export async function sendTestEmail(input: {
   });
 }
 
+export type VerifiedCitation = {
+  citation: string;
+  verified: boolean;
+  title: string | null;
+  court: string | null;
+  year: number | null;
+  sourceUrl: string | null;
+};
+
+export type ChatGrounding = {
+  sourcesUsed: number;
+  sources: { tag: string; title: string; citation: string | null; court: string | null; year: number | null; sourceUrl: string | null }[];
+  citations: VerifiedCitation[];
+  unverifiedCount: number;
+};
+
 export async function sendAiChat(input: { message: string; agentKey: AiAgentKey; conversationId?: string | null }) {
   return request<{
     conversationId: string;
@@ -181,6 +197,7 @@ export async function sendAiChat(input: { message: string; agentKey: AiAgentKey;
     contextSummary: string;
     model: string;
     provider: string;
+    grounding: ChatGrounding | null;
   }>("/api/ai/chat", {
     method: "POST",
     body: JSON.stringify(input)

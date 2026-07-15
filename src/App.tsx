@@ -585,8 +585,12 @@ export function App() {
       const response = await sendAiChat({ message: cleaned, agentKey, conversationId: aiConversationId });
       setAiConversationId(response.conversationId);
       setAiContextSummary(response.contextSummary);
-      setAiMessages((items) => [...items, { id: uid("AI"), role: "assistant", content: response.answer }]);
+      setAiMessages((items) => [...items, { id: uid("AI"), role: "assistant", content: response.answer, grounding: response.grounding }]);
       log(`${aiAgentLabels[agentKey]} answered using ${response.provider}/${response.model}`);
+      if (response.grounding?.unverifiedCount) {
+        showToast("error", "Unverified citations",
+          `${response.grounding.unverifiedCount} citation${response.grounding.unverifiedCount === 1 ? "" : "s"} could not be found in the SA corpus. Do not rely on ${response.grounding.unverifiedCount === 1 ? "it" : "them"} without checking.`);
+      }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : "The AI assistant could not respond.";
       setAiMessages((items) => [...items, { id: uid("AI"), role: "assistant", content: messageText }]);
@@ -1212,6 +1216,7 @@ function AIAssistantPanel({
               <article className={`ai-message ${message.role}`} key={message.id}>
                 <span>{message.role === "user" ? "You" : "LawPath AI"}</span>
                 <p>{message.content}</p>
+                {message.grounding && <CitationVerdict grounding={message.grounding} />}
               </article>
             ))}
             {busy && <article className="ai-message assistant"><span>LawPath AI</span><p>Thinking with tenant context...</p></article>}
@@ -3755,6 +3760,62 @@ function Panel({ title, badge, action, children }: { title: string; badge?: stri
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Every citation the assistant produced, checked against the firm's corpus.
+ *
+ * A testing attorney lost trust in the tool at the first fabricated case — the
+ * right reaction, and unrecoverable if we let it happen silently. So the answer
+ * now carries its own audit: what is verifiable, what is not, and a direct link
+ * to read the judgment. "Unverified" is stated as exactly that — the corpus may
+ * simply not hold it — rather than accusing the model of lying.
+ */
+function CitationVerdict({ grounding }: { grounding: NonNullable<AiChatMessage["grounding"]> }) {
+  const { citations, sources, unverifiedCount } = grounding;
+  if (!citations.length && !sources.length) return null;
+
+  return (
+    <div className="ai-citations">
+      {unverifiedCount > 0 && (
+        <div className="ai-citation-warn">
+          <AlertTriangle size={13} />
+          <span>
+            {unverifiedCount} citation{unverifiedCount === 1 ? "" : "s"} below could not be found in the SA corpus.
+            Treat {unverifiedCount === 1 ? "it" : "them"} as unconfirmed and verify on SAFLII before relying on {unverifiedCount === 1 ? "it" : "them"}.
+          </span>
+        </div>
+      )}
+
+      {citations.map((c, i) => (
+        <div key={i} className={`ai-citation ${c.verified ? "ok" : "bad"}`}>
+          {c.verified ? <BadgeCheck size={12} /> : <AlertTriangle size={12} />}
+          <code>{c.citation}</code>
+          {c.verified ? (
+            <>
+              <span className="ai-citation-title">{c.title}{c.court ? ` · ${c.court}` : ""}</span>
+              {c.sourceUrl && <a href={c.sourceUrl} target="_blank" rel="noreferrer">read</a>}
+            </>
+          ) : (
+            <span className="ai-citation-title">not in the corpus — unconfirmed</span>
+          )}
+        </div>
+      ))}
+
+      {sources.length > 0 && (
+        <details className="ai-citation-sources">
+          <summary>{sources.length} judgment{sources.length === 1 ? "" : "s"} used to ground this answer</summary>
+          {sources.map((s) => (
+            <div key={s.tag} className="ai-citation ok">
+              <code>{s.tag}</code>
+              <span className="ai-citation-title">{s.title}{s.citation ? ` · ${s.citation}` : ""}</span>
+              {s.sourceUrl && <a href={s.sourceUrl} target="_blank" rel="noreferrer">read</a>}
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
   );
 }
 

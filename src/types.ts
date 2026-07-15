@@ -304,6 +304,17 @@ export type AiChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /**
+   * Citation verification for an assistant answer. Every case citation in the
+   * text is checked against the firm's corpus; unverified ones must be shown as
+   * such. An LLM cannot be trusted to recall SA citations.
+   */
+  grounding?: {
+    sourcesUsed: number;
+    sources: { tag: string; title: string; citation: string | null; court: string | null; year: number | null; sourceUrl: string | null }[];
+    citations: { citation: string; verified: boolean; title: string | null; court: string | null; year: number | null; sourceUrl: string | null }[];
+    unverifiedCount: number;
+  } | null;
 };
 
 export type NavItem = {
