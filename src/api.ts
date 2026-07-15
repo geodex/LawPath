@@ -932,6 +932,19 @@ export async function checkConflicts(input: { clientName?: string; opposingParti
   return request<ConflictResult>("/api/conflicts/check", { method: "POST", body: JSON.stringify(input) });
 }
 
+export type MatterDiaryEntry = {
+  id: string;
+  matterId: string;
+  description: string;
+  dueDate: string;
+  note: string;
+  source: "manual" | "document" | "ai" | "rule_engine";
+  sourceDocumentId: string | null;
+  completed: boolean;
+  completedAt: string;
+  createdAt: string;
+};
+
 export type MatterFile = {
   matter: Matter;
   litigation: LitigationMatter | null;
@@ -943,11 +956,24 @@ export type MatterFile = {
   ficaClients: FicaClient[];
   documents: DocumentAnalysis[];
   correspondence: { id: string; direction: "inbound" | "outbound"; body: string; status: string; sentAt: string }[];
-  diary: { deadlines: LitigationDeadline[]; courtDates: CourtDate[] };
+  diary: { deadlines: LitigationDeadline[]; courtDates: CourtDate[]; entries: MatterDiaryEntry[] };
 };
 
 export async function getMatterFile(matterUuid: string) {
   return request<MatterFile>(`/api/matters/${matterUuid}/file`);
+}
+
+export async function createDiaryEntry(matterUuid: string, input: {
+  description: string; dueDate: string; note?: string;
+  source?: "manual" | "document" | "ai" | "rule_engine"; sourceDocumentId?: string;
+}) {
+  return request<{ entry: MatterDiaryEntry }>(`/api/matters/${matterUuid}/diary`, {
+    method: "POST", body: JSON.stringify(input)
+  });
+}
+
+export async function completeDiaryEntry(matterUuid: string, entryId: string) {
+  return request<{ entry: MatterDiaryEntry }>(`/api/matters/${matterUuid}/diary/${entryId}/complete`, { method: "PUT", body: "{}" });
 }
 
 export async function createMatter(input: Omit<Matter, "id">) {

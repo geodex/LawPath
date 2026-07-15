@@ -2655,6 +2655,57 @@ app.post("/api/conflicts/check", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── MATTER DIARY ────────────────────────────────────────────────────────────
+// Every matter gets a diary, not just litigation. `source` keeps AI/document
+// derived dates visibly distinct from ones an attorney diarised themselves.
+function diaryEntryFromRow(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id,
+    description: row.description,
+    dueDate: row.due_date ? String(row.due_date).slice(0, 10) : "",
+    note: row.note || "",
+    source: row.source,
+    sourceDocumentId: row.source_document_id || null,
+    completed: row.completed === true,
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : "",
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : ""
+  };
+}
+
+const DIARY_SOURCES = ["manual", "document", "ai", "rule_engine"];
+
+app.post("/api/matters/:id/diary", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { description, dueDate, note, source, sourceDocumentId } = req.body;
+  if (!description || !dueDate) return res.status(400).json({ error: "Description and due date are required." });
+  if (source && !DIARY_SOURCES.includes(source)) return res.status(400).json({ error: `source must be one of: ${DIARY_SOURCES.join(", ")}` });
+  try {
+    const owns = await pool.query("select 1 from matters where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]);
+    if (!owns.rowCount) return res.status(404).json({ error: "Matter not found." });
+    const r = await pool.query(
+      `insert into matter_diary_entries (tenant_id, matter_id, description, due_date, note, source, source_document_id, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [req.user.tenantId, req.params.id, String(description).slice(0, 400), dueDate, note || null,
+       source || "manual", sourceDocumentId || null, req.user.sub]
+    );
+    res.status(201).json({ entry: diaryEntryFromRow(r.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/matters/:matterId/diary/:id/complete", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query(
+      `update matter_diary_entries set completed = true, completed_at = now(), completed_by = $3, updated_at = now()
+       where id = $1 and tenant_id = $2 returning *`,
+      [req.params.id, req.user.tenantId, req.user.sub]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Diary entry not found." });
+    res.json({ entry: diaryEntryFromRow(r.rows[0]) });
+  } catch (error) { next(error); }
+});
+
 // ─── MATTER FILE ─────────────────────────────────────────────────────────────
 // One file, joined by the matter spine (docs/matter-spine-plan.md): the whole
 // matter in one payload — the domain pipeline, money (WIP + trust + invoices),
@@ -2681,7 +2732,9 @@ app.get("/api/matters/:id/file", authMiddleware, async (req, res, next) => {
       q("select * from whatsapp_messages where tenant_id = $1 and matter_ref = $2 order by sent_at desc limit 50", [tid, m.matter_number])
     ]);
 
-    // Diary comes from the linked litigation matter, when there is one.
+    // Diary = the matter's own entries (every matter type) plus, for a litigation
+    // file, its rule-bound deadlines and court dates. litigation_deadlines keeps
+    // its own meaning (rule refs, days-from-service, priority) so both are shown.
     let deadlines = [], courtDates = [];
     if (lit.rows[0]) {
       const [d, c] = await Promise.all([
@@ -2691,6 +2744,8 @@ app.get("/api/matters/:id/file", authMiddleware, async (req, res, next) => {
       deadlines = d.rows.map(litDeadlineFromRow);
       courtDates = c.rows.map(courtDateFromRow);
     }
+    const diaryRows = await q(
+      "select * from matter_diary_entries where matter_id = $1 and tenant_id = $2 order by due_date", [id, tid]);
 
     // Money rollup. Trust balance uses the same formula as the trust ledger —
     // never a second opinion on a trust balance.
@@ -2719,7 +2774,7 @@ app.get("/api/matters/:id/file", authMiddleware, async (req, res, next) => {
         id: r.id, direction: r.direction, body: r.message_body,
         status: r.status, sentAt: r.sent_at ? new Date(r.sent_at).toISOString() : ""
       })),
-      diary: { deadlines, courtDates }
+      diary: { deadlines, courtDates, entries: diaryRows.rows.map(diaryEntryFromRow) }
     });
   } catch (error) { next(error); }
 });
@@ -2906,7 +2961,7 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const tid = req.user.tenantId;
   try {
-    const [litDeadlines, prescription, courtDates, clearances, targetReg, ficaExpiry, agedWip, dotsChanges, approvals] = await Promise.all([
+    const [litDeadlines, prescription, courtDates, clearances, targetReg, ficaExpiry, agedWip, dotsChanges, approvals, diaryDue] = await Promise.all([
       // Incomplete litigation deadlines: overdue or due within 45 days
       pool.query(
         `select d.id, d.description, d.rule_reference, d.due_date, d.priority,
@@ -3003,7 +3058,17 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
                 (current_date - requested_at::date) as days_waiting
          from approval_requests
          where tenant_id = $1 and status = 'pending'
-         order by requested_at asc limit 20`, [tid]).catch(() => ({ rows: [] }))
+         order by requested_at asc limit 20`, [tid]).catch(() => ({ rows: [] })),
+      // Matter diary entries falling due (every matter type, not just litigation)
+      pool.query(
+        `select d.id, d.description, d.due_date, d.source,
+                (d.due_date - current_date) as days_until,
+                m.matter_number, m.client_name
+         from matter_diary_entries d
+         join matters m on m.id = d.matter_id
+         where d.tenant_id = $1 and d.completed = false
+           and d.due_date <= current_date + 21
+         order by d.due_date asc limit 30`, [tid]).catch(() => ({ rows: [] }))
     ]);
 
     const items = [];
@@ -3114,6 +3179,18 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
         detail: `${a.summary || String(a.kind).replace(/_/g, " ")}${a.amount_cents != null ? ` · R ${(Number(a.amount_cents) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}` : ""}. Nothing goes out until an attorney approves it.`,
         dueDate: a.requested_at, daysUntil: null,
         dueLabel: waiting <= 0 ? "today" : `waiting ${waiting}d`
+      });
+    }
+
+    for (const d of diaryDue.rows) {
+      const days = d.days_until == null ? null : Number(d.days_until);
+      items.push({
+        id: `diary-${d.id}`, category: "matter-diary",
+        severity: days < 0 ? "critical" : days <= 7 ? "warning" : "info",
+        icon: "calendar-clock", view: "overview",
+        title: d.description,
+        detail: `${d.client_name} · ${d.matter_number}${d.source !== "manual" ? ` · diarised from ${d.source === "document" ? "a document" : d.source}` : ""}`,
+        dueDate: d.due_date, daysUntil: days, dueLabel: daysUntilLabel(days)
       });
     }
 

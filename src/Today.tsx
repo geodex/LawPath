@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, BadgeCheck, Banknote, Gavel, Home, Hourglass, Landmark, Receipt, RefreshCw,
+  AlertTriangle, BadgeCheck, Banknote, CalendarClock, Gavel, Home, Hourglass, Landmark, Receipt, RefreshCw,
   Shield, Sparkles, Sun, Truck, CheckCircle2, ArrowRight
 } from "lucide-react";
 import { getTodayBrief } from "./api";
@@ -9,7 +9,7 @@ import type { TodayBrief, TodayItem, ViewKey } from "./types";
 const ICONS: Record<string, React.ElementType> = {
   gavel: Gavel, landmark: Landmark, receipt: Receipt,
   home: Home, shield: Shield, banknote: Banknote,
-  hourglass: Hourglass, truck: Truck, "badge-check": BadgeCheck
+  hourglass: Hourglass, truck: Truck, "badge-check": BadgeCheck, "calendar-clock": CalendarClock
 };
 
 const SEVERITY_ORDER: TodayItem["severity"][] = ["critical", "warning", "info"];

@@ -1,7 +1,7 @@
-import { ArrowLeft, Banknote, CalendarClock, FileText, FolderOpen, Loader2, MessageSquare, Users } from "lucide-react";
-import { useEffect, useState } from "react";
-import { getMatterFile } from "./api";
-import type { MatterFile as MatterFileData } from "./api";
+import { ArrowLeft, Banknote, CalendarClock, CheckCircle2, FileText, FolderOpen, Loader2, MessageSquare, Plus, Users } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { completeDiaryEntry, createDiaryEntry, getMatterFile } from "./api";
+import type { MatterDiaryEntry, MatterFile as MatterFileData } from "./api";
 
 const money = (cents: number) =>
   new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 2 }).format(cents / 100);
@@ -23,6 +23,13 @@ export function MatterFile({ matterUuid, onBack }: { matterUuid: string; onBack:
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
+
+  const reload = useCallback(() => {
+    setError("");
+    return getMatterFile(matterUuid)
+      .then(res => setData(res))
+      .catch(err => setError(err instanceof Error ? err.message : "Could not load this matter file."));
+  }, [matterUuid]);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,7 +95,7 @@ export function MatterFile({ matterUuid, onBack }: { matterUuid: string; onBack:
         {tab === "money" && <MoneyTab data={data} />}
         {tab === "documents" && <DocumentsTab data={data} />}
         {tab === "correspondence" && <CorrespondenceTab data={data} />}
-        {tab === "diary" && <DiaryTab data={data} />}
+        {tab === "diary" && <DiaryTab data={data} matterUuid={matterUuid} onChanged={reload} />}
       </div>
     </div>
   );
@@ -263,12 +270,82 @@ function CorrespondenceTab({ data }: { data: MatterFileData }) {
   );
 }
 
-function DiaryTab({ data }: { data: MatterFileData }) {
-  const { deadlines, courtDates } = data.diary;
-  if (!deadlines.length && !courtDates.length) return <Empty>Nothing diarised on this matter.</Empty>;
+const SOURCE_LABEL: Record<MatterDiaryEntry["source"], string> = {
+  manual: "", document: "from a document", ai: "AI-suggested", rule_engine: "from court rules"
+};
+
+function DiaryTab({ data, matterUuid, onChanged }: { data: MatterFileData; matterUuid: string; onChanged: () => void }) {
+  const { deadlines, courtDates, entries } = data.diary;
+  const [adding, setAdding] = useState(false);
+  const [desc, setDesc] = useState("");
+  const [due, setDue] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function add() {
+    if (!desc.trim() || !due) return;
+    setSaving(true);
+    try {
+      await createDiaryEntry(matterUuid, { description: desc.trim(), dueDate: due, source: "manual" });
+      setDesc(""); setDue(""); setAdding(false);
+      onChanged();
+    } catch { /* surfaced by the empty state staying put */ }
+    setSaving(false);
+  }
+
+  async function complete(id: string) {
+    try { await completeDiaryEntry(matterUuid, id); onChanged(); } catch { /* no-op */ }
+  }
+
+  const nothing = !deadlines.length && !courtDates.length && !entries.length;
+
   return (
     <>
-      {courtDates.length > 0 && <h4 style={{ margin: "0 0 8px" }}>Court dates</h4>}
+      <div className="panel-head" style={{ marginBottom: 10 }}>
+        <span style={{ fontSize: "0.86rem", color: "var(--muted)" }}>
+          {entries.length + deadlines.length + courtDates.length} diarised
+        </span>
+        <button className="ghost small" onClick={() => setAdding(v => !v)}>
+          <Plus size={13} /> {adding ? "Cancel" : "Add diary entry"}
+        </button>
+      </div>
+
+      {adding && (
+        <div className="inline-form-toggle" style={{ marginBottom: 12, display: "grid", gap: 8 }}>
+          <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="What needs doing?" />
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="date" value={due} onChange={e => setDue(e.target.value)} />
+            <button className="primary small" onClick={add} disabled={saving || !desc.trim() || !due}>
+              {saving ? "Saving…" : "Add to diary"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {nothing && <Empty>Nothing diarised on this matter.</Empty>}
+
+      {entries.length > 0 && <h4 style={{ margin: "0 0 8px" }}>Diary</h4>}
+      {entries.map(e => {
+        const days = daysFrom(e.dueDate);
+        return (
+          <div key={e.id} className={`deadline-row${!e.completed && days < 0 ? " overdue" : ""}${e.completed ? " completed" : ""}`}>
+            <div>
+              <strong style={{ fontSize: "0.86rem" }}>{e.description}</strong>
+              {SOURCE_LABEL[e.source] && (
+                <small style={{ display: "block", color: "var(--muted)" }}>{SOURCE_LABEL[e.source]}</small>
+              )}
+            </div>
+            <span style={{ fontSize: "0.82rem", fontWeight: 700 }}>
+              {e.completed ? "✓ Done" : days < 0 ? `${Math.abs(days)} days overdue` : `${days} days`}
+            </span>
+            <span style={{ fontSize: "0.82rem" }}>{e.dueDate}</span>
+            {!e.completed && (
+              <button className="ghost small" onClick={() => complete(e.id)}><CheckCircle2 size={13} /> Done</button>
+            )}
+          </div>
+        );
+      })}
+
+      {courtDates.length > 0 && <h4 style={{ margin: "18px 0 8px" }}>Court dates</h4>}
       {courtDates.map(c => (
         <div key={c.id} className="deadline-row">
           <div><strong style={{ fontSize: "0.86rem" }}>{c.purpose || "Hearing"}</strong>
@@ -278,7 +355,7 @@ function DiaryTab({ data }: { data: MatterFileData }) {
         </div>
       ))}
 
-      {deadlines.length > 0 && <h4 style={{ margin: "18px 0 8px" }}>Deadlines</h4>}
+      {deadlines.length > 0 && <h4 style={{ margin: "18px 0 8px" }}>Litigation deadlines</h4>}
       {deadlines.map(d => {
         const days = daysFrom(d.dueDate);
         return (
