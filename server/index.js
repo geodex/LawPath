@@ -3399,7 +3399,12 @@ const DEFAULT_CORPUS_SOURCES = [
 ];
 
 app.get("/api/research-db/corpus", authMiddleware, async (req, res, next) => {
-  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  // The corpus itself is platform data (legal_corpus_sources/_documents carry no
+  // tenant_id), so super admins may read it — mirrors /research-db/search, which
+  // already allows them. Only recentQueries is tenant-scoped; with a null
+  // tenantId that simply returns no rows.
+  const isSuperAdmin = req.user.role === "platform_super_admin";
+  if (!req.user.tenantId && !isSuperAdmin) return res.status(403).json({ error: "Tenant context required." });
   try {
     let sources = await pool.query("select * from legal_corpus_sources order by document_count desc limit 20");
     if (!sources.rowCount) {
