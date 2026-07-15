@@ -64,6 +64,7 @@ import { AccountingSync } from "./AccountingSync";
 import { LegalResearchDB } from "./LegalResearchDB";
 import { MatterFile } from "./MatterFile";
 import { ConflictCheck } from "./ConflictCheck";
+import { Approvals } from "./Approvals";
 import { ESignature } from "./ESignature";
 import { AgentNetwork } from "./AgentNetwork";
 import { PracticeAnalytics } from "./PracticeAnalytics";
@@ -86,6 +87,7 @@ const nav: NavItem[] = [
   { key: "drafting",  label: "Contracts", icon: FilePenLine },
   { key: "research", label: "Research", icon: Search },
   { key: "secretary", label: "Secretary", icon: Archive },
+  { key: "approvals", label: "Approvals", icon: BadgeCheck },
   { key: "billing", label: "Billing", icon: CircleDollarSign },
   { key: "conveyancing", label: "Conveyancing", icon: Home },
   { key: "litigation", label: "Litigation", icon: Scale },
@@ -118,7 +120,7 @@ const nav: NavItem[] = [
 type NavGroup = { key: string; label: string; items: ViewKey[] };
 
 const navGroups: NavGroup[] = [
-  { key: "workspace", label: "Workspace", items: ["drafting", "research", "secretary", "booking", "portal"] },
+  { key: "workspace", label: "Workspace", items: ["drafting", "research", "secretary", "approvals", "booking", "portal"] },
   { key: "clients", label: "Clients & Compliance", items: ["clients", "fica", "popia"] },
   { key: "financial", label: "Financial", items: ["time", "billing", "trust", "accounting"] },
   { key: "practice", label: "Practice Areas", items: ["conveyancing", "litigation", "conflicts"] },
@@ -133,6 +135,7 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   today: "general",
   overview: "general",
   "matter-file": "general",
+  approvals: "general",
   conflicts: "general",
   clients: "general",
   drafting: "drafting",
@@ -671,6 +674,7 @@ export function App() {
         {activeView === "overview" && <Overview matters={matters} tasks={tasks} invoices={invoices} research={research} activity={activity} setActiveView={setActiveView} onOpenMatter={openMatterFile} />}
         {activeView === "matter-file" && openMatterUuid && <MatterFile matterUuid={openMatterUuid} onBack={() => setActiveView("overview")} />}
         {activeView === "conflicts" && <ConflictCheck />}
+        {activeView === "approvals" && <Approvals log={log} showToast={showToast} />}
         {activeView === "drafting" && <Drafting contracts={contracts} setContracts={setContracts} log={log} tenantProfile={tenantProfile} />}
         {activeView === "research" && <ResearchDesk research={research} setResearch={setResearch} log={log} showToast={showToast} />}
         {activeView === "clients" && <Clients showToast={showToast} log={log} />}

@@ -11,6 +11,7 @@
 
 const { pool } = require("./db");
 const searchworks = require("./searchworks");
+const { createApprovalRequest, hasPendingFor } = require("./approvals");
 
 // Stages at/after lodgement — the only ones worth polling.
 const POLLABLE_STAGES = ["deeds_lodgement", "deeds_registration"];
@@ -131,6 +132,25 @@ async function pollMatter(m, { runByUserId = null } = {}) {
     [m.tenant_id, runByUserId, m.id, { from: previous, to: status, barcode: m.dots_barcode }]
   );
 
+  // The drafted client update goes to the firm's approval queue, marked as AI
+  // origin, so an attorney signs it off in the same place as every other
+  // outgoing item. Guarded so a daily re-poll of a matter that keeps moving does
+  // not stack duplicate pending requests for the same file.
+  if (!(await hasPendingFor({ tenantId: m.tenant_id, entityType: "conveyancing_matter", entityId: m.id, kind: "client_message" }))) {
+    await createApprovalRequest({
+      tenantId: m.tenant_id,
+      matterId: m.matter_id || null,
+      kind: "client_message",
+      title: `Client update — Deeds Office status now "${status}"`,
+      summary: `${m.seller_name} → ${m.buyer_name} · ${m.matter_ref}`,
+      payload: { channel: "whatsapp", body: draft, from: previous, to: status, matterRef: m.matter_ref },
+      entityType: "conveyancing_matter",
+      entityId: m.id,
+      origin: "ai",
+      requestedBy: runByUserId
+    });
+  }
+
   return { polled: true, changed: true, previous, status, draft };
 }
 
@@ -140,7 +160,7 @@ async function runDotsPolling() {
   let polled = 0, changed = 0, errors = 0;
   try {
     const matters = await pool.query(
-      `select id, tenant_id, matter_ref, seller_name, buyer_name,
+      `select id, tenant_id, matter_id, matter_ref, seller_name, buyer_name,
               dots_barcode, dots_deeds_office, dots_last_status
        from conveyancing_matters
        where dots_barcode is not null and dots_barcode <> ''

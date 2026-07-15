@@ -13,6 +13,7 @@ const verifynow  = require("./verifynow");
 const lightstone  = require("./lightstone");
 const searchworks = require("./searchworks");
 const { pollMatter: pollDotsMatter } = require("./dots-poller");
+const { createApprovalRequest, APPROVER_ROLES } = require("./approvals");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -2111,7 +2112,7 @@ app.post("/api/conveyancing/matters/:id/dots/poll", authMiddleware, async (req, 
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
     const row = await pool.query(
-      `select id, tenant_id, matter_ref, seller_name, buyer_name,
+      `select id, tenant_id, matter_id, matter_ref, seller_name, buyer_name,
               dots_barcode, dots_deeds_office, dots_last_status
        from conveyancing_matters where id = $1 and tenant_id = $2`,
       [req.params.id, req.user.tenantId]
@@ -2432,6 +2433,117 @@ app.get("/api/matters", authMiddleware, async (req, res, next) => {
       [req.user.tenantId]
     );
     res.json({ matters: result.rows.map(matterFromRow) });
+  } catch (error) { next(error); }
+});
+
+// ─── APPROVAL QUEUE ──────────────────────────────────────────────────────────
+// A secretary drafts, an attorney approves. AI drafts land in the same queue.
+// Only admitted attorneys (and the firm's admin) may approve: a candidate
+// attorney works under supervision, and a secretary/bookkeeper signing off would
+// defeat the point of the queue.
+const canApprove = (req) => APPROVER_ROLES.includes(req.user.role);
+
+function approvalFromRow(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id || null,
+    kind: row.kind,
+    title: row.title,
+    summary: row.summary || "",
+    payload: row.payload || {},
+    entityType: row.entity_type || "",
+    entityId: row.entity_id || null,
+    amountCents: row.amount_cents == null ? null : Number(row.amount_cents),
+    status: row.status,
+    origin: row.origin,
+    requestedBy: row.requested_by || null,
+    requestedByName: row.requested_by_name || "",
+    requestedAt: row.requested_at ? new Date(row.requested_at).toISOString() : "",
+    decidedBy: row.decided_by || null,
+    decidedByName: row.decided_by_name || "",
+    decidedAt: row.decided_at ? new Date(row.decided_at).toISOString() : "",
+    decisionNote: row.decision_note || "",
+    actionedAt: row.actioned_at ? new Date(row.actioned_at).toISOString() : ""
+  };
+}
+
+app.get("/api/approvals", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const status = String(req.query.status || "pending");
+  const valid = ["pending", "approved", "rejected", "withdrawn", "actioned", "all"];
+  if (!valid.includes(status)) return res.status(400).json({ error: "Invalid status filter." });
+  try {
+    const params = [req.user.tenantId];
+    let where = "a.tenant_id = $1";
+    if (status !== "all") { params.push(status); where += ` and a.status = $${params.length}`; }
+    const r = await pool.query(
+      `select a.*, ru.name as requested_by_name, du.name as decided_by_name
+       from approval_requests a
+       left join users ru on ru.id = a.requested_by
+       left join users du on du.id = a.decided_by
+       where ${where}
+       order by a.requested_at desc limit 200`, params);
+    res.json({ approvals: r.rows.map(approvalFromRow), canApprove: canApprove(req) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/approvals", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { matterId, kind, title, summary, payload, entityType, entityId, amountCents } = req.body;
+  const kinds = ["invoice", "document", "trust_payment", "client_message", "time_entry", "other"];
+  if (!kinds.includes(kind)) return res.status(400).json({ error: `kind must be one of: ${kinds.join(", ")}` });
+  if (!title) return res.status(400).json({ error: "Title is required." });
+  try {
+    const row = await createApprovalRequest({
+      tenantId: req.user.tenantId, matterId: matterId || null, kind, title,
+      summary: summary || "", payload: payload || {},
+      entityType: entityType || null, entityId: entityId || null,
+      amountCents: amountCents == null ? null : Number(amountCents),
+      origin: "human", requestedBy: req.user.sub
+    });
+    if (!row) return res.status(500).json({ error: "Could not queue the request." });
+    res.status(201).json({ approval: approvalFromRow(row) });
+  } catch (error) { next(error); }
+});
+
+// Approve / reject. Only an attorney or the firm admin may decide.
+app.post("/api/approvals/:id/decide", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  if (!canApprove(req)) {
+    return res.status(403).json({ error: "Only an attorney or firm admin may approve or reject. A candidate attorney works under supervision." });
+  }
+  const { decision, note } = req.body;
+  if (!["approved", "rejected"].includes(decision)) return res.status(400).json({ error: "decision must be 'approved' or 'rejected'." });
+  try {
+    const r = await pool.query(
+      `update approval_requests
+          set status = $3, decided_by = $4, decided_at = now(), decision_note = $5, updated_at = now()
+        where id = $1 and tenant_id = $2 and status = 'pending'
+        returning *`,
+      [req.params.id, req.user.tenantId, decision, req.user.sub, note || null]
+    );
+    if (!r.rowCount) return res.status(409).json({ error: "Request not found, or it has already been decided." });
+    await pool.query(
+      `insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details)
+       values ($1,$2,'approval_request',$3,$4,$5)`,
+      [req.user.tenantId, req.user.sub, r.rows[0].id, decision,
+       { kind: r.rows[0].kind, title: r.rows[0].title, origin: r.rows[0].origin, selfApproved: r.rows[0].requested_by === req.user.sub }]
+    ).catch(() => {});
+    res.json({ approval: approvalFromRow(r.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// Withdraw a request you raised (before it is decided).
+app.post("/api/approvals/:id/withdraw", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query(
+      `update approval_requests set status = 'withdrawn', updated_at = now()
+        where id = $1 and tenant_id = $2 and status = 'pending' and requested_by = $3 returning *`,
+      [req.params.id, req.user.tenantId, req.user.sub]
+    );
+    if (!r.rowCount) return res.status(409).json({ error: "Only your own pending request can be withdrawn." });
+    res.json({ approval: approvalFromRow(r.rows[0]) });
   } catch (error) { next(error); }
 });
 
@@ -2794,7 +2906,7 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const tid = req.user.tenantId;
   try {
-    const [litDeadlines, prescription, courtDates, clearances, targetReg, ficaExpiry, agedWip, dotsChanges] = await Promise.all([
+    const [litDeadlines, prescription, courtDates, clearances, targetReg, ficaExpiry, agedWip, dotsChanges, approvals] = await Promise.all([
       // Incomplete litigation deadlines: overdue or due within 45 days
       pool.query(
         `select d.id, d.description, d.rule_reference, d.due_date, d.priority,
@@ -2884,7 +2996,14 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
          where tenant_id = $1
            and dots_status_changed_at is not null
            and (dots_ack_at is null or dots_status_changed_at > dots_ack_at)
-         order by dots_status_changed_at desc limit 20`, [tid]).catch(() => ({ rows: [] }))
+         order by dots_status_changed_at desc limit 20`, [tid]).catch(() => ({ rows: [] })),
+      // Items waiting for an attorney's sign-off
+      pool.query(
+        `select id, kind, title, summary, origin, amount_cents, requested_at,
+                (current_date - requested_at::date) as days_waiting
+         from approval_requests
+         where tenant_id = $1 and status = 'pending'
+         order by requested_at asc limit 20`, [tid]).catch(() => ({ rows: [] }))
     ]);
 
     const items = [];
@@ -2981,6 +3100,20 @@ app.get("/api/today", authMiddleware, async (req, res, next) => {
         detail: `${d.seller_name} → ${d.buyer_name} · ${d.matter_ref}. DOTS status moved to "${status}". A client update is drafted for your review.`,
         dueDate: d.dots_status_changed_at, daysUntil: null,
         dueLabel: daysSince == null ? "just now" : daysSince <= 0 ? "today" : `${daysSince}d ago`
+      });
+    }
+
+    for (const a of approvals.rows) {
+      const waiting = a.days_waiting == null ? 0 : Number(a.days_waiting);
+      items.push({
+        id: `appr-${a.id}`, category: "approval",
+        // Something sitting unsigned for days is blocking a colleague or a client.
+        severity: waiting >= 3 ? "warning" : "info",
+        icon: "badge-check", view: "approvals",
+        title: `${a.origin === "ai" ? "AI draft" : "Awaiting sign-off"} — ${a.title}`,
+        detail: `${a.summary || String(a.kind).replace(/_/g, " ")}${a.amount_cents != null ? ` · R ${(Number(a.amount_cents) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}` : ""}. Nothing goes out until an attorney approves it.`,
+        dueDate: a.requested_at, daysUntil: null,
+        dueLabel: waiting <= 0 ? "today" : `waiting ${waiting}d`
       });
     }
 

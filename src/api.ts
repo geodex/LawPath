@@ -870,6 +870,42 @@ export async function getMatters() {
   return request<{ matters: Matter[] }>("/api/matters");
 }
 
+export type ApprovalRequest = {
+  id: string;
+  matterId: string | null;
+  kind: "invoice" | "document" | "trust_payment" | "client_message" | "time_entry" | "other";
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  entityType: string;
+  entityId: string | null;
+  amountCents: number | null;
+  status: "pending" | "approved" | "rejected" | "withdrawn" | "actioned";
+  origin: "human" | "ai";
+  requestedBy: string | null;
+  requestedByName: string;
+  requestedAt: string;
+  decidedBy: string | null;
+  decidedByName: string;
+  decidedAt: string;
+  decisionNote: string;
+  actionedAt: string;
+};
+
+export async function getApprovals(status = "pending") {
+  return request<{ approvals: ApprovalRequest[]; canApprove: boolean }>(`/api/approvals?status=${encodeURIComponent(status)}`);
+}
+
+export async function decideApproval(id: string, decision: "approved" | "rejected", note?: string) {
+  return request<{ approval: ApprovalRequest }>(`/api/approvals/${id}/decide`, {
+    method: "POST", body: JSON.stringify({ decision, note })
+  });
+}
+
+export async function withdrawApproval(id: string) {
+  return request<{ approval: ApprovalRequest }>(`/api/approvals/${id}/withdraw`, { method: "POST", body: "{}" });
+}
+
 export type ConflictHit = {
   searchedName: string;
   searchedSide: "client" | "opposing";

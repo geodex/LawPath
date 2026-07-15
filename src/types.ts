@@ -644,7 +644,7 @@ export type TodayBrief = {
 };
 
 export type ViewKey =
-  | "today" | "overview" | "matter-file" | "clients" | "drafting" | "research" | "secretary" | "billing"
+  | "today" | "overview" | "matter-file" | "approvals" | "clients" | "drafting" | "research" | "secretary" | "billing"
   | "booking" | "portal" | "training-guide" | "settings"
   | "trust" | "fica" | "time" | "popia"
   | "conveyancing" | "litigation" | "conflicts" | "whatsapp" | "cipc" | "documents" | "accounting"
