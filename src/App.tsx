@@ -12,6 +12,7 @@ import {
   Clock,
   Clock3,
   FilePenLine,
+  FileText,
   Home,
   KeyRound,
   LibraryBig,
@@ -47,7 +48,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, forgotPassword, getAccountingData, getActivity, getAgentNetwork, getAnalytics, getAppointments, getBootstrapSettings, getContracts, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getMatters, getPopiaRecords, getSignatureRequests, getTasks, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
+import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, draftFromConversation, forgotPassword, getAccountingData, getActivity, getAgentNetwork, getAnalytics, getAppointments, getBootstrapSettings, getContracts, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getMatters, getPopiaRecords, getSignatureRequests, getTasks, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 // Seed data from ./data is intentionally not imported here. Each tenant
 // starts with empty workspaces and populates real data via the API.
 import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AiFeature, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
@@ -600,6 +601,34 @@ export function App() {
     }
   }
 
+  // One step from research to a drafted opinion/letter, routed through the
+  // approval queue — nothing AI-drafted leaves without attorney sign-off.
+  async function draftFromChat(docType: "opinion" | "letter") {
+    if (!aiConversationId || aiBusy) return;
+    setAiBusy(true);
+    try {
+      const response = await draftFromConversation({ conversationId: aiConversationId, docType });
+      const n = response.draft.citations.length;
+      const bad = response.draft.unverifiedCount;
+      setAiMessages((items) => [...items, {
+        id: uid("AI"), role: "assistant",
+        content: `Draft ${docType} queued for attorney approval — ${n} authorit${n === 1 ? "y" : "ies"} cited, ${bad} unverified. Review it in the Approvals view.`
+      }]);
+      log(`Draft ${docType} queued for approval: ${response.approval.title}`);
+      if (bad > 0) {
+        showToast("error", "Draft has unverified citations",
+          `${bad} citation${bad === 1 ? "" : "s"} in the draft could not be verified. The schedule of authorities marks ${bad === 1 ? "it" : "them"} — check on SAFLII before approving.`);
+      } else {
+        showToast("success", `Draft ${docType} queued`, "All citations verified. An attorney must approve it before it goes anywhere.");
+      }
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "The draft could not be created.";
+      showToast("error", "Draft failed", messageText);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
   if (!authUser) {
     return (
       <>
@@ -882,6 +911,8 @@ export function App() {
         busy={aiBusy}
         contextSummary={aiContextSummary}
         askAi={askAi}
+        canDraft={!!aiConversationId}
+        onDraft={draftFromChat}
       />
       {authUser.tenantId && !tenantProfile.onboardingCompleted && (
         <OnboardingFlow
@@ -1160,7 +1191,9 @@ function AIAssistantPanel({
   messages,
   busy,
   contextSummary,
-  askAi
+  askAi,
+  canDraft,
+  onDraft
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -1169,6 +1202,8 @@ function AIAssistantPanel({
   busy: boolean;
   contextSummary: string;
   askAi: (message: string, agentKey?: AiAgentKey) => Promise<void>;
+  canDraft: boolean;
+  onDraft: (docType: "opinion" | "letter") => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const quickPrompts: Record<AiAgentKey, string[]> = {
@@ -1221,6 +1256,16 @@ function AIAssistantPanel({
             ))}
             {busy && <article className="ai-message assistant"><span>LawPath AI</span><p>Thinking with tenant context...</p></article>}
           </div>
+          {canDraft && (
+            <div className="ai-draft-actions">
+              <button className="small" disabled={busy} onClick={() => onDraft("opinion")} title="Draft a formal opinion from this conversation. It goes to the approval queue — an attorney must sign it off.">
+                <FileText size={14} /> Draft opinion
+              </button>
+              <button className="small" disabled={busy} onClick={() => onDraft("letter")} title="Draft a letter from this conversation. It goes to the approval queue — an attorney must sign it off.">
+                <Mail size={14} /> Draft letter
+              </button>
+            </div>
+          )}
           <form className="ai-input" onSubmit={submit}>
             <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={`Ask the ${aiAgentLabels[activeAgent].toLowerCase()}...`} />
             <button className="primary" type="submit" disabled={busy || !draft.trim()}><Send size={18} /> Send</button>

@@ -204,6 +204,22 @@ export async function sendAiChat(input: { message: string; agentKey: AiAgentKey;
   });
 }
 
+/**
+ * Turn a research conversation into a drafted opinion or letter, in one step.
+ * The draft cites only corpus-verified authorities, carries a SCHEDULE OF
+ * AUTHORITIES with per-citation verification, and lands in the approval queue
+ * (origin 'ai') — it goes nowhere until an attorney signs it off.
+ */
+export async function draftFromConversation(input: { conversationId: string; docType: "opinion" | "letter"; matterId?: string | null }) {
+  return request<{
+    approval: { id: string; title: string; status: string };
+    draft: { docType: "opinion" | "letter"; content: string; citations: VerifiedCitation[]; unverifiedCount: number };
+  }>(`/api/ai/conversations/${input.conversationId}/draft`, {
+    method: "POST",
+    body: JSON.stringify({ docType: input.docType, matterId: input.matterId || null })
+  });
+}
+
 // ─── TRUST ACCOUNT ───────────────────────────────────────────────────────────
 
 export async function getTrustLedger() {

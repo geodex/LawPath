@@ -1514,6 +1514,22 @@ h3 {
   border-bottom: 1px solid var(--line);
 }
 
+/* Research -> drafted document, one step. Sits between the transcript and the
+   input so it reads as "done researching? draft it." */
+.ai-draft-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.ai-draft-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .ai-messages {
   display: grid;
   gap: 10px;

@@ -1352,6 +1352,211 @@ app.post("/api/ai/chat", authMiddleware, async (req, res, next) => {
   }
 });
 
+// ─── DRAFT OPINION / LETTER FROM A RESEARCH CONVERSATION ────────────────────
+//
+// The attorney's stated workflow: research → draft opinion → go read the actual
+// cases on SAFLII/LexisNexis → edit. This turns a research conversation into a
+// drafted opinion or letter in ONE step, without re-prompting — his #2 ask.
+//
+// A drafted opinion carrying an unverified citation is MORE dangerous than a
+// chat message, because it looks finished. So verification is carried through
+// harder here than in chat:
+//   * the draft may cite ONLY from sources verified against the corpus —
+//     citations that appeared in the conversation but do not verify are
+//     excluded from the SOURCES block entirely;
+//   * the finished draft is re-verified citation by citation, and a SCHEDULE OF
+//     AUTHORITIES is appended to the document itself — each authority marked
+//     verified (with its link) or NOT VERIFIED, so the warning travels with the
+//     text into whatever editor it is pasted into;
+//   * the draft lands in the approval queue (kind 'document', origin 'ai') and
+//     goes nowhere until an admitted attorney signs it off.
+//
+// Spends NO Laws.Africa calls: the research conversation already retrieved live
+// and cached everything it surfaced, so drafting grounds from the local corpus.
+
+const DRAFT_DOC_TYPES = {
+  opinion: {
+    label: "Opinion",
+    structure: [
+      "MEMORANDUM OF OPINION",
+      "Structure the opinion with these numbered sections:",
+      "1. INTRODUCTION AND BRIEF — what we were asked to advise on.",
+      "2. FACTS — the material facts, drawn only from the conversation.",
+      "3. ISSUES — the legal questions, stated crisply.",
+      "4. THE LAW — the applicable principles. Cite ONLY the authorities in SOURCES, by their exact citation.",
+      "5. APPLICATION TO THE FACTS.",
+      "6. CONCLUSION AND ADVICE — direct, practical, with any qualifications stated plainly.",
+      "End with the line: 'Prepared with AI assistance. Reviewed and settled by: ____________________'"
+    ]
+  },
+  letter: {
+    label: "Letter",
+    structure: [
+      "A formal letter on the firm's behalf.",
+      "Open with '[FIRM LETTERHEAD]', a date placeholder, the recipient block '[RECIPIENT]', and a RE: line.",
+      "Plain, courteous, firm language. A lay client must be able to follow it.",
+      "Cite ONLY the authorities in SOURCES, by their exact citation, and only where citing helps the recipient.",
+      "Close with 'Yours faithfully,' and a signature placeholder.",
+      "End with the line: 'Prepared with AI assistance. Reviewed and settled by: ____________________'"
+    ]
+  }
+};
+
+// The verification annexure appended to every draft. Plain text on purpose —
+// it must survive being pasted into Word, an email, or a PDF unchanged.
+function buildAuthoritiesSchedule(citations) {
+  if (!citations.length) {
+    return [
+      "",
+      "──────────────────────────────────────────────",
+      "SCHEDULE OF AUTHORITIES",
+      "This draft cites no case law. If authority is needed, run a corpus search and re-draft.",
+      ""
+    ].join("\n");
+  }
+  const lines = [
+    "",
+    "──────────────────────────────────────────────",
+    "SCHEDULE OF AUTHORITIES",
+    "Each citation in this draft, verified against the firm's corpus:",
+    ""
+  ];
+  for (const c of citations) {
+    if (c.verified) {
+      lines.push(`  [verified] ${c.citation} — ${c.title}${c.court ? ` — ${c.court}` : ""}${c.year ? ` (${c.year})` : ""}`);
+      if (c.sourceUrl) lines.push(`             ${c.sourceUrl}`);
+    } else {
+      lines.push(`  [NOT VERIFIED] ${c.citation} — not found in the corpus. Do NOT rely on this authority until you have read it on SAFLII.`);
+    }
+  }
+  lines.push("", "Every authority must be read in the original before this document is relied on or sent.", "");
+  return lines.join("\n");
+}
+
+app.post("/api/ai/conversations/:id/draft", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const docType = String(req.body.docType || "opinion");
+  const spec = DRAFT_DOC_TYPES[docType];
+  if (!spec) return res.status(400).json({ error: `docType must be one of: ${Object.keys(DRAFT_DOC_TYPES).join(", ")}` });
+  const matterId = req.body.matterId || null;
+
+  try {
+    const conv = await pool.query(
+      "select * from ai_conversations where id = $1 and tenant_id = $2",
+      [req.params.id, req.user.tenantId]
+    );
+    if (!conv.rowCount) return res.status(404).json({ error: "Conversation not found." });
+    const conversation = conv.rows[0];
+
+    const msgs = (await pool.query(
+      "select role, content from ai_messages where conversation_id = $1 and role in ('user','assistant') order by created_at",
+      [conversation.id]
+    )).rows;
+    if (!msgs.some(m => m.role === "assistant")) {
+      return res.status(400).json({ error: "Nothing to draft from yet — ask the research assistant at least one question first." });
+    }
+
+    // The matter must be the firm's own before the draft files against it.
+    let matter = null;
+    if (matterId) {
+      const m = await pool.query("select * from matters where id = $1 and tenant_id = $2", [matterId, req.user.tenantId]);
+      if (!m.rowCount) return res.status(404).json({ error: "Matter not found." });
+      matter = m.rows[0];
+    }
+
+    // ── Assemble the ONLY authorities the draft may cite ────────────────────
+    // 1. Citations that appeared anywhere in the conversation, re-verified now.
+    //    A citation that does not verify is EXCLUDED — the draft must not
+    //    inherit chat's unverified mentions.
+    const mentioned = grounding.extractCitations(msgs.map(m => m.content).join("\n"));
+    const verdicts = mentioned.length ? await grounding.verifyCitations(mentioned) : [];
+    const verifiedCitations = verdicts.filter(v => v.verified).map(v => v.citation);
+    let sources = verifiedCitations.length ? (await pool.query(
+      `select id, frbr_uri, title, citation, court, year, decision_date, summary, full_text_snippet, source_url
+         from legal_corpus_documents
+        where regexp_replace(citation, '\\s+', ' ', 'g') ilike any($1::text[])`,
+      [verifiedCitations]
+    )).rows : [];
+    // 2. Local corpus retrieval on the research question (the user's messages).
+    //    Local only — the conversation's live calls already cached what it
+    //    surfaced, so drafting costs no API budget.
+    const question = msgs.filter(m => m.role === "user").map(m => m.content).join("\n").slice(0, 2000);
+    const seen = new Set(sources.map(s => s.citation));
+    for (const d of await grounding.retrieveCorpusContext({ query: question, limit: 6 })) {
+      if (d.citation && seen.has(d.citation)) continue;
+      seen.add(d.citation);
+      sources.push(d);
+    }
+    sources = sources.slice(0, 10);
+
+    const { provider, apiKey, model } = await getAiForFeature("drafting");
+    if (!apiKey) return res.status(503).json({ error: "No AI provider is configured. Add an API key under Settings → API keys." });
+
+    const systemPrompt = [
+      `You are drafting a formal legal ${spec.label.toLowerCase()} for a South African law firm, from the research conversation supplied.`,
+      "South African law applies. Use SA terminology and SA court names.",
+      ...spec.structure,
+      "",
+      grounding.groundingInstruction(sources.length > 0),
+      sources.length ? grounding.formatSources(sources) : ""
+    ].join("\n");
+
+    const transcript = msgs
+      .map(m => `${m.role === "user" ? "ATTORNEY" : "RESEARCH ASSISTANT"}: ${m.content}`)
+      .join("\n\n").slice(0, 24000);
+
+    const userPrompt = [
+      matter ? `This ${spec.label.toLowerCase()} concerns matter ${matter.matter_number} — ${matter.title} (client: ${matter.client_name || "unknown"}).` : "",
+      "Draft from this research conversation. Do not invent facts that are not in it; where a material fact is missing, mark it '[TO CONFIRM: ...]'.",
+      "",
+      "─── RESEARCH CONVERSATION ───",
+      transcript
+    ].filter(Boolean).join("\n");
+
+    const drafted = await callAiProviderLogged(provider, apiKey, model, systemPrompt, userPrompt, {
+      tenantId: req.user.tenantId, userId: req.user.sub || null, feature: "drafting"
+    });
+    if (!drafted || !drafted.trim()) return res.status(502).json({ error: "The AI provider returned an empty draft. Try again." });
+
+    // ── Verify the finished draft, and make the verdict part of the document ─
+    const citations = await grounding.verifyCitations(grounding.extractCitations(drafted));
+    const unverifiedCount = citations.filter(c => !c.verified).length;
+    const content = drafted.trim() + "\n" + buildAuthoritiesSchedule(citations);
+
+    const approval = await createApprovalRequest({
+      tenantId: req.user.tenantId,
+      matterId,
+      kind: "document",
+      title: `Draft ${spec.label.toLowerCase()}: ${conversation.title}`.slice(0, 300),
+      summary: [
+        `AI-drafted ${spec.label.toLowerCase()} from research conversation "${conversation.title}".`,
+        `${citations.length} authorit${citations.length === 1 ? "y" : "ies"} cited, ${unverifiedCount} unverified.`,
+        unverifiedCount > 0 ? "CONTAINS UNVERIFIED CITATIONS — do not approve before checking them on SAFLII." : "All citations verified against the corpus."
+      ].join(" "),
+      payload: { docType, content, citations, unverifiedCount, conversationId: conversation.id, provider, model },
+      entityType: "ai_conversation",
+      entityId: conversation.id,
+      origin: "ai",
+      requestedBy: req.user.sub
+    });
+    if (!approval) return res.status(500).json({ error: "The draft was produced but could not be queued for approval. Try again." });
+
+    // Leave a trace in the conversation so research history shows the handoff.
+    await pool.query(
+      `insert into ai_messages (conversation_id, tenant_id, role, content, model)
+       values ($1, $2, 'assistant', $3, $4)`,
+      [conversation.id, req.user.tenantId,
+       `Draft ${spec.label.toLowerCase()} queued for attorney approval (${citations.length} authorit${citations.length === 1 ? "y" : "ies"}, ${unverifiedCount} unverified). Find it in the Approvals view.`,
+       "draft-pipeline"]
+    ).catch(() => {});
+
+    res.status(201).json({
+      approval: approvalFromRow(approval),
+      draft: { docType, content, citations, unverifiedCount }
+    });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/email/test", authMiddleware, async (req, res, next) => {
   const { recipientEmail, tenantFromName, tenantFromEmail, replyTo } = req.body;
 
