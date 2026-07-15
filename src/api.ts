@@ -932,6 +932,24 @@ export async function checkConflicts(input: { clientName?: string; opposingParti
   return request<ConflictResult>("/api/conflicts/check", { method: "POST", body: JSON.stringify(input) });
 }
 
+export type MatterSuggestion = {
+  matterId: string;
+  ref: string;
+  label: string;
+  matchedParties: string[];
+  score: number;
+};
+
+export async function getDocumentMatterSuggestions(documentId: string) {
+  return request<{ suggestions: MatterSuggestion[] }>(`/api/documents/${documentId}/matter-suggestions`);
+}
+
+export async function fileDocumentToMatter(documentId: string, matterId: string | null) {
+  return request<{ analysis: DocumentAnalysis }>(`/api/documents/${documentId}/matter`, {
+    method: "PUT", body: JSON.stringify({ matterId })
+  });
+}
+
 export type MatterDiaryEntry = {
   id: string;
   matterId: string;

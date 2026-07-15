@@ -597,6 +597,12 @@ export type DocumentAnalysis = {
   saLawFlags: string[];
   summary: string;
   analysedAt: string;
+  /** Matter spine link. "" / null when the document is not yet filed. */
+  matterId: string | null;
+  matterRef: string;
+  filedAt: string;
+  /** How it came to be filed — 'auto' is an inference a human should sanity-check. */
+  filingSource: "" | "upload" | "auto" | "manual";
 };
 
 // ─── TIER 2: ACCOUNTING ───────────────────────────────────────────────────────

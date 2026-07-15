@@ -3560,8 +3560,112 @@ app.get("/api/cipc/search", authMiddleware, async (req, res, next) => {
 // ─── DOCUMENT INTELLIGENCE ───────────────────────────────────────────────────
 
 function docAnalysisFromRow(row) {
-  return { id: row.id, fileName: row.file_name, documentType: row.document_type || "", analysisStatus: row.analysis_status, parties: row.parties || [], keyDates: row.key_dates || [], obligations: row.obligations || [], riskFlags: row.risk_flags || [], saLawFlags: row.sa_law_flags || [], summary: row.summary || "", analysedAt: row.analysed_at ? new Date(row.analysed_at).toISOString() : "" };
+  return { id: row.id, fileName: row.file_name, documentType: row.document_type || "", analysisStatus: row.analysis_status, parties: row.parties || [], keyDates: row.key_dates || [], obligations: row.obligations || [], riskFlags: row.risk_flags || [], saLawFlags: row.sa_law_flags || [], summary: row.summary || "", analysedAt: row.analysed_at ? new Date(row.analysed_at).toISOString() : "",
+    matterId: row.matter_id || null, matterRef: row.matter_ref || "",
+    filedAt: row.filed_at ? new Date(row.filed_at).toISOString() : "",
+    filingSource: row.filing_source || "" };
 }
+
+// ─── DOCUMENT AUTO-FILING ────────────────────────────────────────────────────
+// Doc Intelligence extracts the parties; the spine knows which matter has those
+// parties. Match the two and the document files itself.
+//
+// Filing a privileged document to the WRONG client's file is a confidentiality
+// problem, not a tidiness one — so this only ever auto-files on an unambiguous
+// single match. Anything else is offered as a suggestion for a human to pick.
+async function suggestMattersForDocument({ tenantId, parties = [] }) {
+  const names = (parties || []).map(p => String(p || "").trim()).filter(p => p.length >= 3);
+  if (!names.length) return [];
+  const patterns = names.map(n => `%${n}%`);
+  const q = (sql, params) => pool.query(sql, params).catch(() => ({ rows: [] }));
+
+  const [mat, lit, conv] = await Promise.all([
+    q(`select id, matter_number, title, client_name from matters
+       where tenant_id = $1 and client_name ilike any($2::text[]) limit 50`, [tenantId, patterns]),
+    q(`select matter_id, matter_ref, plaintiff, defendant from litigation_matters
+       where tenant_id = $1 and matter_id is not null
+         and (plaintiff ilike any($2::text[]) or defendant ilike any($2::text[])) limit 50`, [tenantId, patterns]),
+    q(`select matter_id, matter_ref, seller_name, buyer_name from conveyancing_matters
+       where tenant_id = $1 and matter_id is not null
+         and (seller_name ilike any($2::text[]) or buyer_name ilike any($2::text[])) limit 50`, [tenantId, patterns])
+  ]);
+
+  // Score by how many distinct extracted parties a matter accounts for: a
+  // document naming both sides is far likelier to belong to that file than one
+  // sharing a single common surname.
+  const byMatter = new Map();
+  const add = (matterId, ref, label, partyName) => {
+    if (!matterId) return;
+    const e = byMatter.get(matterId) || { matterId, ref, label, matched: new Set() };
+    e.matched.add(partyName);
+    byMatter.set(matterId, e);
+  };
+  for (const n of names) {
+    for (const r of mat.rows) if (nameHit(r.client_name, n)) add(r.id, r.matter_number, r.title || r.client_name, n);
+    for (const r of lit.rows) if (nameHit(r.plaintiff, n) || nameHit(r.defendant, n)) add(r.matter_id, r.matter_ref, `${r.plaintiff} v ${r.defendant}`, n);
+    for (const r of conv.rows) if (nameHit(r.seller_name, n) || nameHit(r.buyer_name, n)) add(r.matter_id, r.matter_ref, `${r.seller_name} → ${r.buyer_name}`, n);
+  }
+
+  return [...byMatter.values()]
+    .map(e => ({ matterId: e.matterId, ref: e.ref, label: e.label, matchedParties: [...e.matched], score: e.matched.size }))
+    .sort((a, b) => b.score - a.score);
+}
+
+// Called after an analysis completes. Only files on a single clear winner.
+async function autoFileDocument({ analysisId, tenantId, parties }) {
+  try {
+    const candidates = await suggestMattersForDocument({ tenantId, parties });
+    if (!candidates.length) return null;
+    // A tie means we cannot tell which file it belongs to — leave it for a human.
+    const top = candidates[0];
+    const tied = candidates.filter(c => c.score === top.score).length > 1;
+    if (tied) return null;
+    await pool.query(
+      `update document_analyses
+          set matter_id = $2, filed_at = now(), filing_source = 'auto'
+        where id = $1 and matter_id is null`,
+      [analysisId, top.matterId]
+    );
+    return top;
+  } catch (err) {
+    console.warn("[doc-filing] auto-file failed:", err.message);
+    return null;
+  }
+}
+
+// Candidate matters for a document an attorney is filing by hand.
+app.get("/api/documents/:id/matter-suggestions", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query("select parties from document_analyses where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]);
+    if (!r.rowCount) return res.status(404).json({ error: "Document not found." });
+    const suggestions = await suggestMattersForDocument({ tenantId: req.user.tenantId, parties: r.rows[0].parties || [] });
+    res.json({ suggestions });
+  } catch (error) { next(error); }
+});
+
+// File (or unfile) a document against a matter.
+app.put("/api/documents/:id/matter", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { matterId } = req.body;
+  try {
+    if (matterId) {
+      const owns = await pool.query("select 1 from matters where id = $1 and tenant_id = $2", [matterId, req.user.tenantId]);
+      if (!owns.rowCount) return res.status(404).json({ error: "Matter not found." });
+    }
+    const r = await pool.query(
+      `update document_analyses
+          set matter_id = $3,
+              filed_at = case when $3::uuid is null then null else now() end,
+              filed_by = case when $3::uuid is null then null else $4::uuid end,
+              filing_source = case when $3::uuid is null then null else 'manual' end
+        where id = $1 and tenant_id = $2 returning *`,
+      [req.params.id, req.user.tenantId, matterId || null, req.user.sub]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Document not found." });
+    res.json({ analysis: docAnalysisFromRow(r.rows[0]) });
+  } catch (error) { next(error); }
+});
 
 app.get("/api/documents/analyses", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
@@ -3648,9 +3752,18 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
   const { fileName, fileDataUrl, matterRef } = req.body;
   if (!fileName) return res.status(400).json({ error: "File name is required." });
   try {
+    // The uploader naming a matter is the strongest filing signal there is —
+    // stronger than any party matching — so honour it up front. (This field was
+    // accepted and silently discarded before.) The typed ref is kept either way,
+    // so an unresolved one is not lost.
+    const uploadMatterId = await resolveSpineMatterId(req.user.tenantId, matterRef);
     const result = await pool.query(
-      "insert into document_analyses (tenant_id, file_name, analysis_status, created_by) values ($1,$2,'Queued',$3) returning *",
-      [req.user.tenantId, fileName, req.user.sub]
+      `insert into document_analyses (tenant_id, file_name, analysis_status, created_by, matter_ref, matter_id, filed_at, filing_source)
+       values ($1,$2,'Queued',$3,$4,$5,
+               case when $5::uuid is null then null else now() end,
+               case when $5::uuid is null then null else 'upload' end)
+       returning *`,
+      [req.user.tenantId, fileName, req.user.sub, matterRef || null, uploadMatterId]
     );
     const analysis = result.rows[0];
     const { provider: docProvider, apiKey, model } = await getAiForFeature("document-intelligence");
@@ -3810,6 +3923,14 @@ ${text}
           "update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, analysed_at=now() where id=$1",
           [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], parsed.summary || "", model]
         );
+
+        // Auto-file from the extracted parties, but only if the uploader did not
+        // already name a matter — their intent wins over our inference.
+        if (!analysis.matter_id) {
+          await autoFileDocument({
+            analysisId: analysis.id, tenantId: analysis.tenant_id, parties: parsed.parties || []
+          });
+        }
       } catch (e) {
         await pool.query(
           "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",

@@ -1,6 +1,7 @@
-import { AlertTriangle, CheckCircle2, FileSearch, FileText, RefreshCw, Scale, Sparkles, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, CalendarPlus, CheckCircle2, FileSearch, FileText, FolderOpen, Loader2, RefreshCw, Scale, Sparkles, Trash2, Upload } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { deleteDocumentAnalysis, getDocumentAnalyses, submitDocumentForAnalysis } from "./api";
+import { createDiaryEntry, deleteDocumentAnalysis, fileDocumentToMatter, getDocumentAnalyses, getDocumentMatterSuggestions, submitDocumentForAnalysis } from "./api";
+import type { MatterSuggestion } from "./api";
 import type { DocumentAnalysis } from "./types";
 
 type Props = {
@@ -21,6 +22,103 @@ async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+const FILING_LABEL: Record<string, string> = {
+  upload: "filed on upload", auto: "auto-filed from the parties", manual: "filed by hand"
+};
+
+/**
+ * Where a document lives. An auto-filed document is an inference, so it says so
+ * and stays one click from being corrected — filing a privileged document to the
+ * wrong client's file is a confidentiality problem, not an untidiness one.
+ */
+function FilingPanel({
+  analysis: a, onFiled, showToast
+}: {
+  analysis: DocumentAnalysis;
+  onFiled: (updated: DocumentAnalysis) => void;
+  showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
+}) {
+  const [suggestions, setSuggestions] = useState<MatterSuggestion[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function loadSuggestions() {
+    setLoading(true);
+    try {
+      const r = await getDocumentMatterSuggestions(a.id);
+      setSuggestions(r.suggestions);
+      if (!r.suggestions.length) showToast("info", "No match", "No matter shares this document's parties.");
+    } catch {
+      showToast("error", "Could not load suggestions", "Please try again.");
+    }
+    setLoading(false);
+  }
+
+  async function file(matterId: string | null) {
+    setBusy(true);
+    try {
+      const r = await fileDocumentToMatter(a.id, matterId);
+      onFiled(r.analysis);
+      showToast("success", matterId ? "Filed" : "Unfiled", a.fileName);
+      setSuggestions(null);
+    } catch {
+      showToast("error", "Could not file", "Please try again.");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div style={{ marginBottom: 16, padding: 10, border: `1px solid ${a.matterId ? "var(--line)" : "var(--gold)"}`, borderRadius: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <FolderOpen size={14} color="var(--green)" />
+        {a.matterId ? (
+          <>
+            <strong style={{ fontSize: "0.84rem" }}>Filed to {a.matterRef || "a matter"}</strong>
+            {a.filingSource && (
+              <span className="pill" style={{ fontSize: "0.7rem", background: a.filingSource === "auto" ? "var(--gold)" : undefined, color: a.filingSource === "auto" ? "#fff" : undefined }}>
+                {FILING_LABEL[a.filingSource] || a.filingSource}
+              </span>
+            )}
+            <button className="ghost small" disabled={busy} onClick={() => file(null)} style={{ marginLeft: "auto" }}>
+              Unfile
+            </button>
+          </>
+        ) : (
+          <>
+            <strong style={{ fontSize: "0.84rem" }}>Not filed to a matter</strong>
+            {a.matterRef && <span className="pill" style={{ fontSize: "0.7rem" }}>“{a.matterRef}” didn’t match a matter</span>}
+            <button className="ghost small" disabled={loading} onClick={loadSuggestions} style={{ marginLeft: "auto" }}>
+              {loading ? <Loader2 size={12} style={{ animation: "spin 0.8s linear infinite" }} /> : null} Find its matter
+            </button>
+          </>
+        )}
+      </div>
+
+      {a.filingSource === "auto" && (
+        <small style={{ display: "block", marginTop: 6, color: "var(--muted)" }}>
+          Matched automatically from the extracted parties — check it landed on the right file.
+        </small>
+      )}
+
+      {suggestions && suggestions.length > 0 && (
+        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+          {suggestions.map(s => (
+            <div key={s.matterId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <strong style={{ fontSize: "0.82rem" }}>{s.ref}</strong>
+                <small style={{ display: "block", color: "var(--muted)" }}>
+                  {s.label} · matches {s.matchedParties.join(", ")}
+                </small>
+              </div>
+              <button className="primary small" disabled={busy} onClick={() => file(s.matterId)}>File here</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatusPill({ status }: { status: DocumentAnalysis["analysisStatus"] }) {
   const key = status.toLowerCase();
   const cls =
@@ -31,6 +129,8 @@ function StatusPill({ status }: { status: DocumentAnalysis["analysisStatus"] }) 
 }
 
 export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: Props) {
+  const onAnalysisUpdated = (updated: DocumentAnalysis) =>
+    setAnalyses(prev => prev.map(x => x.id === updated.id ? updated : x));
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -279,6 +379,10 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                         </div>
                       )}
 
+                      {a.analysisStatus === "Complete" && (
+                        <FilingPanel analysis={a} onFiled={onAnalysisUpdated} showToast={showToast} />
+                      )}
+
                       {a.keyDates.length > 0 && (
                         <div style={{ marginBottom: 16 }}>
                           <h4 style={{ margin: "0 0 8px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
@@ -289,9 +393,31 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                               <div key={i} className="doc-key-date">
                                 <strong>{kd.label}</strong>
                                 <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.88rem" }}>{kd.date}</span>
+                                {a.matterId && /^\d{4}-\d{2}-\d{2}$/.test(String(kd.date)) && (
+                                  <button
+                                    className="ghost small"
+                                    title="Add this date to the matter's diary"
+                                    onClick={async () => {
+                                      try {
+                                        await createDiaryEntry(a.matterId!, {
+                                          description: kd.label, dueDate: kd.date,
+                                          source: "document", sourceDocumentId: a.id
+                                        });
+                                        showToast("success", "Diarised", `${kd.label} — ${kd.date}`);
+                                      } catch {
+                                        showToast("error", "Could not diarise", "Please try again.");
+                                      }
+                                    }}
+                                  >
+                                    <CalendarPlus size={12} /> Diarise
+                                  </button>
+                                )}
                               </div>
                             ))}
                           </div>
+                          {!a.matterId && (
+                            <small style={{ color: "var(--muted)" }}>File this document to a matter to diarise its dates.</small>
+                          )}
                         </div>
                       )}
 
