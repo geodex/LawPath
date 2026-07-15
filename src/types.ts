@@ -446,6 +446,8 @@ export type ConveyancingMatter = {
   estateAgent: string;
   bondBank: string;
   currentStage: ConveyancingStage;
+  /** Which side this firm represents. "" = not yet stated by an attorney. */
+  actingFor: "" | "seller" | "buyer" | "bank";
   ficaStatus: "Pending" | "In Progress" | "Compliant";
   ratesClearanceStatus: "Not requested" | "Requested" | "Received" | "Expired";
   levyClearanceStatus: "Not requested" | "Requested" | "Received" | "Expired";
@@ -474,6 +476,8 @@ export type LitigationMatter = {
   plaintiff: string;
   defendant: string;
   matterType: "opposed_motion" | "unopposed_motion" | "trial" | "urgent_application" | "section_65" | "section_69" | "rule_43" | "default_judgment" | "appeal" | "review";
+  /** Which side this firm represents. "" = not yet stated by an attorney. */
+  actingFor: "" | "plaintiff" | "defendant";
   currentStage: string;
   claimAmountCents: number;
   costsRecoveredCents: number;

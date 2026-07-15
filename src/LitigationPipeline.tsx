@@ -1,6 +1,6 @@
 import { AlertTriangle, Calendar, CheckCircle2, Gavel, Hourglass, Plus, Scale } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { completeLitigationDeadline, createCourtDate, createCostOrder, createLitigationDeadline, createLitigationMatter, updateLitigationPrescription } from "./api";
+import { completeLitigationDeadline, createCourtDate, createCostOrder, createLitigationDeadline, createLitigationMatter, updateLitigationActingFor, updateLitigationPrescription } from "./api";
 import type { CourtDate, CostOrder, LitigationDeadline, LitigationMatter } from "./types";
 
 const money = (cents: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(cents / 100);
@@ -70,6 +70,7 @@ export function LitigationPipeline({
       plaintiff: String(f.get("plaintiff")),
       defendant: String(f.get("defendant")),
       matterType: String(f.get("matterType")) as LitigationMatter["matterType"],
+      actingFor: String(f.get("actingFor") || "") as LitigationMatter["actingFor"],
       currentStage: "pleadings",
       claimAmountCents: Math.round(parseFloat(String(f.get("claimAmount") || "0")) * 100),
       costsRecoveredCents: 0,
@@ -98,6 +99,18 @@ export function LitigationPipeline({
     }
     setShowForm(false);
     (e.target as HTMLFormElement).reset();
+  }
+
+  async function handleSetActingFor(matter: LitigationMatter, actingFor: "plaintiff" | "defendant") {
+    try {
+      const res = await updateLitigationActingFor(matter.id, actingFor);
+      setMatters(prev => prev.map(m => m.id === matter.id
+        ? { ...res.matter, deadlines: m.deadlines, courtDates: m.courtDates, costOrders: m.costOrders } : m));
+      showToast("success", "Client side recorded", `Acting for the ${actingFor}.`);
+    } catch {
+      setMatters(prev => prev.map(m => m.id === matter.id ? { ...m, actingFor } : m));
+      showToast("info", "Saved locally", "Client side saved locally.");
+    }
   }
 
   async function handleSavePrescription(e: FormEvent<HTMLFormElement>) {
@@ -252,6 +265,15 @@ export function LitigationPipeline({
                 <label>Defendant / Respondent<input name="defendant" required placeholder="Full legal name" /></label>
               </div>
               <div className="form-row">
+                <label>We act for
+                  <select name="actingFor" required defaultValue="">
+                    <option value="" disabled>Select the side you represent…</option>
+                    <option value="plaintiff">Plaintiff / Applicant</option>
+                    <option value="defendant">Defendant / Respondent</option>
+                  </select>
+                </label>
+              </div>
+              <div className="form-row">
                 <label>Matter type
                   <select name="matterType">
                     {Object.entries(MATTER_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -310,6 +332,21 @@ export function LitigationPipeline({
 
                 {selectedId === m.id && (
                   <div style={{ marginTop: 18 }} onClick={e => e.stopPropagation()}>
+                    <div className="inline-form-toggle" style={{ marginBottom: 16, padding: 14, border: `1px solid ${m.actingFor ? "var(--border)" : "var(--gold)"}`, borderRadius: 10 }}>
+                      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                        <strong style={{ fontSize: "0.88rem" }}>We act for</strong>
+                        <select value={m.actingFor} onChange={e => handleSetActingFor(m, e.target.value as "plaintiff" | "defendant")}>
+                          <option value="" disabled>Not stated — select…</option>
+                          <option value="plaintiff">Plaintiff / Applicant</option>
+                          <option value="defendant">Defendant / Respondent</option>
+                        </select>
+                        {m.actingFor
+                          ? <span className="pill time-status-wip">Client: {m.actingFor === "plaintiff" ? m.plaintiff : m.defendant}</span>
+                          : <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>
+                              Set this so the file records the right client — it drives who the matter belongs to.
+                            </span>}
+                      </div>
+                    </div>
                     {(() => {
                       const pd = m.prescriptionDate;
                       const days = pd ? daysRemaining(pd) : null;

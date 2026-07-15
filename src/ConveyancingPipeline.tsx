@@ -1,6 +1,6 @@
 import { Building2, CheckCircle2, ChevronDown, ChevronRight, FileSearch, Loader2, MapPin, Plus, RefreshCw, ShieldCheck, Truck } from "lucide-react";
 import { FormEvent, useCallback, useRef, useState } from "react";
-import { ackConveyancingDots, advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstonePropertyBundle, getLightstoneSectionalUnits, pollConveyancingDots, searchLightstoneAddress, updateConveyancingClearances, updateConveyancingDots } from "./api";
+import { ackConveyancingDots, advanceConveyancingStage, callVerifyNow, createConveyancingMatter, getLightstonePropertyBundle, getLightstoneSectionalUnits, pollConveyancingDots, searchLightstoneAddress, updateConveyancingActingFor, updateConveyancingClearances, updateConveyancingDots } from "./api";
 import type { LightstoneAddress, LightstonePropertyBundle, LightstoneSectionalUnit } from "./api";
 import type { ConveyancingMatter, ConveyancingStage } from "./types";
 import { DEEDS_OFFICES, SearchWorksPanel } from "./SearchWorksPanel";
@@ -378,6 +378,17 @@ export function ConveyancingPipeline({
     setDotsEdit(prev => ({ ...prev, [id]: { ...(prev[id] ?? { barcode: "", office: "3" }), ...patch } }));
   }
 
+  async function handleSetActingFor(m: ConveyancingMatter, actingFor: "seller" | "buyer" | "bank") {
+    try {
+      const res = await updateConveyancingActingFor(m.id, actingFor);
+      setMatters(prev => prev.map(x => x.id === m.id ? res.matter : x));
+      showToast("success", "Client side recorded", `Acting for the ${actingFor}.`);
+    } catch {
+      setMatters(prev => prev.map(x => x.id === m.id ? { ...x, actingFor } : x));
+      showToast("info", "Saved locally", "Client side saved locally.");
+    }
+  }
+
   async function handleDotsSave(m: ConveyancingMatter) {
     const { barcode, office } = dotsFields(m);
     setDotsBusy(m.id);
@@ -448,6 +459,7 @@ export function ConveyancingPipeline({
       estateAgent: String(f.get("estateAgent") || ""),
       bondBank: String(f.get("bondBank") || ""),
       currentStage: "instruction_received",
+      actingFor: String(f.get("actingFor") || "") as ConveyancingMatter["actingFor"],
       ficaStatus: "Pending",
       ratesClearanceStatus: "Not requested",
       levyClearanceStatus: "Not requested",
@@ -637,6 +649,16 @@ export function ConveyancingPipeline({
                 <label>Seller full name<input name="sellerName" required placeholder="Seller name" /></label>
                 <label>Buyer full name<input name="buyerName" required placeholder="Buyer name" /></label>
               </div>
+              <div className="form-row">
+                <label>We act for
+                  <select name="actingFor" required defaultValue="">
+                    <option value="" disabled>Select the party you represent…</option>
+                    <option value="seller">Seller (transferring attorney)</option>
+                    <option value="buyer">Buyer (purchaser's attorney)</option>
+                    <option value="bank">Bank (bond / cancellation attorney)</option>
+                  </select>
+                </label>
+              </div>
               <label>Property description<input name="propertyDescription" required placeholder="Erf 1234, Sandton, Gauteng" /></label>
               <div className="form-row">
                 <label>Erf / unit number<input name="erfNumber" placeholder="Erf 1234" /></label>
@@ -690,6 +712,26 @@ export function ConveyancingPipeline({
 
               {selectedId === m.id && (
                 <div style={{ marginTop: 18 }} onClick={e => e.stopPropagation()}>
+                  {/* Which side the firm represents — drives the client on the matter file */}
+                  <div className="inline-form-toggle" style={{ marginBottom: 16, padding: 14, border: `1px solid ${m.actingFor ? "var(--line)" : "var(--gold)"}`, borderRadius: 10 }}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                      <strong style={{ fontSize: "0.88rem" }}>We act for</strong>
+                      <select value={m.actingFor} onChange={e => handleSetActingFor(m, e.target.value as "seller" | "buyer" | "bank")}>
+                        <option value="" disabled>Not stated — select…</option>
+                        <option value="seller">Seller (transferring attorney)</option>
+                        <option value="buyer">Buyer (purchaser's attorney)</option>
+                        <option value="bank">Bank (bond / cancellation attorney)</option>
+                      </select>
+                      {m.actingFor
+                        ? <span className="pill time-status-wip">
+                            Client: {m.actingFor === "seller" ? m.sellerName : m.actingFor === "buyer" ? m.buyerName : (m.bondBank || "— set bond bank")}
+                          </span>
+                        : <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>
+                            Set this so the file records the right client — it drives who the matter belongs to.
+                          </span>}
+                    </div>
+                  </div>
+
                   {/* Stage pipeline */}
                   <h4 style={{ margin: "0 0 12px" }}>Transfer pipeline</h4>
                   <div className="conv-stage-track">

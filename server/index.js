@@ -1953,6 +1953,7 @@ function convMatterFromRow(row) {
     vatOnFeeCents: Number(row.vat_on_fee_cents),
     estateAgent: row.estate_agent || "", bondBank: row.bond_bank || "",
     currentStage: row.current_stage, ficaStatus: row.fica_status,
+    actingFor: row.acting_for || "",
     ratesClearanceStatus: row.rates_clearance_status,
     levyClearanceStatus: row.levy_clearance_status,
     ratesClearanceExpiry: row.rates_clearance_expiry ? String(row.rates_clearance_expiry).slice(0, 10) : "",
@@ -1985,20 +1986,23 @@ app.post("/api/conveyancing/matters", authMiddleware, async (req, res, next) => 
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const { matterRef, matterType, sellerName, buyerName, propertyDescription, erfNumber,
     purchasePriceCents, transferDutyCents, conveyancingFeeCents, vatOnFeeCents,
-    estateAgent, bondBank, targetRegistrationDate, notes } = req.body;
+    estateAgent, bondBank, targetRegistrationDate, notes, actingFor } = req.body;
   if (!matterRef || !sellerName || !buyerName || !propertyDescription)
     return res.status(400).json({ error: "Matter ref, seller, buyer and property description are required." });
+  if (actingFor && !CONVEYANCING_ACTING_FOR.includes(actingFor))
+    return res.status(400).json({ error: "actingFor must be 'seller', 'buyer' or 'bank'." });
   try {
     const result = await pool.query(
       `insert into conveyancing_matters
         (tenant_id, matter_ref, matter_type, seller_name, buyer_name, property_description, erf_number,
          purchase_price_cents, transfer_duty_cents, conveyancing_fee_cents, vat_on_fee_cents,
-         estate_agent, bond_bank, target_registration_date, notes, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning *`,
+         estate_agent, bond_bank, target_registration_date, notes, created_by, acting_for)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
       [req.user.tenantId, matterRef, matterType || "transfer", sellerName, buyerName, propertyDescription,
        erfNumber || null, Number(purchasePriceCents || 0), Number(transferDutyCents || 0),
        Number(conveyancingFeeCents || 0), Number(vatOnFeeCents || 0),
-       estateAgent || null, bondBank || null, targetRegistrationDate || null, notes || null, req.user.sub]
+       estateAgent || null, bondBank || null, targetRegistrationDate || null, notes || null, req.user.sub,
+       actingFor || null]
     );
     await pool.query(
       "insert into activity_log (tenant_id, actor_user_id, entity_type, entity_id, action, details) values ($1,$2,'conveyancing_matter',$3,'created',$4)",
@@ -2044,6 +2048,24 @@ app.put("/api/conveyancing/matters/:id/clearances", authMiddleware, async (req, 
        where id = $1 and tenant_id = $7 returning *`,
       [req.params.id, ratesClearanceStatus || null, levyClearanceStatus || null,
        ratesClearanceExpiry || null, levyClearanceExpiry || null, ficaStatus || null, req.user.tenantId]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
+    res.json({ matter: convMatterFromRow(result.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+// Record which party this firm acts for (transferring attorney = seller, the
+// purchaser's attorney = buyer, bond/cancellation attorney = bank).
+app.put("/api/conveyancing/matters/:id/acting-for", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { actingFor } = req.body;
+  if (!CONVEYANCING_ACTING_FOR.includes(actingFor))
+    return res.status(400).json({ error: "actingFor must be 'seller', 'buyer' or 'bank'." });
+  try {
+    const result = await pool.query(
+      `update conveyancing_matters set acting_for = $3, updated_at = now()
+       where id = $1 and tenant_id = $2 returning *`,
+      [req.params.id, req.user.tenantId, actingFor]
     );
     if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
     res.json({ matter: convMatterFromRow(result.rows[0]) });
@@ -2125,12 +2147,19 @@ function costOrderFromRow(row) {
     amountCents: Number(row.amount_cents || 0), scale: row.scale || "", notes: row.notes || "" };
 }
 
+// Which side of the matter the firm represents. A practice acts for either side,
+// so this is always an explicit attorney choice — never inferred. Drives
+// matters.client_name / client_role on the matter spine.
+const LITIGATION_ACTING_FOR = ["plaintiff", "defendant"];
+const CONVEYANCING_ACTING_FOR = ["seller", "buyer", "bank"];
+
 function litMatterFromRow(row, deadlines, courtDates, costOrders) {
   return {
     id: row.id, matterRef: row.matter_ref, caseNumber: row.case_number || "",
     court: row.court, courtDivision: row.court_division || "",
     plaintiff: row.plaintiff, defendant: row.defendant,
     matterType: row.matter_type, currentStage: row.current_stage,
+    actingFor: row.acting_for || "",
     claimAmountCents: Number(row.claim_amount_cents || 0),
     costsRecoveredCents: Number(row.costs_recovered_cents || 0),
     status: row.status,
@@ -2178,10 +2207,12 @@ app.get("/api/litigation/matters", authMiddleware, async (req, res, next) => {
 app.post("/api/litigation/matters", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   const { matterRef, caseNumber, court, courtDivision, plaintiff, defendant, matterType,
-    claimAmountCents, serviceDate, notes,
+    claimAmountCents, serviceDate, notes, actingFor,
     causeOfActionDate, prescriptionPeriodYears, prescriptionDate } = req.body;
   if (!matterRef || !court || !plaintiff || !defendant)
     return res.status(400).json({ error: "Matter ref, court, plaintiff and defendant are required." });
+  if (actingFor && !LITIGATION_ACTING_FOR.includes(actingFor))
+    return res.status(400).json({ error: "actingFor must be 'plaintiff' or 'defendant'." });
   const periodYears = Number(prescriptionPeriodYears) > 0 ? Number(prescriptionPeriodYears) : 3;
   const computedPrescription = computePrescriptionDate(causeOfActionDate, periodYears, prescriptionDate);
   try {
@@ -2189,14 +2220,32 @@ app.post("/api/litigation/matters", authMiddleware, async (req, res, next) => {
       `insert into litigation_matters
         (tenant_id, matter_ref, case_number, court, court_division, plaintiff, defendant,
          matter_type, claim_amount_cents, service_date, notes, created_by,
-         cause_of_action_date, prescription_period_years, prescription_date)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
+         cause_of_action_date, prescription_period_years, prescription_date, acting_for)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning *`,
       [req.user.tenantId, matterRef, caseNumber || null, court, courtDivision || null,
        plaintiff, defendant, matterType || "opposed_motion",
        Number(claimAmountCents || 0), serviceDate || null, notes || null, req.user.sub,
-       causeOfActionDate || null, periodYears, computedPrescription]
+       causeOfActionDate || null, periodYears, computedPrescription, actingFor || null]
     );
     res.status(201).json({ matter: litMatterFromRow(result.rows[0], [], [], []) });
+  } catch (error) { next(error); }
+});
+
+// Record which party this firm acts for. Existing matters are legitimately
+// unknown until an attorney says so, hence no default.
+app.put("/api/litigation/matters/:id/acting-for", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { actingFor } = req.body;
+  if (!LITIGATION_ACTING_FOR.includes(actingFor))
+    return res.status(400).json({ error: "actingFor must be 'plaintiff' or 'defendant'." });
+  try {
+    const result = await pool.query(
+      `update litigation_matters set acting_for = $3, updated_at = now()
+       where id = $1 and tenant_id = $2 returning *`,
+      [req.params.id, req.user.tenantId, actingFor]
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Matter not found." });
+    res.json({ matter: litMatterFromRow(result.rows[0], [], [], []) });
   } catch (error) { next(error); }
 });
 
