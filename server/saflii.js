@@ -237,23 +237,74 @@ const QUERY_TOPICS = [
   "mediation settlement agreement",
 ];
 
-// ─── COURT MAPPING ───────────────────────────────────────────────────────────
+// ─── IDENTITY ────────────────────────────────────────────────────────────────
+// Identity comes from the Akoma Ntoso FRBR metadata Laws.Africa attaches to
+// every result. It is NEVER inferred from the judgment's prose.
+//
+// The previous implementation scanned the text with regexes, which is unsound
+// for the simple reason that judgments cite other judgments: the first "[YYYY]
+// COURT N" in a High Court judgment is usually an SCA case it relies on, and the
+// first "X v Y" is usually that case's name. Fed a 2023 Gauteng judgment citing
+// Trust Bank, it stored the row as "Natal v Trust Bank", [1979] ZASCA 56,
+// Constitutional Court, 1979 — a real case name welded onto another case's
+// facts, which is precisely what the testing attorney caught and rejected.
+//
+// A work FRBR URI (/akn/za/judgment/zasca/2025/162) is assigned by Laws.Africa
+// and names the judgment itself. Court, year and number are a parse of it, so
+// they cannot belong to a different case.
 
-function guessCourtFromTitle(title) {
-  const t = title.toLowerCase();
-  if (t.includes("constitutional court") || t.includes("zacc")) return "Constitutional Court";
-  if (t.includes("supreme court of appeal") || t.includes("zasca")) return "Supreme Court of Appeal";
-  if (t.includes("labour appeal") || t.includes("zalac")) return "Labour Appeal Court";
-  if (t.includes("labour court") || t.includes("zalcc")) return "Labour Court";
-  if (t.includes("competition")) return "Competition Tribunal";
-  if (t.includes("land claims")) return "Land Claims Court";
-  if (t.includes("western cape") || t.includes("zawchc")) return "Western Cape High Court";
-  if (t.includes("kwazulu") || t.includes("zakzdhc") || t.includes("durban")) return "KwaZulu-Natal High Court, Durban";
-  if (t.includes("free state") || t.includes("zafshc") || t.includes("bloemfontein")) return "Free State High Court";
-  if (t.includes("pretoria") || t.includes("zagpphc")) return "Gauteng High Court, Pretoria";
-  if (t.includes("johannesburg") || t.includes("zagpjhc")) return "Gauteng High Court, Johannesburg";
-  if (t.includes("high court") || t.includes("gauteng")) return "High Court";
-  return "South African Court";
+// Akoma Ntoso court code -> court name. A lookup keyed on the URI's code, not a
+// guess from prose. Codes absent here keep their uppercase code as the label
+// (e.g. "ZAMPMBHC"): accurate and identifiable, where a guess is neither, and
+// the code is what a practitioner would recognise anyway.
+const COURT_BY_FRBR_CODE = {
+  zacc:      "Constitutional Court",
+  zasca:     "Supreme Court of Appeal",
+  zagpphc:   "Gauteng High Court, Pretoria",
+  zagpjhc:   "Gauteng High Court, Johannesburg",
+  zawchc:    "Western Cape High Court",
+  zakzdhc:   "KwaZulu-Natal High Court, Durban",
+  zakzphc:   "KwaZulu-Natal High Court, Pietermaritzburg",
+  zafshc:    "Free State High Court",
+  zaechc:    "Eastern Cape High Court",
+  zaecghc:   "Eastern Cape High Court, Grahamstown",
+  zaecphc:   "Eastern Cape High Court, Port Elizabeth",
+  zanwhc:    "North West High Court",
+  zanchc:    "Northern Cape High Court",
+  zampmbhc:  "Mpumalanga High Court, Middelburg",
+  zalmpphc:  "Limpopo High Court, Polokwane",
+  zalac:     "Labour Appeal Court",
+  zalc:      "Labour Court",
+  zalcjhc:   "Labour Court, Johannesburg",
+  zalcct:    "Labour Court, Cape Town",
+  zalcc:     "Land Claims Court",
+  zact:      "Competition Tribunal",
+  zacac:     "Competition Appeal Court",
+  zatc:      "Tax Court",
+  zasct:     "Small Claims Court",
+  zaecbhc:   "Eastern Cape High Court, Bhisho",
+  zaecmhc:   "Eastern Cape High Court, Mthatha"
+};
+
+// /akn/za/judgment/zasca/2025/162  ->  { code: "zasca", year: 2025, number: "162" }
+// Anchored and judgment-only on purpose: a legislation URI (/akn/za/act/2013/4)
+// must NOT parse here. The old code hardcoded document_type 'judgment' on every
+// insert, so POPIA was filed as a court decision with a guessed court.
+const WORK_URI_RE = /^\/akn\/za\/judgment\/([a-z0-9-]+)\/(\d{4})\/(\d+)\b/i;
+
+function parseWorkUri(uri) {
+  const m = WORK_URI_RE.exec(String(uri || "").trim());
+  if (!m) return null;
+  return { code: m[1].toLowerCase(), year: parseInt(m[2], 10), number: m[3] };
+}
+
+function courtFromFrbrCode(code) {
+  return COURT_BY_FRBR_CODE[code] || code.toUpperCase();
+}
+
+// "[2025] ZASCA 162" — assembled from the URI's own components.
+function citationFromWorkUri(parsed) {
+  return `[${parsed.year}] ${parsed.code.toUpperCase()} ${parsed.number}`;
 }
 
 function extractTagsFromText(text) {
@@ -277,17 +328,59 @@ function extractTagsFromText(text) {
   return [...new Set(tags)];
 }
 
-function extractYearFromText(text) {
-  const match = text.match(/\[(\d{4})\]/);
-  if (match) return parseInt(match[1]);
-  const dateMatch = text.match(/\b(19|20)\d{2}\b/);
-  if (dateMatch) return parseInt(dateMatch[0]);
-  return null;
-}
+// Resolve a result to a citable judgment, or explain why it cannot be.
+//
+// Returns { ok: true, doc } or { ok: false, reason }. There is deliberately no
+// third option: a row we cannot name does not get stored. ~8,955 rows were
+// indexed without citation, URL or real title precisely because the old code
+// inserted whatever it had and guessed the rest. An unnameable judgment in the
+// corpus is worse than no judgment, because retrieval feeds it to the model as
+// an authority it is then unable to cite — which is what drove it back to recall
+// and produced the fabricated citations.
+function resolveIdentity(item) {
+  const md = item?.metadata || {};
+  const text = item?.content?.text || "";
 
-function extractCitationFromText(text) {
-  const match = text.match(/\[\d{4}\]\s+[A-Z]+\s+\d+/);
-  return match ? match[0] : null;
+  // The whole bug in one line: these live under `metadata`, and the old code
+  // read item.public_url / item.url / item.title at the top level. Every one was
+  // undefined on every call, for every row ever indexed.
+  const parsed = parseWorkUri(md.work_frbr_uri);
+  if (!parsed) return { ok: false, reason: `no parsable judgment work URI (${md.work_frbr_uri || "absent"})` };
+  if (md.frbr_country && String(md.frbr_country).toLowerCase() !== "za") return { ok: false, reason: `not SA (${md.frbr_country})` };
+  if (md.frbr_doctype && String(md.frbr_doctype).toLowerCase() !== "judgment") return { ok: false, reason: `not a judgment (${md.frbr_doctype})` };
+  if (!String(md.title || "").trim()) return { ok: false, reason: "no title in metadata" };
+  if (!text.trim()) return { ok: false, reason: "no content text" };
+
+  // expression_date is the real handing-down date. The old code wrote
+  // `${year}-01-01` for every row — a fabricated day and month on every
+  // judgment in the corpus.
+  const decisionDate = /^\d{4}-\d{2}-\d{2}$/.test(String(md.expression_date || ""))
+    ? md.expression_date
+    : null;
+
+  // flynote is the court's own subject classification ("Delict — Conveyancing —
+  // Negligence and causation"), so tag from it in preference to the prose.
+  const tagSource = [md.flynote, md.blurb, md.title].filter(Boolean).join(" ") || text;
+
+  return {
+    ok: true,
+    doc: {
+      frbrUri:  `/akn/za/judgment/${parsed.code}/${parsed.year}/${parsed.number}`,
+      title:    String(md.title).trim(),
+      citation: citationFromWorkUri(parsed),
+      court:    courtFromFrbrCode(parsed.code),
+      year:     parsed.year,
+      decisionDate,
+      // blurb is Laws.Africa's one-line holding; fall back to the summary text.
+      summary:  String(md.blurb || "").trim() || text.slice(0, 600).trim(),
+      fullText: text.trim(),
+      // public_url points at the judgment on lawlibrary.org.za. The attorney's
+      // workflow is research -> go read the actual case, so this is the link
+      // that makes the corpus useful rather than merely citable.
+      sourceUrl: String(md.public_url || "").trim() || null,
+      tags:      extractTagsFromText(tagSource)
+    }
+  };
 }
 
 // ─── API ─────────────────────────────────────────────────────────────────────
@@ -337,101 +430,43 @@ async function ensureSourceRecord(courtLabel) {
   return result.rows[0].id;
 }
 
-function isSouthAfrican(item) {
-  const text = `${item.title || ""} ${item.content?.text || item.text || ""} ${item.public_url || item.url || ""}`.toLowerCase();
-  const saSignals = [
-    "south africa", "zacc", "zasca", "zagpjhc", "zagpphc", "zawchc", "zakzdhc",
-    "zafshc", "zalcc", "zalac", "zact", "saflii.org/za/", "lawlibrary.org.za",
-    "africanlii.org/za/", "/akn/za/", "constitutional court", "supreme court of appeal",
-    "high court", "labour court", "labour appeal", "competition tribunal",
-    "land claims court", "gauteng", "western cape", "kwazulu", "free state",
-    "ccma", "paja", "bcea", "lra", "companies act 71", "nca 34", "fica 38",
-    "consumer protection act 68", "popia", "constitution of the republic"
-  ];
-  return saSignals.some(s => text.includes(s));
-}
-
-// Derive a sensible title when Laws.Africa doesn't provide one.
-// Preference order:
-//   1. item.title (already a clean human title)
-//   2. Look for a v / vs pattern early in the text — that's almost always
-//      the case name in a judgment ("Banda v Minister of Police").
-//   3. First full sentence (ends with . ! ? or newline)
-//   4. Citation + year + court as a synthetic title
-//   5. "Untitled judgment"
-// Always avoids cutting mid-word.
-function deriveTitle(item, content, citation, year, court) {
-  if (item.title && String(item.title).trim()) return String(item.title).trim();
-
-  const head = String(content || "").slice(0, 800).replace(/\s+/g, " ").trim();
-
-  // Try to find a case-name pattern: "<Surname> [and Another|and Others]? v[s.]? <Surname>..."
-  const caseName = head.match(/[A-Z][\w'-]+(?:\s+[A-Z][\w'-]+){0,4}(?:\s+(?:and\s+(?:Another|Others)|NO))?\s+v(?:s\.?)?\s+[A-Z][\w'-]+(?:\s+[A-Z][\w'-]+){0,8}/);
-  if (caseName) return caseName[0].trim();
-
-  // Otherwise take the first sentence (or the first 250 chars at the
-  // nearest word boundary, whichever is shorter).
-  const firstSentence = head.split(/(?<=[.!?])\s+/)[0];
-  if (firstSentence && firstSentence.length <= 250 && firstSentence.length >= 12) {
-    return firstSentence.trim();
-  }
-
-  // Synthetic title from citation/court/year so the row is at least
-  // identifiable.
-  if (citation) return `${citation}${court ? ` — ${court}` : ""}`;
-  if (court && year) return `Judgment — ${court} (${year})`;
-  return "Untitled judgment";
-}
-
+// Index one result. Returns 'new' | 'duplicate' | a rejection reason string.
+//
+// The old version's dedup check sat inside `if (publicUrl)`. Since publicUrl was
+// always undefined (wrong nesting level), the check never ran and every run
+// re-inserted everything the previous run had fetched — 8,955 rows holding 1,701
+// distinct texts. Dedup is now unconditional and enforced by the database, on
+// the work FRBR URI (migration 031), so it cannot be skipped by a field being
+// absent.
 async function indexResult(item) {
-  const content = item.content?.text || item.text || "";
-  const publicUrl = item.public_url || item.url || "";
+  const id = resolveIdentity(item);
+  if (!id.ok) return id.reason;
 
-  if (!publicUrl && !content) return false;
-  if (!isSouthAfrican(item)) return false;
+  const d = id.doc;
+  const sourceId = await ensureSourceRecord(d.court);
 
-  // Skip if already indexed by URL
-  if (publicUrl) {
-    const exists = await pool.query(
-      "select id from legal_corpus_documents where source_url = $1 limit 1",
-      [publicUrl]
-    );
-    if (exists.rowCount) return false;
-  }
-
-  // Derive fields. Use a tentative title for the helper passes, then
-  // recompute the final title now that we have citation/year/court.
-  const tentativeTitle = item.title || content.slice(0, 200);
-  const court    = guessCourtFromTitle(tentativeTitle + " " + content);
-  const year     = extractYearFromText(tentativeTitle + " " + content);
-  const citation = extractCitationFromText(tentativeTitle + " " + content);
-  const tags     = extractTagsFromText(tentativeTitle + " " + content);
-  const title    = deriveTitle(item, content, citation, year, court);
-  const summary  = content.slice(0, 600).trim();
-  const fullTextSnippet = content.trim();
-
-  const sourceId = await ensureSourceRecord(court);
-
-  await pool.query(
+  const res = await pool.query(
     `insert into legal_corpus_documents
-      (source_id, title, citation, court, decision_date, jurisdiction, document_type,
+      (source_id, frbr_uri, title, citation, court, decision_date, jurisdiction, document_type,
        summary, full_text_snippet, source_url, tags, year)
-     values ($1,$2,$3,$4,$5,'South Africa','judgment',$6,$7,$8,$9,$10)
-     on conflict do nothing`,
+     values ($1,$2,$3,$4,$5,$6,'South Africa','judgment',$7,$8,$9,$10,$11)
+     on conflict (frbr_uri) where frbr_uri is not null do nothing
+     returning id`,
     [
       sourceId,
-      title,                       // no slice — let titles be their full length
-      citation,
-      court,
-      year ? `${year}-01-01` : null,
-      summary,
-      fullTextSnippet,
-      publicUrl || null,
-      tags,
-      year
+      d.frbrUri,
+      d.title,
+      d.citation,
+      d.court,
+      d.decisionDate,
+      d.summary,
+      d.fullText,
+      d.sourceUrl,
+      d.tags,
+      d.year
     ]
   );
-  return true;
+  return res.rowCount ? "new" : "duplicate";
 }
 
 async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
@@ -446,6 +481,8 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
   console.info(`[indexer] Will run up to ${maxQueries} queries, ${topK} results each.`);
   const start = Date.now();
   let totalNew = 0;
+  let totalDuplicate = 0;
+  let totalRejected = 0;
   let apiCalls = 0;
 
   // 1. Discover available knowledge bases
@@ -465,76 +502,65 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
     console.info(`[indexer]   ${kb.code || kb.id}: ${kb.name || kb.title || "—"}`);
   }
 
-  // Pick the SA Judgments KB explicitly — must contain "za" and "judgment"
-  let judgmentKb = kbs.find(k => {
-    const code = (k.code || k.id || "").toLowerCase();
-    const name = (k.name || k.title || "").toLowerCase();
-    return code.includes("za") && (name.includes("judgment") || code.includes("judgment"));
-  });
-  let legislationKb = kbs.find(k => {
-    const code = (k.code || k.id || "").toLowerCase();
-    return code === "legislation-za";
-  }) || kbs.find(k => {
-    const code = (k.code || k.id || "").toLowerCase();
-    const name = (k.name || k.title || "").toLowerCase();
-    return code.includes("za") && !code.includes("municipal") && !code.includes("provincial")
-      && (name.includes("legislation") || code.includes("legislation"));
-  });
+  // The SA judgments KB, by exact code. The API serves eight countries
+  // (judgments-gh, judgments-ls, judgments-na, judgments-tz, judgments-ug,
+  // judgments-zm, judgments-zw, judgments-za), and the previous selector fell
+  // back to `kbs[0]` — which is judgments-gh, Ghana — if its fuzzy match missed.
+  // An SA legal corpus quietly filling with Ghanaian judgments is not a failure
+  // mode worth leaving open for the sake of a fallback.
+  const judgmentKb = kbs.find(k => (k.code || k.id || "").toLowerCase() === "judgments-za");
 
-  if (!judgmentKb && !legislationKb) {
-    // Fallback: any SA KB
-    judgmentKb = kbs.find(k => (k.code || k.id || "").toLowerCase().includes("za")) || kbs[0];
-  }
-  if (!judgmentKb && !legislationKb) {
-    console.error("[indexer] No SA knowledge bases available. Check your API key permissions.");
+  if (!judgmentKb) {
+    console.error("[indexer] The judgments-za knowledge base is not available on this key.");
+    console.error(`[indexer] Available: ${kbs.map(k => k.code || k.id).join(", ") || "(none)"}`);
     process.exit(1);
   }
 
-  if (judgmentKb) console.info(`[indexer] Judgments KB: ${judgmentKb.code || judgmentKb.id} (${judgmentKb.name || judgmentKb.title})`);
-  if (legislationKb) console.info(`[indexer] Legislation KB: ${legislationKb.code || legislationKb.id} (${legislationKb.name || legislationKb.title})`);
+  console.info(`[indexer] Judgments KB: ${judgmentKb.code || judgmentKb.id} (${judgmentKb.name || judgmentKb.title || "—"})`);
 
-  // 2. Build work items: pair each query with a KB
-  //    Split budget: 80% judgments, 20% legislation (legislation KB is optional)
+  // 2. Build work items. JUDGMENTS ONLY.
+  //
+  // The legislation KB is deliberately not queried. Its results are Acts, whose
+  // FRBR URIs are /akn/za/act/... — they have no court, no citation and no
+  // decision date, but the old insert hardcoded document_type 'judgment' and ran
+  // them through guessCourtFromTitle anyway. That is how POPIA ended up filed as
+  // a court decision. Legislation needs its own identity handling and its own
+  // document_type before it belongs in here; until then the whole budget goes to
+  // case law, which is what practitioners asked for.
   const shuffled = [...QUERY_TOPICS].sort(() => Math.random() - 0.5);
-  const workItems = [];
+  const jCode = judgmentKb.code || judgmentKb.id;
+  const workItems = shuffled.slice(0, maxQueries).map(q => ({ query: q, kbCode: jCode }));
 
-  if (judgmentKb) {
-    const jCode = judgmentKb.code || judgmentKb.id;
-    const jCount = legislationKb ? Math.ceil(maxQueries * 0.8) : maxQueries;
-    shuffled.slice(0, jCount).forEach(q => workItems.push({ query: q, kbCode: jCode, kbLabel: "judgments" }));
-  }
-  if (legislationKb) {
-    const lCode = legislationKb.code || legislationKb.id;
-    const lCount = Math.floor(maxQueries * 0.2);
-    shuffled.slice(0, lCount).forEach(q => workItems.push({ query: q, kbCode: lCode, kbLabel: "legislation" }));
-  }
-
-  // Re-shuffle so judgment and legislation queries interleave
-  workItems.sort(() => Math.random() - 0.5);
+  // Why each result was turned away, so a rejection rate is visible rather than
+  // silent. Silence is how the corpus filled with 8,955 unnameable rows.
+  const rejected = {};
 
   for (let i = 0; i < workItems.length; i++) {
-    const { query, kbCode, kbLabel } = workItems[i];
-    console.info(`[indexer] [${i + 1}/${workItems.length}] (${kbLabel}) "${query}"`);
+    const { query, kbCode } = workItems[i];
+    console.info(`[indexer] [${i + 1}/${workItems.length}] "${query}"`);
 
     try {
       const results = await queryKnowledgeBase(apiKey, kbCode, query, topK);
       apiCalls++;
       const items = results.results || results.items || results || [];
-      let batchNew = 0;
+      let batchNew = 0, batchDup = 0, batchRej = 0;
 
       for (const item of items) {
         try {
-          const isNew = await indexResult(item);
-          if (isNew) {
-            batchNew++;
-            totalNew++;
+          const outcome = await indexResult(item);
+          if (outcome === "new") { batchNew++; totalNew++; }
+          else if (outcome === "duplicate") { batchDup++; totalDuplicate++; }
+          else {
+            batchRej++;
+            totalRejected++;
+            rejected[outcome] = (rejected[outcome] || 0) + 1;
           }
         } catch (err) {
           console.warn(`[indexer]   DB insert error: ${err.message}`);
         }
       }
 
-      console.info(`[indexer]   ${items.length} results, ${batchNew} new → DB`);
+      console.info(`[indexer]   ${items.length} results → ${batchNew} new, ${batchDup} dup, ${batchRej} rejected`);
 
       // Respect rate limits — 2 seconds between calls (30/min limit)
       await delay(2100);
@@ -544,11 +570,18 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
         break;
       }
       if (err.message.includes("403")) {
-        console.warn(`[indexer]   403 on ${kbLabel} KB — skipping. Check plan permissions.`);
+        console.warn(`[indexer]   403 on judgments KB — skipping. Check plan permissions.`);
         continue;
       }
       console.error(`[indexer]   Query failed: ${err.message}`);
       await delay(2000);
+    }
+  }
+
+  if (Object.keys(rejected).length) {
+    console.info("[indexer] Rejected (not stored — a row we cannot name is worse than no row):");
+    for (const [reason, n] of Object.entries(rejected).sort((a, b) => b[1] - a[1])) {
+      console.info(`[indexer]   ${String(n).padStart(4)}  ${reason}`);
     }
   }
 
@@ -564,7 +597,7 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-  console.info(`[indexer] Complete — ${totalNew} new documents indexed in ${elapsed}s (${apiCalls} API calls used).`);
+  console.info(`[indexer] Complete in ${elapsed}s — ${totalNew} new, ${totalDuplicate} duplicate, ${totalRejected} rejected (${apiCalls} API calls used).`);
   console.info(`[indexer] Free tier: 100 calls/day. Used ${apiCalls}. ${Math.max(0, 100 - apiCalls)} remaining today.`);
 
   await pool.end().catch(() => {});
@@ -586,4 +619,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runIndexer, QUERY_TOPICS };
+// resolveIdentity and its helpers are exported so the identity rules can be
+// tested directly against real API response shapes. The regex-scraping they
+// replaced was only reachable through a live API call, which is a large part of
+// why it went ~9,000 rows without anyone noticing it was discarding every field.
+module.exports = {
+  runIndexer, QUERY_TOPICS, indexResult,
+  parseWorkUri, courtFromFrbrCode, citationFromWorkUri, resolveIdentity
+};
