@@ -12,6 +12,10 @@
 //     or overwrites an existing link, and never touches any other column.
 //   * Ambiguous matches (a ref/name matching more than one matter) are SKIPPED
 //     and reported — never guessed.
+//   * The client on a promoted matter comes from acting_for (migration 027) —
+//     the attorney's explicit statement of which side the firm represents. A
+//     matter with no acting_for is skipped and reported, not defaulted to one
+//     side; set it in the UI and re-run to pick it up.
 //   * Every write is journalled to matter_backfill_log, so --rollback undoes an
 //     entire run exactly.
 //   * Idempotent: a second run finds nothing left to do.
@@ -58,18 +62,22 @@ async function promoteDomain(client, runId, cfg) {
     params
   )).rows;
 
-  let matched = 0, skipped = 0;
+  let matched = 0, skipped = 0, needsActingFor = 0;
   for (const r of rows) {
+    // The client is whichever party the firm acts for. That is never inferred:
+    // if no attorney has stated it, the matter is left alone and reported, and a
+    // later re-run picks it up once set.
+    if (!r.acting_for) { needsActingFor++; continue; }
     const title = cfg.title(r);
     const clientName = cfg.clientName(r);
     if (!clientName) { skipped++; continue; }
 
     const ins = await client.query(
-      `insert into matters (tenant_id, matter_number, title, client_name, matter_type, stage, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7)
+      `insert into matters (tenant_id, matter_number, title, client_name, client_role, matter_type, stage, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
        on conflict (tenant_id, matter_number) do nothing
        returning id`,
-      [r.tenant_id, r.matter_ref, title, clientName, cfg.matterType,
+      [r.tenant_id, r.matter_ref, title, clientName, r.acting_for, cfg.matterType,
        r.current_stage || r.status || "Intake", r.created_by || null]
     );
     const spineId = ins.rows[0]?.id
@@ -78,10 +86,13 @@ async function promoteDomain(client, runId, cfg) {
     if (!spineId) { skipped++; continue; }
 
     await client.query(`update ${cfg.table} set matter_id = $2 where id = $1 and matter_id is null`, [r.id, spineId]);
-    await logWrite(client, runId, cfg.table, r.id, null, spineId, "promoted:matter_ref");
+    await logWrite(client, runId, cfg.table, r.id, null, spineId, `promoted:acting_for=${r.acting_for}`);
     matched++;
   }
-  record(`B1 ${cfg.table} → matters`, matched, skipped, "promoted domain matters into the spine");
+  const note = needsActingFor
+    ? `${needsActingFor} skipped — no "acting for" set; set it in the UI and re-run`
+    : "promoted domain matters into the spine";
+  record(`B1 ${cfg.table} → matters`, matched, skipped + needsActingFor, note);
 }
 
 // ── B2: link a leaf table to the spine ───────────────────────────────────────
@@ -191,20 +202,22 @@ async function main() {
   try {
     await client.query("begin");
 
+    // The client is resolved from acting_for (migration 027) — the attorney's
+    // explicit statement of which side the firm represents. Never guessed.
     await promoteDomain(client, runId, {
       table: "litigation_matters",
       matterType: "litigation",
       title: (r) => `${r.plaintiff} v ${r.defendant}`.slice(0, 300),
-      clientName: (r) => r.plaintiff || null
+      clientName: (r) => (r.acting_for === "plaintiff" ? r.plaintiff : r.defendant) || null
     });
 
-    // Transfers: the firm is typically the transferring attorney acting for the
-    // seller. Review this in the dry run before committing.
     await promoteDomain(client, runId, {
       table: "conveyancing_matters",
       matterType: "conveyancing",
       title: (r) => `${r.seller_name} → ${r.buyer_name}`.slice(0, 300),
-      clientName: (r) => r.seller_name || null
+      clientName: (r) => (r.acting_for === "seller" ? r.seller_name
+                        : r.acting_for === "buyer" ? r.buyer_name
+                        : r.bond_bank) || null
     });
 
     await linkLeaf(client, runId, {

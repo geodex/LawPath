@@ -103,6 +103,13 @@ is currently NULL — never rewrites, deletes, or touches any other column.**
   the domain row, `tenant_id` preserved) and set the domain row's `matter_id`.
   Uses `matters (tenant_id, matter_number)` uniqueness to stay idempotent — a
   re-run reuses the existing spine row.
+  **The client comes from `acting_for` (migration 027), never a guess.** A firm
+  acts for either side, so `client_name` resolves as: litigation →
+  plaintiff/defendant; conveyancing → seller_name/buyer_name/bond_bank.
+  `client_role` is set from `acting_for`. Matters with no `acting_for` are
+  skipped and reported — an attorney sets it in the UI, then the (idempotent)
+  backfill is re-run to pick them up. This is why the spine cannot be backfilled
+  in one shot: it converges as the firm states who it acts for.
 - **B2 — link the leaf tables**, per tenant, WHERE `matter_id IS NULL`:
   - `time_entries.matter_ref` → `matters.matter_number` (exact), then domain
     `matter_ref` (→ that domain row's spine `matter_id` from B1).
