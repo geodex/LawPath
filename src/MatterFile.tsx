@@ -1,7 +1,7 @@
-import { ArrowLeft, Banknote, CalendarClock, CheckCircle2, FileText, FolderOpen, Loader2, MessageSquare, Plus, Users } from "lucide-react";
+import { ArrowLeft, Banknote, CalendarClock, CheckCircle2, FileText, FolderOpen, Loader2, MessageSquare, Plus, Scale, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { completeDiaryEntry, createDiaryEntry, getMatterFile } from "./api";
-import type { MatterDiaryEntry, MatterFile as MatterFileData } from "./api";
+import { completeDiaryEntry, computeCourtDeadline, createDiaryEntry, diariseFromRule, getCourtRules, getMatterFile } from "./api";
+import type { CourtCalc, CourtRule, MatterDiaryEntry, MatterFile as MatterFileData } from "./api";
 
 const money = (cents: number) =>
   new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 2 }).format(cents / 100);
@@ -274,6 +274,138 @@ const SOURCE_LABEL: Record<MatterDiaryEntry["source"], string> = {
   manual: "", document: "from a document", ai: "AI-suggested", rule_engine: "from court rules"
 };
 
+/**
+ * Court-day calculator. Shows the working — which days were skipped and why —
+ * because a bare computed date is exactly the kind of thing a practitioner
+ * should not take on trust. Dies non is surfaced as a toggle, not buried, since
+ * over the December recess it can move a date by a month.
+ */
+function CourtRuleCalculator({ matterUuid, onDiarised }: { matterUuid: string; onDiarised: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [rules, setRules] = useState<CourtRule[]>([]);
+  const [disclaimer, setDisclaimer] = useState("");
+  const [ruleKey, setRuleKey] = useState("");
+  const [from, setFrom] = useState("");
+  const [diesNon, setDiesNon] = useState(false);
+  const [calc, setCalc] = useState<CourtCalc | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open || rules.length) return;
+    getCourtRules().then(r => {
+      setRules(r.rules);
+      setDisclaimer(r.disclaimer);
+      if (r.rules[0]) { setRuleKey(r.rules[0].key); setDiesNon(r.rules[0].diesNon); }
+    }).catch(() => setErr("Could not load the court rules."));
+  }, [open, rules.length]);
+
+  const selected = rules.find(r => r.key === ruleKey) || null;
+
+  function pickRule(key: string) {
+    setRuleKey(key);
+    setCalc(null);
+    const r = rules.find(x => x.key === key);
+    if (r) setDiesNon(r.diesNon);
+  }
+
+  async function compute() {
+    if (!from || !ruleKey) return;
+    setBusy(true); setErr("");
+    try {
+      setCalc(await computeCourtDeadline({ ruleKey, fromDate: from, diesNon }));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not compute the date.");
+    }
+    setBusy(false);
+  }
+
+  async function diarise() {
+    setBusy(true); setErr("");
+    try {
+      await diariseFromRule(matterUuid, { ruleKey, fromDate: from, diesNon });
+      setCalc(null); setFrom(""); setOpen(false);
+      onDiarised();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not diarise.");
+    }
+    setBusy(false);
+  }
+
+  if (!open) {
+    return (
+      <button className="ghost small" style={{ marginBottom: 12 }} onClick={() => setOpen(true)}>
+        <Scale size={13} /> Compute a deadline from the court rules
+      </button>
+    );
+  }
+
+  return (
+    <div className="inline-form-toggle" style={{ marginBottom: 12, border: "1px solid var(--line)", borderRadius: 10, padding: 12, display: "grid", gap: 8 }}>
+      <div className="panel-head" style={{ marginBottom: 0 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: "0.88rem" }}>
+          <Scale size={14} /> Court-rule deadline
+        </span>
+        <button className="ghost small" onClick={() => setOpen(false)}>Close</button>
+      </div>
+
+      <label style={{ display: "grid", gap: 4, fontSize: "0.82rem", fontWeight: 600 }}>
+        Rule
+        <select value={ruleKey} onChange={e => pickRule(e.target.value)}>
+          {rules.map(r => <option key={r.key} value={r.key}>{r.label} — {r.days} {r.basis} days</option>)}
+        </select>
+      </label>
+      {selected && (
+        <small style={{ color: "var(--muted)" }}>
+          {selected.citation} · runs from: {selected.trigger}
+        </small>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label style={{ display: "grid", gap: 4, fontSize: "0.82rem", fontWeight: 600 }}>
+          Trigger date
+          <input type="date" value={from} onChange={e => { setFrom(e.target.value); setCalc(null); }} />
+        </label>
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: "0.82rem" }}>
+          <input type="checkbox" checked={diesNon} style={{ width: "auto" }}
+            onChange={e => { setDiesNon(e.target.checked); setCalc(null); }} />
+          Apply dies non (16 Dec – 15 Jan)
+        </label>
+        <button className="primary small" onClick={compute} disabled={busy || !from}>Compute</button>
+      </div>
+
+      {err && <small style={{ color: "var(--rose)" }}>{err}</small>}
+
+      {calc && (
+        <div style={{ borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span className="pill" style={{ background: "var(--green)", color: "#fff" }}>Due {calc.dueDate}</span>
+            <small style={{ color: "var(--muted)" }}>
+              {calc.days} {calc.basis} days from {calc.fromDate} · {calc.skippedCount} non-court days skipped
+            </small>
+            <button className="primary small" style={{ marginLeft: "auto" }} onClick={diarise} disabled={busy}>
+              Add to diary
+            </button>
+          </div>
+          {calc.skipped.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ cursor: "pointer", fontSize: "0.8rem", color: "var(--muted)" }}>
+                Show the working ({calc.skipped.length} days skipped)
+              </summary>
+              <div style={{ marginTop: 6, display: "grid", gap: 2, maxHeight: 180, overflowY: "auto" }}>
+                {calc.skipped.map((s, i) => (
+                  <small key={i} style={{ color: "var(--muted)" }}>{s.date} — {s.reason}</small>
+                ))}
+              </div>
+            </details>
+          )}
+          {disclaimer && <small style={{ display: "block", marginTop: 8, color: "var(--muted)" }}>{disclaimer}</small>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DiaryTab({ data, matterUuid, onChanged }: { data: MatterFileData; matterUuid: string; onChanged: () => void }) {
   const { deadlines, courtDates, entries } = data.diary;
   const [adding, setAdding] = useState(false);
@@ -320,6 +452,8 @@ function DiaryTab({ data, matterUuid, onChanged }: { data: MatterFileData; matte
           </div>
         </div>
       )}
+
+      <CourtRuleCalculator matterUuid={matterUuid} onDiarised={onChanged} />
 
       {nothing && <Empty>Nothing diarised on this matter.</Empty>}
 

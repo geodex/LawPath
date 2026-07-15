@@ -14,6 +14,7 @@ const lightstone  = require("./lightstone");
 const searchworks = require("./searchworks");
 const { pollMatter: pollDotsMatter } = require("./dots-poller");
 const { createApprovalRequest, APPROVER_ROLES } = require("./approvals");
+const courtRules = require("./court-rules");
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -2669,6 +2670,56 @@ app.post("/api/conflicts/check", authMiddleware, async (req, res, next) => {
       disclaimer: "Automated search of this firm's own records only. It cannot see matters outside this workspace, and name matching is approximate — an attorney must still apply their own knowledge before accepting the mandate."
     });
   } catch (error) { next(error); }
+});
+
+// ─── COURT RULES / DEADLINE ENGINE ───────────────────────────────────────────
+// Court-day arithmetic per Uniform Rule 1(1), with SA public holidays (Easter is
+// movable) and optional dies non. Returns the working, not just a date, so the
+// attorney can check the reasoning — this is an aid, never advice.
+app.get("/api/court-rules", authMiddleware, async (req, res) => {
+  res.json({
+    rules: courtRules.RULES,
+    disclaimer: "Computed dates are an aid, not legal advice. Periods, and whether dies non applies, must be verified against the rule, any court order, and the division's practice directives before you rely on them."
+  });
+});
+
+app.post("/api/court-rules/compute", authMiddleware, async (req, res, next) => {
+  const { fromDate, days, basis, diesNon, ruleKey } = req.body;
+  if (!fromDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(fromDate).slice(0, 10)))
+    return res.status(400).json({ error: "fromDate must be YYYY-MM-DD." });
+  try {
+    const result = ruleKey
+      ? courtRules.applyRule(ruleKey, fromDate, { days, basis, diesNon })
+      : (basis === "calendar"
+          ? courtRules.addCalendarDays(fromDate, Number(days))
+          : courtRules.addCourtDays(fromDate, Number(days), { skipDiesNon: !!diesNon }));
+    res.json(result);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || "Could not compute the date." });
+  }
+});
+
+// Compute a rule and diarise it in one step, marked source='rule_engine' so its
+// origin stays visible next to hand-diarised dates.
+app.post("/api/matters/:id/diary/from-rule", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { ruleKey, fromDate, days, basis, diesNon } = req.body;
+  try {
+    const owns = await pool.query("select 1 from matters where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]);
+    if (!owns.rowCount) return res.status(404).json({ error: "Matter not found." });
+    const calc = courtRules.applyRule(ruleKey, fromDate, { days, basis, diesNon });
+    const note = `${calc.rule.citation} · ${calc.days} ${calc.basis} days from ${calc.fromDate}`
+      + `${calc.diesNonApplied ? " (dies non applied)" : ""} · ${calc.skippedCount} non-court days skipped`;
+    const r = await pool.query(
+      `insert into matter_diary_entries (tenant_id, matter_id, description, due_date, note, source, created_by)
+       values ($1,$2,$3,$4,$5,'rule_engine',$6) returning *`,
+      [req.user.tenantId, req.params.id, calc.rule.label, calc.dueDate, note, req.user.sub]
+    );
+    res.status(201).json({ entry: diaryEntryFromRow(r.rows[0]), calculation: calc });
+  } catch (err) {
+    if (/Unknown rule|Invalid date|positive whole/.test(err.message || "")) return res.status(400).json({ error: err.message });
+    next(err);
+  }
 });
 
 // ─── MATTER DIARY ────────────────────────────────────────────────────────────

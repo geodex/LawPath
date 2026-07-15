@@ -981,6 +981,35 @@ export async function getMatterFile(matterUuid: string) {
   return request<MatterFile>(`/api/matters/${matterUuid}/file`);
 }
 
+export type CourtRule = {
+  key: string; label: string; days: number;
+  basis: "court" | "calendar"; diesNon: boolean; trigger: string; citation: string;
+};
+
+export type CourtCalc = {
+  fromDate: string; days: number; basis: "court" | "calendar";
+  diesNonApplied: boolean; dueDate: string; skippedCount: number;
+  skipped: { date: string; reason: string }[];
+  rule?: { key: string; label: string; citation: string; trigger: string };
+};
+
+export async function getCourtRules() {
+  return request<{ rules: CourtRule[]; disclaimer: string }>("/api/court-rules");
+}
+
+export async function computeCourtDeadline(input: {
+  fromDate: string; days?: number; basis?: "court" | "calendar"; diesNon?: boolean; ruleKey?: string;
+}) {
+  return request<CourtCalc>("/api/court-rules/compute", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function diariseFromRule(matterUuid: string, input: {
+  ruleKey: string; fromDate: string; days?: number; basis?: "court" | "calendar"; diesNon?: boolean;
+}) {
+  return request<{ entry: MatterDiaryEntry; calculation: CourtCalc }>(
+    `/api/matters/${matterUuid}/diary/from-rule`, { method: "POST", body: JSON.stringify(input) });
+}
+
 export async function createDiaryEntry(matterUuid: string, input: {
   description: string; dueDate: string; note?: string;
   source?: "manual" | "document" | "ai" | "rule_engine"; sourceDocumentId?: string;
