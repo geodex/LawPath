@@ -269,7 +269,14 @@
 
   /* Core palette — Dark Prestige */
   --ink:        #f1f5f9;
-  --muted:      #64748b;
+  /* slate-400, not slate-500. Measured on the rendered app: #64748b was every
+     WCAG AA failure the dark theme had — 3.80:1 on --surface, 3.97 on --panel,
+     4.16 on --paper (need 4.5) — labels, captions and secondary body text.
+     A practising attorney's verbatim review: "too dark, I had to peer closer
+     to my screen." #94a3b8 measures 7.06–7.72:1 on the same surfaces, the same
+     legibility class as the light theme's muted (6.6–7.6), and stays in the
+     slate ramp the palette already uses (--ink is slate-100). */
+  --muted:      #94a3b8;
   --line:       rgba(255, 255, 255, 0.10);
   --paper:      #0a0a0a;
   --panel:      #111111;

@@ -33,7 +33,7 @@ function ProviderIcon({ provider, size = 20 }: { provider: AccountingProvider; s
 function StatusBadge({ status }: { status: AccountingConnection["syncStatus"] }) {
   if (status === "syncing") return <span className="pill" style={{ background: "#dbeafe", color: "#1d4ed8" }}>Syncing…</span>;
   if (status === "error") return <span className="pill" style={{ background: "#ffe4e6", color: "#be123c" }}>Error</span>;
-  return <span className="pill" style={{ background: "#f1f5f9", color: "#64748b" }}>Idle</span>;
+  return <span className="pill" style={{ background: "#f1f5f9", color: "#475569" }}>Idle</span>;
 }
 
 function ExportStatusBadge({ status }: { status: AccountingExportRecord["status"] }) {
@@ -147,7 +147,7 @@ export function AccountingSync({ connections, setConnections, exportLog, setExpo
         <div className="panel-head">
           <span className="eyebrow">Accounting Integration</span>
         </div>
-        <p style={{ margin: 0, color: "var(--text-secondary, #64748b)", lineHeight: 1.6 }}>
+        <p style={{ margin: 0, color: "var(--muted)", lineHeight: 1.6 }}>
           Connect LawPath to your accounting software to sync invoices, trust receipts, time entries and disbursements.
           Sage Pastel Evolution and Xero are most common in South African law firms. CSV export is always available
           without API credentials.
@@ -176,7 +176,7 @@ export function AccountingSync({ connections, setConnections, exportLog, setExpo
                   <ProviderIcon provider={provider} size={22} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600, fontSize: 15 }}>{info.name}</div>
-                    <div style={{ fontSize: 12, color: "var(--text-secondary, #64748b)" }}>{info.description}</div>
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>{info.description}</div>
                   </div>
                   {isCsv ? (
                     <span className="pill" style={{ background: "#dcfce7", color: "#15803d" }}>Always available</span>
@@ -191,7 +191,7 @@ export function AccountingSync({ connections, setConnections, exportLog, setExpo
                 </div>
 
                 {isConnected && conn && (
-                  <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--text-secondary, #64748b)" }}>
+                  <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--muted)" }}>
                     <span>Last sync: {formatDate(conn.lastSyncAt)}</span>
                     <StatusBadge status={conn.syncStatus} />
                     {conn.syncStatus === "error" && conn.errorMessage && (
@@ -343,17 +343,17 @@ export function AccountingSync({ connections, setConnections, exportLog, setExpo
       <div className="panel">
         <div className="panel-head">
           <span className="eyebrow">Export Log</span>
-          <span style={{ fontSize: 12, color: "var(--text-secondary, #64748b)" }}>{exportLog.length} records</span>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>{exportLog.length} records</span>
         </div>
         {exportLog.length === 0 ? (
-          <p style={{ margin: 0, color: "var(--text-secondary, #64748b)", fontSize: 13 }}>No exports yet. Use the export controls above to get started.</p>
+          <p style={{ margin: 0, color: "var(--muted)", fontSize: 13 }}>No exports yet. Use the export controls above to get started.</p>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border, #e2e8f0)" }}>
                   {["Date / Time", "Provider", "Export type", "Records", "Status"].map((h) => (
-                    <th key={h} style={{ textAlign: "left", padding: "8px 10px", color: "var(--text-secondary, #64748b)", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                    <th key={h} style={{ textAlign: "left", padding: "8px 10px", color: "var(--muted)", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
