@@ -1706,7 +1706,7 @@ app.get("/api/time/suggest", authMiddleware, async (req, res, next) => {
   const hhmm = (ts) => { try { return new Date(ts).toISOString().slice(11, 16); } catch { return "--:--"; } };
   try {
     const [me, acts, sw, aiUse, docs, wa] = await Promise.all([
-      pool.query("select name, email from users where id = $1", [uid]).catch(() => ({ rows: [] })),
+      pool.query("select full_name as name, email from users where id = $1", [uid]).catch(() => ({ rows: [] })),
       pool.query(
         `select action, entity_type, details, created_at from activity_log
          where tenant_id = $1 and actor_user_id = $2 and created_at::date = $3::date
@@ -2443,6 +2443,22 @@ app.get("/api/matters", authMiddleware, async (req, res, next) => {
 // defeat the point of the queue.
 const canApprove = (req) => APPROVER_ROLES.includes(req.user.role);
 
+// `update ... returning *` cannot carry the joined user names, so re-read them.
+// Without this an approval comes back from /decide with no decidedByName, which
+// would render as "approved by (blank)".
+async function withApprovalNames(row) {
+  if (!row) return row;
+  try {
+    const r = await pool.query(
+      `select a.*, ru.full_name as requested_by_name, du.full_name as decided_by_name
+       from approval_requests a
+       left join users ru on ru.id = a.requested_by
+       left join users du on du.id = a.decided_by
+       where a.id = $1`, [row.id]);
+    return r.rows[0] || row;
+  } catch { return row; }
+}
+
 function approvalFromRow(row) {
   return {
     id: row.id,
@@ -2477,7 +2493,7 @@ app.get("/api/approvals", authMiddleware, async (req, res, next) => {
     let where = "a.tenant_id = $1";
     if (status !== "all") { params.push(status); where += ` and a.status = $${params.length}`; }
     const r = await pool.query(
-      `select a.*, ru.name as requested_by_name, du.name as decided_by_name
+      `select a.*, ru.full_name as requested_by_name, du.full_name as decided_by_name
        from approval_requests a
        left join users ru on ru.id = a.requested_by
        left join users du on du.id = a.decided_by
@@ -2529,7 +2545,7 @@ app.post("/api/approvals/:id/decide", authMiddleware, async (req, res, next) => 
       [req.user.tenantId, req.user.sub, r.rows[0].id, decision,
        { kind: r.rows[0].kind, title: r.rows[0].title, origin: r.rows[0].origin, selfApproved: r.rows[0].requested_by === req.user.sub }]
     ).catch(() => {});
-    res.json({ approval: approvalFromRow(r.rows[0]) });
+    res.json({ approval: approvalFromRow(await withApprovalNames(r.rows[0])) });
   } catch (error) { next(error); }
 });
 
@@ -2543,7 +2559,7 @@ app.post("/api/approvals/:id/withdraw", authMiddleware, async (req, res, next) =
       [req.params.id, req.user.tenantId, req.user.sub]
     );
     if (!r.rowCount) return res.status(409).json({ error: "Only your own pending request can be withdrawn." });
-    res.json({ approval: approvalFromRow(r.rows[0]) });
+    res.json({ approval: approvalFromRow(await withApprovalNames(r.rows[0])) });
   } catch (error) { next(error); }
 });
 
