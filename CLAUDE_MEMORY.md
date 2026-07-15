@@ -107,6 +107,17 @@ Backend + frontend both done. `src/Billing.tsx` (935 lines) — invoice list, cr
 | `016_invoice_client_email.sql` | ✅ Applied | Invoice client email field (Replit Agent, unreviewed) |
 | `017_invoice_header_fields.sql` | ✅ Applied | Invoice header customization (Replit Agent, unreviewed) |
 | `018_ai_feature_routing.sql` | ✅ Applied | AI features[] column on providers (L4 session) |
+| `019–023` | ✅ Applied | ai_usage_log, FFC verification, SearchWorks, pricing config, corpus title repair |
+| `024_prescription_clock.sql` | ✅ Applied | Prescription Act fields on `litigation_matters` |
+| `025_dots_polling.sql` | ✅ Applied | DOTS barcode/status/draft columns on `conveyancing_matters` |
+| `026_matter_spine.sql` | ✅ Applied | `matter_id` on domain+leaf tables, NOT VALID FKs, `matter_backfill_log` |
+| `027_acting_for.sql` | ⏳ **PENDING DEPLOY** | `acting_for` on litigation + conveyancing matters |
+| `028_approval_queue.sql` | ⏳ **PENDING DEPLOY** | `approval_requests` table |
+| `029_matter_diary.sql` | ⏳ **PENDING DEPLOY** | `matter_diary_entries` — a diary for every matter |
+| `030_document_filing.sql` | ⏳ **PENDING DEPLOY** | Document filing metadata (`matter_ref`, `filed_at`, `filing_source`) |
+
+All 30 verified to apply cleanly in order against a fresh Postgres 16, and 024–030
+are idempotent (safe to re-run).
 
 ---
 
@@ -241,7 +252,7 @@ All resolved. TypeScript compiles with zero errors.
 - Migrations 016 (`invoice_client_email`) and 017 (`invoice_header_fields`) — Replit Agent origin, applied but not reviewed line-by-line
 
 ### 4. Infrastructure / API Keys
-- SAFLII first run on server: `nohup node server/saflii.js --limit 50 --years 5 > logs/saflii-first-run.log 2>&1 &`
+- SAFLII manual run: `node server/saflii.js --queries 95 --top-k 20` (95 queries fits within 100 calls/day Laws.Africa budget)
 - VerifyNow API key: add in Super Admin → Settings → API Keys
 - Yoco live keys: add `sk_live_` + `whsec_` in .env
 - Windeed/Lightstone: simulation active; needs commercial API subscriptions
@@ -290,3 +301,170 @@ db/migrations/
 - **VAT:** 15% SA standard rate. `vat_amount_cents = amount_cents * 0.15`.
 - **Money:** always in ZAR cents (bigint in DB). Display: `R X,XXX.XX`.
 - **Verify before pushing:** always run `npx tsc --noEmit` before committing.
+- **DATE columns:** `server/db.js` sets `types.setTypeParser(1082)` so Postgres
+  `DATE` arrives as a `'YYYY-MM-DD'` **string**, not a JS Date. Mappers rely on
+  this. Do not remove it — see the date bug note below.
+
+---
+
+# SESSION L5 — 2026-07-15 (matter spine, proactive layer, hallucination fix)
+
+## What shipped (all pushed to `main`, HEAD `99b1f6e`)
+
+| Commit | What |
+|---|---|
+| `ae3aa3c` | **Prescription clock** — Prescription Act 68/1969 on litigation matters; Today card (critical <90d) |
+| `c5ac919` | **DOTS auto-polling** — daily sweep of lodged matters; drafts (never sends) client update |
+| `691dbf2` | **AI end-of-day time capture** — `GET /api/time/suggest?date=`; attorney approves every line |
+| `089a734` | Matter-spine design doc → `docs/matter-spine-plan.md` |
+| `b82be48` | **Fix:** case-law corpus stats blank for super admins (missing bypass on `/research-db/corpus`) |
+| `a32ec72` | **Fix:** corpus re-index restricted to platform super admins |
+| `f97ea39` | Matter spine Phase A — migration 026 (additive, NOT VALID FKs) |
+| `f798da4` | Matter spine Phase B — `server/matter-backfill.js` (manual, dry-run first) |
+| `c2d393c` | **`acting_for`** — which side the firm represents (user's catch; see below) |
+| `5bed8c0` | Backfill resolves client from `acting_for` instead of guessing |
+| `791be77` | Spine populates **at creation time** (no legacy data to backfill) |
+| `db6fe43` | **Matter File view** — one page per matter, 6 tabs |
+| `dfe5ee8` | **Conflict check** — professional duty; uses `acting_for` for severity |
+| `0e39bff` | **Approval queue** — one queue; AI drafts land here marked `origin:'ai'` |
+| `ee4c6f8` | **Matter diary** — every matter type, not just litigation |
+| `2c17826` | **Document auto-filing** — party matching; only files on unambiguous match |
+| `c4b622f` | **Fix: 3 real bugs found by running against a real DB** (see below) |
+| `a7f0469` | **Deadline engine** — SA court-day math, Easter computus, dies non |
+| `99b1f6e` | **Hallucination fix** — ground the assistant in the corpus + verify every citation |
+
+## Three decisions the user made that shaped the work
+
+1. **"A practice may act for either the buyer or seller, plaintiff or defendant —
+   can we make it an option a lawyer selects?"** Correct and load-bearing. Nothing
+   recorded which side the firm was on, so the spine would have written the
+   OPPOSING party in as the client. `acting_for` (027) now drives
+   `matters.client_name`/`client_role` — and it is what lets the conflict check
+   tell "we act for them" from "we act against them". Never guess this.
+2. **"I have docker installed"** → a local Postgres found 3 real bugs in 20
+   minutes that tsc/`node --check` cannot see. **Always test against a real DB.**
+3. **Lawyer feedback** (below) → redirected priorities from features to accuracy.
+
+## Bugs found by running against a real database (`c4b622f`)
+
+- **DATE columns mangled, 18 call sites, pre-existing.** node-pg parses `DATE`
+  into a JS Date at local midnight, so `String(row.d).slice(0,10)` gave
+  `"Fri Sep 01"`. Worse: local-midnight `.toISOString()` **shifts the day back**
+  in SAST — a prescription date of `2026-09-01` serialised as `2026-08-31`.
+  Fixed at source in `db.js`.
+- **`GET /api/approvals` returned 500** — users column is `full_name`, not `name`.
+  The whole Approvals page was dead on arrival.
+- **`/api/time/suggest` silently lost the fee earner's name** — same `users.name`
+  mistake, swallowed by its own `.catch()`. A defensive catch hid a real bug.
+
+## Local dev database (set up this session — reuse it)
+
+```bash
+docker run -d --name lawpath-dev-db -e POSTGRES_PASSWORD=devpass \
+  -e POSTGRES_USER=lawpath -e POSTGRES_DB=lawpath_dev -p 55432:5432 postgres:16
+# ports 5432/5433 are taken by the user's other projects — 55432 is ours
+for f in db/migrations/*.sql; do
+  docker exec -i lawpath-dev-db psql -U lawpath -d lawpath_dev -v ON_ERROR_STOP=1 -q < "$f"; done
+```
+`.env` (gitignored, local only): `DATABASE_URL=postgres://lawpath:devpass@localhost:55432/lawpath_dev`,
+`DATABASE_SSL=false`, `SESSION_SECRET=dev-only…`, `PORT=3070` (prod is 3069).
+Start: `node server/index.js`. Kill on Windows: find PID via
+`netstat -ano | grep :3070` then `taskkill //PID <pid> //F` (`pkill` does not work).
+
+## LAWYER FEEDBACK — 2026-07-15 (a practising attorney, ~20 min test)
+
+Delict/tort practitioner. Scenario: client instructed FNB to pay a supplier; the
+invoice was intercepted and altered with fraudulent bank details; payment went to
+the fraudster. He wanted case law on the bank's duty.
+
+**He stopped using the tool at the first fabricated case.** "I lost a little bit
+of faith." Verbatim priorities:
+
+1. **Case-law accuracy (existential).** The assistant invented cases or welded
+   real names onto unrelated facts. He pasted a citation back in and got a
+   summary of something else. → **Fixed in `99b1f6e`** (root cause: the chat
+   never touched the corpus). **Not yet validated by him.**
+2. **"Draft Opinion" button** — he wants research → draft opinion/letter in one
+   step, then he reads the real cases and edits. He hunted the tabs for it.
+3. **Court coverage:** SCA + High Court are what he cares about; Labour Court
+   sometimes; ConCourt only for constitutional issues.
+4. **Research history missing** — he could not find previous sessions. The data
+   IS in `ai_conversations`/`ai_messages`; there is simply no UI to browse it.
+5. **UI too dark** — "I had to peer closer to my screen." He called the platform
+   beautiful but hard to read.
+
+His workflow, worth designing around: **research → draft opinion → go read the
+actual cases on SAFLII/LexisNexis → edit the opinion.** He will always read the
+case himself. The tool's job is to get him to a good draft with real citations —
+not to be trusted blindly.
+
+---
+
+# HANDOFF PROMPT FOR THE NEXT SESSION
+
+> Continue LawPath SA. Read `CLAUDE_MEMORY.md` (this file) fully first, plus
+> `docs/matter-spine-plan.md` and the memory files listed at the top.
+>
+> **State:** `main` @ `99b1f6e`, everything pushed. Migrations **027–030 are
+> pending deploy** (the user runs `PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh`).
+> A local dev Postgres exists — see "Local dev database" above. **Use it. Do not
+> claim anything works without exercising it against a real DB;** three real bugs
+> this session were invisible to tsc.
+>
+> **Guardrails (unchanged):** additive migrations only, never edit an applied one
+> (checksums halt deploy; next number is **031**); `npx tsc --noEmit` clean before
+> every push; one feature per commit + push; the user runs all server/deploy
+> commands; no new npm deps without asking; nothing AI-generated reaches a client
+> without attorney sign-off.
+>
+> **Work queue — in priority order, driven by a practising attorney's feedback:**
+>
+> **[1] Corpus coverage — do this first, it gates everything else.**
+> The hallucination guard (`99b1f6e`) makes the assistant refuse to cite what it
+> cannot verify. That is correct but makes it *feel* worse until the corpus is
+> populated. Ask the user to run `node server/saflii.js --queries 95 --top-k 20`
+> (95 fits the 100 calls/day Laws.Africa budget), then check coverage: how many
+> judgments, which courts, which years. Prioritise **SCA + High Court**. Report
+> real numbers. Consider a corpus-coverage panel so gaps are visible rather than
+> experienced as "the AI is useless".
+>
+> **[2] "Draft Opinion" button.** His #2 ask. Turn a research conversation into a
+> drafted opinion/letter in one step, WITHOUT re-prompting. Must carry the
+> citation verification through — a drafted opinion containing an unverified
+> citation is more dangerous than a chat message, because it looks finished.
+> Route it through the approval queue (`kind:'document'`, `origin:'ai'`). It
+> should file to a matter via the spine.
+>
+> **[3] Research history UI.** The data already exists in `ai_conversations` /
+> `ai_messages` — there is just no way to browse it. Needs: list past
+> conversations, reopen one, continue it. Low effort, real annoyance.
+>
+> **[4] Citation lookup accuracy.** Pasting a citation into research returned an
+> unrelated case. That is the `/api/research-db/search` path (separate from the
+> chat fix). It should detect a citation-shaped query and do an exact citation
+> lookup rather than fuzzy FTS.
+>
+> **[5] Contrast / theme.** "Too dark, I had to peer closer." Do not restyle on
+> taste — measure. Check contrast ratios against WCAG AA (4.5:1 body text) and
+> fix the failures; consider a light mode. `src/styles.css` uses CSS variables,
+> so this is tractable.
+>
+> **Then, remaining roadmap (see `product_roadmap.md`):** client auto-updates on
+> stage transitions (the approval queue now exists to land them in);
+> email-per-matter; intake-to-mandate flow (embed the existing reusable
+> `ConflictCheck` component — it takes `initialClient`/`initialOpposing`/`compact`
+> props for exactly this).
+>
+> **Suggestions of mine worth weighing:**
+> - **Wire the approval queue into the acts it governs.** It currently records
+>   decisions but does not gate invoice-send or trust payments. Approving should
+>   be a precondition the module checks, then marks `actioned`.
+> - **Ask the attorney for a second 20 minutes** once the corpus is indexed. He is
+>   the only real signal available; everything else is guesswork. Ask him
+>   specifically whether the "unverified citation" warning restores his trust.
+> - **Get his eyes on `server/court-rules.js`.** The arithmetic is tested (10/10,
+>   Easter computus verified). The **rule catalogue** (8 entries, day counts and
+>   citations) came from model recall, not from reading the current Uniform Rules.
+>   That needs a practitioner's check before a firm relies on it.
+> - The DOTS poller deliberately does **not** auto-advance pipeline stage — a
+>   scraped status string mutating a live matter felt too risky. Revisit if wanted.
