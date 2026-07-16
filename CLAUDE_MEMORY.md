@@ -1,6 +1,6 @@
 # LawPath SA — Claude Session Memory
 > Load this file at the start of a new chat to restore full context.
-> Last updated: 2026-06-18
+> Last updated: 2026-07-16
 
 ---
 
@@ -115,8 +115,11 @@ Backend + frontend both done. `src/Billing.tsx` (935 lines) — invoice list, cr
 | `028_approval_queue.sql` | ⏳ **PENDING DEPLOY** | `approval_requests` table |
 | `029_matter_diary.sql` | ⏳ **PENDING DEPLOY** | `matter_diary_entries` — a diary for every matter |
 | `030_document_filing.sql` | ⏳ **PENDING DEPLOY** | Document filing metadata (`matter_ref`, `filed_at`, `filing_source`) |
+| `031_corpus_frbr_identity.sql` | ⏳ **PENDING DEPLOY** | `frbr_uri` on corpus docs + unique index (dedupe key) |
+| `032_corpus_quarantine.sql` | ⏳ **PENDING DEPLOY** | Quarantine tables for the 8,955 unnameable corpus rows |
+| `033_laws_africa_usage_log.sql` | ⏳ **PENDING DEPLOY** | Shared daily meter for the Laws.Africa API budget |
 
-All 30 verified to apply cleanly in order against a fresh Postgres 16, and 024–030
+All 33 verified to apply cleanly in order against a fresh Postgres 16, and 024–033
 are idempotent (safe to re-run).
 
 ---
@@ -400,71 +403,164 @@ not to be trusted blindly.
 
 ---
 
+# SESSION L6 — 2026-07-16 (corpus forensics, live research, the attorney's list cleared)
+
+## What shipped (all pushed to `main`, HEAD `9166be9`)
+
+| Commit | What |
+|---|---|
+| `1a131aa` | **Indexer identity fix** — read `metadata.work_frbr_uri` etc.; identity parsed from the FRBR URI, never from prose. Migration 031 (`frbr_uri` + unique index) |
+| `87ee8b1` | **Corpus quarantine** — move (never delete) the ~8,955 unnameable rows; restore replays exactly. Migration 032 |
+| `3bca24d` | **Seed upgrade-in-place** — `corpus-frbr-backfill.js` gives the 504 seeds their FRBR URI; indexer upserts richer text over thin rows |
+| `b69636d` | **Live research** — `live-research.js`: query the KB with the attorney's own words at question time, cache-through, shared metered budget (033), exact citation lookup via `work_frbr_uri` filter |
+| `f8abc83` | Chat grounding merges live + local; ONE API call per message; degrades to local-only |
+| `8991b38` | **[4]** `/api/research-db/search`: citation-shaped query → exact lookup or honest not-found, never fuzzy |
+| `b259f31` | **[2] Draft Opinion/Letter** — one step from conversation to approval queue; verified sources in, draft re-verified out, SCHEDULE OF AUTHORITIES appended to the document itself |
+| `0baba69` | **[3] Research history** — list/reopen/continue; citations RE-verified against today's corpus on reopen |
+| `731f939` | **[5] Contrast** — measured the rendered app: ALL dark-theme AA failures were `--muted #64748b`; now `#94a3b8` (7.1:1). Full-app audit: 0 failures, both themes |
+| `c4c32cb` | Approvals renders `payload.body` — draft endpoint had stored `content` (doc was invisible to its approver); 16-row reading pane |
+| `9166be9` | **Downloads** — PDF (existing letterhead endpoint) + Word (.doc built client-side, no dependency) on any approval carrying a document body |
+
+## THE BIG FINDING — the corpus was manufacturing the hallucinations
+
+The prod corpus held 9,460 rows; **8,955 had no citation, no URL, no reliable
+title/court/year**. Root cause: the Laws.Africa AI-KB returns identity under
+`metadata.*` but `saflii.js` read `item.public_url / item.url / item.title` at
+the TOP level — all `undefined` on every call ever made. Every field needed
+arrived on every response and was discarded; identity was then regex-guessed
+from prose, which welds the FIRST CITED CASE's name onto the row (judgments
+cite judgments). Retrieval preferred those rows (%SCA%/%High Court%), the model
+was told "cite only from SOURCES" and handed sources it could not cite, so it
+fell back on recall → invented citations. `99b1f6e` was necessary, not
+sufficient. Also: dedupe sat inside `if (publicUrl)` → never ran → 81%
+duplicates; the `kbs[0]` fallback pointed at **Ghana**; legislation was filed
+as judgments; every `decision_date` was a fabricated Jan 1.
+
+**Laws.Africa facts (verified in their docs + by probing prod):** full judgment
+text is not sold at ANY tier (KBs return summaries+metadata; the R42k/mo
+Content API is legislation-only). SAFLII and lawlibrary.org.za are Cloudflare-
+blocked to non-browsers — do not try to defeat that. Sandbox = 100 calls/day;
+Build R4,200/mo = 3,000/day of the SAME summaries — upgrade only when real
+usage saturates. Storing retrieved data: verbally approved by their technical
+manager (user's call at project start). The `work_frbr_uri` filter enables
+exact citation lookup. Design accordingly: right case, correct name, working
+link — the attorney reads the judgment himself.
+
+## Operational facts learned the hard way
+
+- **Prod DB access:** no SSH for Claude. Port 22 got the shared office IP
+  fail2ban'd (my fault — serial auth attempts); port 2222 is ProFTPD SFTP, not
+  a shell. Workflow that works: write one bash/psql block, the user pastes it
+  into his `lawpath@liz` session and pastes back the output.
+- **Local verification stack:** dev Postgres (docker `lawpath-dev-db`, port
+  55432 — `docker start lawpath-dev-db` if down); API on 3001 via
+  `.claude/launch.json` (uncommitted); vite on 5000 proxying /api→3001. Test
+  login `history-test@example.co.za` / `dev-test-passw0rd` (dev DB only).
+  **Puppeteer is available** (whatsapp-web.js dep, chromium cached) — used for
+  real-UI tests, WCAG audits (`contrast-audit*.js` in the session scratchpad),
+  and CDP download capture. The in-app browser pane caches modules too hard for
+  dev-server verification; use puppeteer.
+- **House conventions:** approval drafts render from `payload.body` (NOT
+  `content`); `content_tsv` is a GENERATED column — never in an explicit
+  column list (quarantine restore broke on this; filter
+  `is_generated = 'NEVER'`); citation ↔ FRBR URI is a pure transliteration
+  (`[1995] ZACC 3` ↔ `/akn/za/judgment/zacc/1995/3`).
+
+## DEPLOY RUNBOOK — pending, order matters
+
+```bash
+cd /home2/lawpath/app/LawPath
+PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh        # migrations 027–033 + app
+node server/corpus-quarantine.js                   # dry run — read it
+node server/corpus-quarantine.js --commit          # 8,955 rows -> quarantine
+node server/corpus-frbr-backfill.js                # dry run — expect 503/504
+node server/corpus-frbr-backfill.js --commit
+pm2 start lawpath-saflii-indexer && pm2 save       # only AFTER the purge
+```
+Corpus drops 9,460 → 504. That is not a regression: 504 verifiable rows beat
+9,460 anonymous ones, live research self-feeds the corpus from real questions,
+and the seeds upgrade in place as the daily run reaches them. Rollback:
+`node server/corpus-quarantine.js --list` then `--restore <run_id>`.
+
+---
+
 # HANDOFF PROMPT FOR THE NEXT SESSION
 
-> Continue LawPath SA. Read `CLAUDE_MEMORY.md` (this file) fully first, plus
-> `docs/matter-spine-plan.md` and the memory files listed at the top.
+> Continue LawPath SA. Read `CLAUDE_MEMORY.md` (this file) fully first —
+> especially SESSION L6 — plus the memory files listed at the top.
 >
-> **State:** `main` @ `99b1f6e`, everything pushed. Migrations **027–030 are
-> pending deploy** (the user runs `PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh`).
-> A local dev Postgres exists — see "Local dev database" above. **Use it. Do not
-> claim anything works without exercising it against a real DB;** three real bugs
-> this session were invisible to tsc.
+> **State:** `main` @ `9166be9`, everything pushed. Migrations **027–033 pending
+> deploy** (I run deploys: `PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh`, then
+> the corpus runbook in L6 — quarantine, frbr backfill, restart indexer).
+> The attorney's original list [1]–[5] is COMPLETE. Dev stack per L6
+> "Operational facts": dev Postgres on 55432 (docker), API 3001, vite 5000,
+> puppeteer for real-UI verification. **Never claim anything works without
+> exercising it against the real dev DB — and for UI, the real rendered app.**
+> This session's worst bugs (identity discarded at the wrong JSON nesting level;
+> a generated column breaking restore; a payload field the UI never rendered)
+> were all invisible to tsc.
 >
-> **Guardrails (unchanged):** additive migrations only, never edit an applied one
-> (checksums halt deploy; next number is **031**); `npx tsc --noEmit` clean before
-> every push; one feature per commit + push; the user runs all server/deploy
-> commands; no new npm deps without asking; nothing AI-generated reaches a client
-> without attorney sign-off.
+> **Guardrails (unchanged):** additive migrations only, never edit an applied
+> one (next number is **034**); `npx tsc --noEmit` clean before every push; one
+> feature per commit, push, stop and report; I run all server/deploy commands;
+> no new npm deps without asking; nothing AI-generated reaches a client or
+> moves money without attorney sign-off; no SSH to prod — write me blocks to
+> paste.
 >
-> **Work queue — in priority order, driven by a practising attorney's feedback:**
+> **FIRST: nothing is deployed.** Walk me through the L6 runbook and verify
+> with me (corpus counts before/after, a live research question, a citation
+> paste, a drafted opinion downloaded). Then I want the attorney's second 20
+> minutes — his reaction to verified-citation research with real SCA/High Court
+> authority is worth more than any item below and should reorder this list.
 >
-> **[1] Corpus coverage — do this first, it gates everything else.**
-> The hallucination guard (`99b1f6e`) makes the assistant refuse to cite what it
-> cannot verify. That is correct but makes it *feel* worse until the corpus is
-> populated. Ask the user to run `node server/saflii.js --queries 95 --top-k 20`
-> (95 fits the 100 calls/day Laws.Africa budget), then check coverage: how many
-> judgments, which courts, which years. Prioritise **SCA + High Court**. Report
-> real numbers. Consider a corpus-coverage panel so gaps are visible rather than
-> experienced as "the AI is useless".
+> **WORK QUEUE — small-practice-attorney lens (L6 session's product review):
+> the organs exist; build the connective tissue for the three workflows a
+> practice runs every day — new client in, correspondence, money out.**
 >
-> **[2] "Draft Opinion" button.** His #2 ask. Turn a research conversation into a
-> drafted opinion/letter in one step, WITHOUT re-prompting. Must carry the
-> citation verification through — a drafted opinion containing an unverified
-> citation is more dangerous than a chat message, because it looks finished.
-> Route it through the approval queue (`kind:'document'`, `origin:'ai'`). It
-> should file to a matter via the spine.
+> **[A] Intake-to-mandate flow.** The highest-stakes daily moment, currently
+> five separate screens: conflict check → client record → FICA → engagement
+> letter → trust deposit request. Everything exists — `ConflictCheck` takes
+> `initialClient/initialOpposing/compact` props built for this; contracts + PDF
+> + e-signature + approval queue are all live. One guided flow that ends with
+> an engagement letter in the approval queue and files the matter to the spine.
 >
-> **[3] Research history UI.** The data already exists in `ai_conversations` /
-> `ai_messages` — there is just no way to browse it. Needs: list past
-> conversations, reopen one, continue it. Low effort, real annoyance.
+> **[B] Wire the approval queue into the acts it governs.** It records
+> decisions but gates nothing. Invoice-send and trust payments should check for
+> an approval as a precondition, then mark it `actioned`. For trust money the
+> current state is a real risk, not polish: it LOOKS like working sign-off.
 >
-> **[4] Citation lookup accuracy.** Pasting a citation into research returned an
-> unrelated case. That is the `/api/research-db/search` path (separate from the
-> chat fix). It should detect a citation-shaped query and do an exact citation
-> lookup rather than fuzzy FTS.
+> **[C] Client auto-updates on stage transitions.** A conveyancing/litigation
+> stage change drafts a WhatsApp/email into the approval queue
+> (`kind:'client_message'`, `origin:'ai'`) — the DOTS poller already models
+> this pattern. Kills the most repetitive interruption in a small practice.
 >
-> **[5] Contrast / theme.** "Too dark, I had to peer closer." Do not restyle on
-> taste — measure. Check contrast ratios against WCAG AA (4.5:1 body text) and
-> fix the failures; consider a light mode. `src/styles.css` uses CSS variables,
-> so this is tractable.
+> **[D] Email-per-matter.** The biggest missing organ: 80% of a real file is
+> correspondence, so the matter file is hollow without it. Per-matter
+> forwarding address, inbound mail filed to the spine, thread summaries later.
+> Bigger build — needs a design conversation with me first (mail infra).
 >
-> **Then, remaining roadmap (see `product_roadmap.md`):** client auto-updates on
-> stage transitions (the approval queue now exists to land them in);
-> email-per-matter; intake-to-mandate flow (embed the existing reusable
-> `ConflictCheck` component — it takes `initialClient`/`initialOpposing`/`compact`
-> props for exactly this).
+> **[E] Documents on the matter file.** Per-matter upload/store/download (GCS
+> plumbing exists for analyses). An approved drafted opinion should file itself
+> here — closing the loop the L6 downloads feature started.
 >
-> **Suggestions of mine worth weighing:**
-> - **Wire the approval queue into the acts it governs.** It currently records
->   decisions but does not gate invoice-send or trust payments. Approving should
->   be a precondition the module checks, then marks `actioned`.
-> - **Ask the attorney for a second 20 minutes** once the corpus is indexed. He is
->   the only real signal available; everything else is guesswork. Ask him
->   specifically whether the "unverified citation" warning restores his trust.
-> - **Get his eyes on `server/court-rules.js`.** The arithmetic is tested (10/10,
->   Easter computus verified). The **rule catalogue** (8 entries, day counts and
->   citations) came from model recall, not from reading the current Uniform Rules.
->   That needs a practitioner's check before a firm relies on it.
-> - The DOTS poller deliberately does **not** auto-advance pipeline stage — a
->   scraped status string mutating a live matter felt too risky. Revisit if wanted.
+> **[F] Money truths:** disbursements on matters (sheriff/counsel/deeds fees →
+> invoices — small firms leak money here); mandate-cap warning when WIP
+> approaches the client's fee estimate.
+>
+> **[G] Trust/compliance registers:** undertakings register (a missed
+> undertaking is a conduct matter — conveyancers give them daily);
+> practitioner verification of the `server/court-rules.js` catalogue (still
+> model recall, still flagged, arithmetic itself is tested).
+>
+> **Do NOT reach for new AI features** — the assistant is now
+> trustworthy-by-architecture (grounded, live-retrieving, verify-in/verify-out);
+> the gap is practice plumbing.
+>
+> **Open decisions that are mine (the user's), not yours:** default theme for
+> new accounts (dark passes AA now, but light may serve his re-test better);
+> emailing Laws.Africa for written confirmation of the storage OK; Build-plan
+> upgrade only when usage saturates 100 calls/day.
+>
+> **Parked small items:** matter picker on the draft buttons; "file to matter"
+> on approved documents (folds into [E]); corpus coverage panel (counts by
+> court/year from `legal_corpus_documents` — cheap now that identity is real).
