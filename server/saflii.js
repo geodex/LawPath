@@ -540,6 +540,30 @@ async function indexResult(item) {
   return res.rows[0].inserted ? "new" : "upgraded";
 }
 
+// ─── SHARED DAILY BUDGET ─────────────────────────────────────────────────────
+// The Sandbox plan allows 100 calls/day, shared between this indexer's batch
+// and live research (which serves an attorney mid-question). These live here —
+// not in live-research.js, which requires this module — so both consumers read
+// one meter without a require cycle.
+//
+// DAILY_CAP defaults to 90: headroom for clock skew between our day boundary
+// and Laws.Africa's. LIVE_RESERVE is the floor the indexer must leave for live
+// research; the 02:00 cron fires while attorneys sleep, but an unguarded 95-
+// query batch was observed consuming the whole day's budget before 04:00 SAST.
+const DAILY_CAP = Math.max(0, parseInt(process.env.LAWS_AFRICA_DAILY_CAP || "90", 10) || 90);
+const LIVE_RESERVE = Math.max(0, parseInt(process.env.LAWS_AFRICA_LIVE_RESERVE || "25", 10) || 0);
+
+async function callsUsedToday() {
+  const { rows: [r] } = await pool.query(
+    "select count(*)::int as n from laws_africa_usage_log where created_at >= date_trunc('day', now())"
+  );
+  return r.n;
+}
+
+async function budgetRemaining() {
+  return Math.max(0, DAILY_CAP - (await callsUsedToday()));
+}
+
 async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
   const apiKey = process.env.LAWS_AFRICA_API_KEY;
   if (!apiKey) {
@@ -547,6 +571,27 @@ async function runIndexer({ maxQueries = 50, topK = 20 } = {}) {
     console.error("[indexer] Get a free API key at https://platform.laws.africa/api-keys/");
     process.exit(1);
   }
+
+  // The batch takes what is left AFTER the live-research reserve. If a run
+  // already happened today (or live research has been busy), the batch shrinks
+  // or skips — it never pushes the meter into the reserve. The meter itself is
+  // authoritative: if it cannot be read, no unmetered batch is placed.
+  let indexerBudget;
+  try {
+    const remaining = await budgetRemaining();
+    indexerBudget = Math.max(0, remaining - LIVE_RESERVE);
+    console.info(`[indexer] Budget: ${remaining}/${DAILY_CAP} calls left today, ${LIVE_RESERVE} reserved for live research → up to ${indexerBudget} for this batch.`);
+  } catch (err) {
+    console.error(`[indexer] Cannot read the shared budget meter (${err.message}) — refusing to run unmetered.`);
+    await pool.end().catch(() => {});
+    return;
+  }
+  if (indexerBudget <= 0) {
+    console.info("[indexer] No budget left after the live-research reserve — skipping this run.");
+    await pool.end().catch(() => {});
+    return;
+  }
+  maxQueries = Math.min(maxQueries, indexerBudget);
 
   console.info("[indexer] Starting Laws.Africa corpus indexer...");
   console.info(`[indexer] Will run up to ${maxQueries} queries, ${topK} results each.`);
@@ -713,5 +758,6 @@ if (require.main === module) {
 module.exports = {
   runIndexer, QUERY_TOPICS, indexResult, queryKnowledgeBase,
   parseWorkUri, courtFromFrbrCode, citationFromWorkUri, resolveIdentity,
-  LOCALITY_BY_FRBR_CODE
+  LOCALITY_BY_FRBR_CODE,
+  DAILY_CAP, callsUsedToday, budgetRemaining
 };

@@ -27,22 +27,15 @@
 require("dotenv").config();
 
 const { pool } = require("./db");
-const { queryKnowledgeBase, indexResult, resolveIdentity } = require("./saflii");
+// The budget helpers live in saflii.js (which owns the meter insert) so the
+// indexer batch and live research read ONE meter without a require cycle.
+const {
+  queryKnowledgeBase, indexResult, resolveIdentity,
+  DAILY_CAP, callsUsedToday, budgetRemaining
+} = require("./saflii");
 const { frbrUriFromCitation } = require("./corpus-frbr-backfill");
 
 const KB_CODE = "judgments-za";
-const DAILY_CAP = Math.max(0, parseInt(process.env.LAWS_AFRICA_DAILY_CAP || "90", 10) || 90);
-
-async function callsUsedToday() {
-  const { rows: [r] } = await pool.query(
-    "select count(*)::int as n from laws_africa_usage_log where created_at >= date_trunc('day', now())"
-  );
-  return r.n;
-}
-
-async function budgetRemaining() {
-  return Math.max(0, DAILY_CAP - (await callsUsedToday()));
-}
 
 // Corpus-row shape, so grounding's formatSources and the research UI can treat
 // live results exactly like local ones.
