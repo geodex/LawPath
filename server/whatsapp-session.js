@@ -265,9 +265,15 @@ async function resumePersistedSessions() {
   try {
     const fs = require("fs");
     if (!fs.existsSync(SESSIONS_DIR)) return;
-    const dirs = fs.readdirSync(SESSIONS_DIR).filter(d => d.startsWith("tenant-"));
+    // LocalAuth stores each session as session-<clientId>, and our clientId is
+    // tenant-<id> — so the folders are session-tenant-<id>. The old filter
+    // looked for tenant-<id> and never matched anything: resume was a silent
+    // no-op, which surfaced the moment the bridge relied on it (a deploy moved
+    // sessions to the bridge process and every linked firm dropped to
+    // simulation until re-scan).
+    const dirs = fs.readdirSync(SESSIONS_DIR).filter(d => d.startsWith("session-tenant-"));
     for (const dir of dirs) {
-      const tenantId = dir.replace("tenant-", "");
+      const tenantId = dir.replace("session-tenant-", "");
       console.info(`[wa-session] Resuming session for tenant ${tenantId}`);
       initSession(tenantId).catch(err => console.error(`[wa-session] Resume error:`, err.message));
       await new Promise(r => setTimeout(r, 2000)); // stagger startup
