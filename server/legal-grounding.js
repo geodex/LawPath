@@ -186,6 +186,31 @@ function formatSources(docs) {
   ].filter(Boolean).join("\n")).join("\n\n");
 }
 
+// Resolve [S#] tags into the authorities they name. The grounding instruction
+// teaches the model to reference [S#] tags — right for chat, where the UI
+// resolves each tag into a source card, but meaningless in a standalone
+// document: the first drafted opinion in production cited exclusively "[S1]",
+// "[S2]", "[S3]", so it carried no citation a reader could look up and its
+// SCHEDULE OF AUTHORITIES came out empty. The tag numbering is ours
+// (formatSources), so the substitution is mechanical, not model-dependent:
+//   first mention  ->  "Title [2024] ZASCA 90"
+//   repeats        ->  "[2024] ZASCA 90"
+//   tag adjacent to its own citation -> dropped (avoid "…ZASCA 90 [S1]" dupes)
+//   tag with no matching source, or a source with no citation -> dropped; the
+//   claim it decorated is then caught by the draft's re-verification pass.
+function resolveSourceTags(text, sources) {
+  const mentioned = new Set();
+  return String(text || "").replace(/\s*\[S(\d+)\]/g, (tag, nStr, offset, whole) => {
+    const src = sources[parseInt(nStr, 10) - 1];
+    if (!src || !src.citation) return "";
+    const before = normalise(whole.slice(Math.max(0, offset - 220), offset));
+    if (before.includes(normalise(src.citation))) return "";
+    const first = !mentioned.has(src.citation);
+    mentioned.add(src.citation);
+    return ` ${first && src.title ? `${src.title} ${src.citation}` : src.citation}`;
+  });
+}
+
 // The instruction block. Blunt on purpose: a hedged instruction gets hedged
 // compliance, and the failure mode here ends careers.
 function groundingInstruction(hasSources) {
@@ -204,5 +229,5 @@ function groundingInstruction(hasSources) {
 
 module.exports = {
   extractCitations, verifyCitations, retrieveCorpusContext, retrieveGroundingSources,
-  formatSources, groundingInstruction, PREFERRED_COURT_PATTERNS
+  formatSources, groundingInstruction, resolveSourceTags, PREFERRED_COURT_PATTERNS
 };

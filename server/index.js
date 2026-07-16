@@ -1598,6 +1598,10 @@ app.post("/api/ai/conversations/:id/draft", authMiddleware, async (req, res, nex
       ...spec.structure,
       "",
       grounding.groundingInstruction(sources.length > 0),
+      // Chat resolves [S#] tags into source cards; a standalone document cannot.
+      // Overrides rule 4 for this document only — without this the model cites
+      // "[S1]" and the finished opinion carries no citation a reader can look up.
+      "FOR THIS DOCUMENT: in the document text, cite every authority by its exact citation from SOURCES (e.g. [2024] ZASCA 90) — [S#] tags label the SOURCES block only and must NOT appear in the document.",
       sources.length ? grounding.formatSources(sources) : ""
     ].join("\n");
 
@@ -1613,10 +1617,15 @@ app.post("/api/ai/conversations/:id/draft", authMiddleware, async (req, res, nex
       transcript
     ].filter(Boolean).join("\n");
 
-    const drafted = await callAiProviderLogged(provider, apiKey, model, systemPrompt, userPrompt, {
+    let drafted = await callAiProviderLogged(provider, apiKey, model, systemPrompt, userPrompt, {
       tenantId: req.user.tenantId, userId: req.user.sub || null, feature: "drafting"
     });
     if (!drafted || !drafted.trim()) return res.status(502).json({ error: "The AI provider returned an empty draft. Try again." });
+
+    // Belt and braces for the instruction above: any [S#] tag the model leaves
+    // in anyway is resolved mechanically to the authority it names, so the
+    // document that reaches the approval queue never cites a label.
+    drafted = grounding.resolveSourceTags(drafted, sources);
 
     // ── Verify the finished draft, and make the verdict part of the document ─
     const citations = await grounding.verifyCitations(grounding.extractCitations(drafted));
