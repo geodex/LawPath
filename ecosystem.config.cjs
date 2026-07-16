@@ -17,6 +17,28 @@ module.exports = {
       merge_logs: true
     },
     {
+      // WhatsApp bridge — owns every tenant's whatsapp-web.js session (and its
+      // headless Chrome) in a separate process, so a Chrome crash or its memory
+      // can never take down lawpath-api (whose cap is 512M). Listens on
+      // 127.0.0.1:3080; auth shares SESSION_SECRET from .env.
+      // One-time start after first deploy:
+      //   pm2 start ecosystem.config.cjs --only lawpath-whatsapp-bridge && pm2 save
+      name: "lawpath-whatsapp-bridge",
+      script: "server/whatsapp-bridge.js",
+      cwd: "/home2/lawpath/app/LawPath",
+      instances: 1,
+      exec_mode: "fork",
+      env: {
+        NODE_ENV: "production"
+      },
+      time: true,
+      // Chrome per linked tenant runs ~200-300MB; headroom for a few firms.
+      max_memory_restart: "1536M",
+      error_file: "/home2/lawpath/app/LawPath/logs/whatsapp-bridge-error.log",
+      out_file: "/home2/lawpath/app/LawPath/logs/whatsapp-bridge-out.log",
+      merge_logs: true
+    },
+    {
       // SAFLII corpus indexer — runs every Sunday at 02:00
       // Indexes new SA case law from SAFLII into the legal_corpus_documents table.
       // First run: node server/saflii.js --limit 50 --years 5

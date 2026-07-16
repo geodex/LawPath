@@ -3,7 +3,10 @@ require("dotenv").config();
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
-const waSession = require("./whatsapp-session");
+// HTTP client to the standalone bridge (lawpath-whatsapp-bridge) — the
+// whatsapp-web.js sessions and their headless Chromes live in that process,
+// not this one. Same five functions the in-process manager exposed.
+const waSession = require("./whatsapp-client");
 const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
 const { authMiddleware, signToken } = require("./auth");
@@ -3866,7 +3869,7 @@ app.post("/api/whatsapp/send", authMiddleware, async (req, res, next) => {
     const waSettings = await getWhatsAppSettings();
 
     // Priority: 1) QR session (whatsapp-web.js)  2) Meta Cloud API  3) Simulation
-    const qrStatus = waSession.getSessionStatus(req.user.tenantId);
+    const qrStatus = await waSession.getSessionStatus(req.user.tenantId);
 
     if (qrStatus.status === "ready" && phoneNumber) {
       // ── QR session — use connected WhatsApp account ──────────────────────
@@ -3927,7 +3930,7 @@ app.post("/api/whatsapp/contacts", authMiddleware, async (req, res, next) => {
 app.get("/api/whatsapp/qr-status", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
-    const status = waSession.getSessionStatus(req.user.tenantId);
+    const status = await waSession.getSessionStatus(req.user.tenantId);
     res.json(status);
   } catch (error) { next(error); }
 });
