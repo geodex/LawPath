@@ -1,6 +1,6 @@
-import { Banknote, Check, FileText, Loader2, MessageSquare, Sparkles, Timer, Undo2, X } from "lucide-react";
+import { Banknote, Check, Download, FileDown, FileText, Loader2, MessageSquare, Sparkles, Timer, Undo2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { decideApproval, getApprovals, withdrawApproval } from "./api";
+import { decideApproval, downloadDocumentDoc, downloadDocumentPdf, getApprovals, withdrawApproval } from "./api";
 import type { ApprovalRequest } from "./api";
 
 const money = (cents: number) =>
@@ -142,6 +142,32 @@ export function Approvals({
                 // approver must be able to READ what they are signing off.
                 <textarea readOnly value={body} rows={body.length > 600 ? 16 : 4}
                   style={{ width: "100%", marginTop: 10, fontSize: "0.84rem", fontFamily: body.length > 600 ? "var(--font-mono)" : undefined }} />
+              )}
+
+              {body && (
+                // Download regardless of status: the attorney's workflow is to
+                // take the draft into Word, read the authorities, and edit.
+                // The document carries its own guard rails — the "Prepared with
+                // AI assistance / Reviewed and settled by ___" line and the
+                // schedule of authorities with any NOT VERIFIED flags — so the
+                // warning travels with the file. Sign-off is still governed
+                // here; downloading is how the editing gets done.
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button className="ghost small" onClick={async () => {
+                    const r = await downloadDocumentPdf(a.title, body, a.title.replace(/[^a-z0-9\-_ ]/gi, "_").replace(/\s+/g, "-"));
+                    if (r.ok) log(`Downloaded PDF: ${a.title}`);
+                    else showToast("error", "PDF download failed", r.error || "Please try again.");
+                  }}>
+                    <FileDown size={13} /> PDF
+                  </button>
+                  <button className="ghost small" onClick={() => {
+                    const r = downloadDocumentDoc(a.title, body, a.title.replace(/[^a-z0-9\-_ ]/gi, "_").replace(/\s+/g, "-"));
+                    if (r.ok) log(`Downloaded Word document: ${a.title}`);
+                    else showToast("error", "Download failed", "Please try again.");
+                  }}>
+                    <Download size={13} /> Word
+                  </button>
+                </div>
               )}
 
               {a.status === "pending" && (

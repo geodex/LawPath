@@ -564,6 +564,39 @@ export async function downloadDocumentPdf(title: string, body: string, filename:
   }
 }
 
+/**
+ * Download a drafted document as a Word-editable .doc.
+ *
+ * The attorney's workflow is research → draft → READ THE CASES → EDIT. A PDF
+ * cannot be edited; Word is where legal drafting actually happens. Word opens
+ * HTML-based .doc files natively, so this needs no server round-trip and no
+ * dependency — the draft text (including its schedule of authorities) is
+ * wrapped in minimal print-styled HTML and handed to the browser as a file.
+ * Entirely client-side: privileged draft content never leaves the machine.
+ */
+export function downloadDocumentDoc(title: string, body: string, filename: string): { ok: boolean } {
+  try {
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const html = [
+      `<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${esc(title)}</title>`,
+      `<style>body{font-family:'Times New Roman',serif;font-size:12pt;line-height:1.5;margin:2.5cm}pre{font-family:inherit;white-space:pre-wrap;word-wrap:break-word}</style>`,
+      `</head><body><pre>${esc(body)}</pre></body></html>`
+    ].join("");
+    const blob = new Blob(["﻿", html], { type: "application/msword" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = `${filename}.doc`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export async function getInvoicePdfUrl(id: string) {
   return request<{ url: string } | null>(`/api/invoices/${id}/pdf`);
 }
