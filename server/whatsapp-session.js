@@ -85,16 +85,24 @@ async function initSession(tenantId) {
 
   const { Client, LocalAuth } = lib;
 
-  // Detect system Chrome/Chromium — tried in order of preference
+  // Detect system Chrome/Chromium — tried in order of preference.
+  //
+  // Google Chrome (.deb) FIRST, snap chromium LAST: on Ubuntu 22.04
+  // /usr/bin/chromium-browser is a snap shim that passes the test -x probe and
+  // then refuses to launch from a service context ("/system.slice/... is not a
+  // snap cgroup") — the exact failure seen in production. A real Chrome binary
+  // has no snap confinement. Same technique as the working Briza Watch bridge:
+  //   wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  //   sudo dpkg -i google-chrome-stable_current_amd64.deb && sudo apt install -f -y
   const { execSync } = require("child_process");
   const CHROME_CANDIDATES = [
     process.env.PUPPETEER_EXECUTABLE_PATH,        // env override
-    "/usr/bin/chromium-browser",                  // Ubuntu apt
-    "/usr/bin/chromium",                          // Debian/Fedora
-    "/snap/bin/chromium",                         // Ubuntu snap
-    "/usr/bin/google-chrome-stable",              // Google Chrome
+    "/usr/bin/google-chrome-stable",              // Google Chrome (.deb — preferred)
     "/usr/bin/google-chrome",                     // Google Chrome alt
     "/usr/local/bin/chromium",                    // custom install
+    "/usr/bin/chromium",                          // Debian/Fedora apt (real binary)
+    "/usr/bin/chromium-browser",                  // Ubuntu — snap shim, breaks under services
+    "/snap/bin/chromium",                         // Ubuntu snap — same
   ].filter(Boolean);
 
   let executablePath;
@@ -111,15 +119,16 @@ async function initSession(tenantId) {
     console.warn("[wa-session] No system Chrome found — falling back to Puppeteer bundled Chrome.");
   }
 
+  // The flag set the working Briza Watch bridge runs with, plus --disable-gpu.
+  // Deliberately NOT --single-process/--no-zygote: those are container
+  // workarounds that crash modern Chrome at launch on a normal host.
   const puppeteerConfig = {
     headless: true,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--single-process",
-      "--no-zygote"
+      "--disable-gpu"
     ]
   };
   if (executablePath) puppeteerConfig.executablePath = executablePath;
