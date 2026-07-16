@@ -28,12 +28,24 @@ function requireSmtpConfig(settings = {}) {
 function createTransporter(settings = {}) {
   requireSmtpConfig(settings);
   const port = Number(settings.port || smtpPort());
-  const secure = settings.encryption === "SSL" || settings.secure === true || (!settings.encryption && smtpSecure());
+
+  // Implicit TLS is a property of the PORT (465), not of the "encryption"
+  // dropdown. The old line set secure:true whenever the admin picked SSL, so
+  // SSL + port 587 opened a TLS handshake against a plaintext greeting and
+  // OpenSSL failed with "tls_validate_record_header: wrong version number" —
+  // the exact production test-email failure. Port decides the connection
+  // style; the dropdown decides whether STARTTLS is enforced on non-465
+  // ports (SSL/TLS both mean "must encrypt", None leaves nodemailer's
+  // opportunistic STARTTLS in place).
+  const secure = port === 465 || settings.secure === true;
+  const enforceStartTls = !secure &&
+    (settings.encryption === "SSL" || settings.encryption === "TLS" || (!settings.encryption && smtpSecure()));
 
   return nodemailer.createTransport({
     host: settings.host || process.env.SMTP_HOST,
     port,
     secure,
+    ...(enforceStartTls ? { requireTLS: true } : {}),
     auth: {
       user: settings.username || process.env.SMTP_USERNAME,
       pass: settings.password || process.env.SMTP_PASSWORD
@@ -66,4 +78,6 @@ async function sendTransactionalEmail({ to, subject, text, html, tenantFromName,
   return transporter.sendMail(mailOptions);
 }
 
-module.exports = { sendTransactionalEmail };
+// createTransporter is exported for tests — the secure/requireTLS derivation
+// is exactly the kind of logic that only ever fails in production otherwise.
+module.exports = { sendTransactionalEmail, createTransporter };
