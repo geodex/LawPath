@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# whatsapp-web.js pulls in puppeteer, whose postinstall downloads a ~300MB
+# bundled Chromium during npm ci. The server never uses it — WhatsApp sessions
+# launch the system Google Chrome via PUPPETEER_EXECUTABLE_PATH — so skip the
+# download permanently instead of prefixing every deploy by hand.
+export PUPPETEER_SKIP_DOWNLOAD=true
+
 APP_DIR="/home2/lawpath/app/LawPath"
 PUBLIC_DIR="/home2/lawpath/public_html"
 PM2_APP="lawpath-api"
