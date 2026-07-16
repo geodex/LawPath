@@ -6226,10 +6226,12 @@ function clientRowToJson(r) {
     clientType: r.client_type, clientCategory: r.client_category,
     firstName: r.first_name || "", lastName: r.last_name || "", fullName: r.full_name,
     saIdNumber: r.sa_id_number || "", passportNumber: r.passport_number || "",
-    passportCountry: r.passport_country || "", dateOfBirth: r.date_of_birth ? r.date_of_birth.toISOString().slice(0,10) : "",
+    // DATE columns arrive as 'YYYY-MM-DD' strings (db.js type parser 1082) —
+    // calling .toISOString() on them threw and killed the whole clients list.
+    passportCountry: r.passport_country || "", dateOfBirth: r.date_of_birth ? String(r.date_of_birth).slice(0, 10) : "",
     gender: r.gender || "", nationality: r.nationality || "South African", incomeTaxRef: r.income_tax_ref || "",
     registeredName: r.registered_name || "", tradingName: r.trading_name || "",
-    registrationNumber: r.registration_number || "", registrationDate: r.registration_date ? r.registration_date.toISOString().slice(0,10) : "",
+    registrationNumber: r.registration_number || "", registrationDate: r.registration_date ? String(r.registration_date).slice(0, 10) : "",
     vatNumber: r.vat_number || "",
     email: r.email || "", emailAlt: r.email_alt || "", mobile: r.mobile || "",
     phoneLandline: r.phone_landline || "", whatsappNumber: r.whatsapp_number || "",
@@ -6252,7 +6254,7 @@ function clientRowToJson(r) {
     defaultRateCents: r.default_rate_cents || 0, billingEmail: r.billing_email || "",
     paymentTermsDays: r.payment_terms_days || 30, creditLimitCents: r.credit_limit_cents || 0,
     relationshipPartner: r.relationship_partner || "", originatingAttorney: r.originating_attorney || "",
-    clientSince: r.client_since ? r.client_since.toISOString().slice(0,10) : "",
+    clientSince: r.client_since ? String(r.client_since).slice(0, 10) : "",
     referralSource: r.referral_source || "", tags: r.tags || [],
     portalEmail: r.portal_email || "", portalActive: r.portal_active || false,
     internalNotes: r.internal_notes || "",
