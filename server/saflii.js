@@ -290,19 +290,44 @@ const COURT_BY_FRBR_CODE = {
   zatc:      "Tax Court",
   zasct:     "Small Claims Court",
   zaecbhc:   "Eastern Cape High Court, Bhisho",
-  zaecmhc:   "Eastern Cape High Court, Mthatha"
+  zaecmhc:   "Eastern Cape High Court, Mthatha",
+  zalcjhb:   "Labour Court, Johannesburg",
+  zast:      "Special Tribunal"
 };
 
-// /akn/za/judgment/zasca/2025/162  ->  { code: "zasca", year: 2025, number: "162" }
+// AKN jurisdiction element per court code. National courts sit at /akn/za/...;
+// provincial High Courts at /akn/za-<province>/... (the first indexer run under
+// 031 rejected 208 results, most of them High Court judgments, because the URI
+// regex only accepted the national form). Parsing preserves whatever
+// jurisdiction the URI carries; this map is for the OTHER direction — building
+// a URI from a pasted citation, where the citation alone ("[2023] ZAGPJHC 729")
+// does not say which /akn/ jurisdiction the work lives under. Codes absent here
+// are national (fall back to "za").
+const LOCALITY_BY_FRBR_CODE = {
+  zagpphc:  "za-gp",  zagpjhc:  "za-gp",
+  zawchc:   "za-wc",
+  zakzdhc:  "za-kzn", zakzphc:  "za-kzn",
+  zafshc:   "za-fs",
+  zaechc:   "za-ec",  zaecghc:  "za-ec", zaecphc: "za-ec",
+  zaecbhc:  "za-ec",  zaecmhc:  "za-ec",
+  zanwhc:   "za-nw",
+  zanchc:   "za-nc",
+  zampmbhc: "za-mp",
+  zalmpphc: "za-lp"
+};
+
+// /akn/za/judgment/zasca/2025/162     -> { jurisdiction: "za",    code: "zasca",   year: 2025, number: "162" }
+// /akn/za-gp/judgment/zagpjhc/2023/729 -> { jurisdiction: "za-gp", code: "zagpjhc", year: 2023, number: "729" }
 // Anchored and judgment-only on purpose: a legislation URI (/akn/za/act/2013/4)
 // must NOT parse here. The old code hardcoded document_type 'judgment' on every
 // insert, so POPIA was filed as a court decision with a guessed court.
-const WORK_URI_RE = /^\/akn\/za\/judgment\/([a-z0-9-]+)\/(\d{4})\/(\d+)\b/i;
+// Jurisdiction is za or za-<locality> only: /akn/gh/... (Ghana) must not parse.
+const WORK_URI_RE = /^\/akn\/(za(?:-[a-z]{2,3})?)\/judgment\/([a-z0-9-]+)\/(\d{4})\/(\d+)\b/i;
 
 function parseWorkUri(uri) {
   const m = WORK_URI_RE.exec(String(uri || "").trim());
   if (!m) return null;
-  return { code: m[1].toLowerCase(), year: parseInt(m[2], 10), number: m[3] };
+  return { jurisdiction: m[1].toLowerCase(), code: m[2].toLowerCase(), year: parseInt(m[3], 10), number: m[4] };
 }
 
 function courtFromFrbrCode(code) {
@@ -353,7 +378,9 @@ function resolveIdentity(item) {
   // undefined on every call, for every row ever indexed.
   const parsed = parseWorkUri(md.work_frbr_uri);
   if (!parsed) return { ok: false, reason: `no parsable judgment work URI (${md.work_frbr_uri || "absent"})` };
-  if (md.frbr_country && String(md.frbr_country).toLowerCase() !== "za") return { ok: false, reason: `not SA (${md.frbr_country})` };
+  // frbr_country may carry the locality ("za-gp") on provincial judgments.
+  const country = String(md.frbr_country || "").toLowerCase();
+  if (country && country !== "za" && !country.startsWith("za-")) return { ok: false, reason: `not SA (${md.frbr_country})` };
   if (md.frbr_doctype && String(md.frbr_doctype).toLowerCase() !== "judgment") return { ok: false, reason: `not a judgment (${md.frbr_doctype})` };
   if (!String(md.title || "").trim()) return { ok: false, reason: "no title in metadata" };
   if (!text.trim()) return { ok: false, reason: "no content text" };
@@ -372,7 +399,10 @@ function resolveIdentity(item) {
   return {
     ok: true,
     doc: {
-      frbrUri:  `/akn/za/judgment/${parsed.code}/${parsed.year}/${parsed.number}`,
+      // The jurisdiction the URI arrived with, preserved — re-assembling it as
+      // /akn/za/... would store an identity the KB itself does not use, and the
+      // exact-lookup filter (work_frbr_uri) would never match it again.
+      frbrUri:  `/akn/${parsed.jurisdiction}/judgment/${parsed.code}/${parsed.year}/${parsed.number}`,
       title:    String(md.title).trim(),
       citation: citationFromWorkUri(parsed),
       court:    courtFromFrbrCode(parsed.code),
@@ -682,5 +712,6 @@ if (require.main === module) {
 // why it went ~9,000 rows without anyone noticing it was discarding every field.
 module.exports = {
   runIndexer, QUERY_TOPICS, indexResult, queryKnowledgeBase,
-  parseWorkUri, courtFromFrbrCode, citationFromWorkUri, resolveIdentity
+  parseWorkUri, courtFromFrbrCode, citationFromWorkUri, resolveIdentity,
+  LOCALITY_BY_FRBR_CODE
 };

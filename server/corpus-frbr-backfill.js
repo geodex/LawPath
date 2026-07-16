@@ -29,6 +29,7 @@
 require("dotenv").config();
 
 const { pool } = require("./db");
+const { LOCALITY_BY_FRBR_CODE } = require("./saflii");
 
 // "[1995] ZACC 3" -> { code: "zacc", year: 1995, number: "3" }
 // Anchored: a citation with anything extra ("[2001] ZACC Doc 26") does not parse
@@ -39,7 +40,11 @@ const CITATION_RE = /^\[(\d{4})\]\s+([A-Z]+)\s+(\d+)$/;
 function frbrUriFromCitation(citation) {
   const m = CITATION_RE.exec(String(citation || "").trim());
   if (!m) return null;
-  return `/akn/za/judgment/${m[2].toLowerCase()}/${m[1]}/${m[3]}`;
+  const code = m[2].toLowerCase();
+  // Provincial High Court works live under /akn/za-<province>/...; the court
+  // code implies which. National courts (absent from the map) sit under /akn/za/.
+  const jurisdiction = LOCALITY_BY_FRBR_CODE[code] || "za";
+  return `/akn/${jurisdiction}/judgment/${code}/${m[1]}/${m[3]}`;
 }
 
 async function main() {
