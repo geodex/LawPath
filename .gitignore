@@ -8,3 +8,10 @@ vite-dev.log
 vite-dev.err.log
 logs/
 *.local
+
+# WhatsApp bridge runtime state (whatsapp-web.js) — session credentials and
+# Chromium cache. Never committed; deploy.sh's dirty-worktree check must not
+# trip over them.
+whatsapp-sessions/
+.wwebjs_cache/
+.wwebjs_auth/
