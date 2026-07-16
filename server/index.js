@@ -1508,7 +1508,9 @@ function buildAuthoritiesSchedule(citations) {
   if (!citations.length) {
     return [
       "",
-      "──────────────────────────────────────────────",
+      // ASCII on purpose: box-drawing characters are not in PDFKit's WinAnsi
+      // fonts and rendered as "%&%&%&..." on the downloaded PDF.
+      "----------------------------------------------",
       "SCHEDULE OF AUTHORITIES",
       "This draft cites no case law. If authority is needed, run a corpus search and re-draft.",
       ""
@@ -1516,7 +1518,7 @@ function buildAuthoritiesSchedule(citations) {
   }
   const lines = [
     "",
-    "──────────────────────────────────────────────",
+    "----------------------------------------------",
     "SCHEDULE OF AUTHORITIES",
     "Each citation in this draft, verified against the firm's corpus:",
     ""
