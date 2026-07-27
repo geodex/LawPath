@@ -469,6 +469,44 @@ export async function searchCipc(query: string) {
 
 // ─── DOCUMENT INTELLIGENCE ───────────────────────────────────────────────────
 
+export type DocumentComparison = {
+  id: string;
+  matterId: string | null;
+  title: string;
+  focus: string;
+  documentIds: string[];
+  documentNames: string[];
+  status: "Queued" | "Analysing" | "Complete" | "Failed";
+  issues: {
+    topic: string;
+    severity: "high" | "medium" | "low";
+    divergence: string;
+    findings: { doc: string; label: string; value: string; note: string }[];
+  }[];
+  dateConflicts: { description: string; doc: string; label: string; date: string; conflictsWith: string; note: string }[];
+  anomalies: string[];
+  notes: string;
+  summary: string;
+  aiModel: string;
+  createdAt: string;
+  completedAt: string;
+};
+
+export async function getDocumentComparisons() {
+  return request<{ comparisons: DocumentComparison[] }>("/api/documents/comparisons");
+}
+
+export async function compareDocuments(input: { analysisIds: string[]; focus?: string; matterId?: string }) {
+  return request<{ comparison: DocumentComparison }>("/api/documents/compare", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteDocumentComparison(id: string) {
+  return request<{ ok: true }>(`/api/documents/comparisons/${id}`, { method: "DELETE" });
+}
+
 export async function getDocumentAnalyses() {
   return request<{ analyses: DocumentAnalysis[] }>("/api/documents/analyses");
 }

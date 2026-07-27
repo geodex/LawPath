@@ -4099,7 +4099,12 @@ function docAnalysisFromRow(row) {
     matterId: row.matter_id || null, matterRef: row.matter_ref || "",
     filedAt: row.filed_at ? new Date(row.filed_at).toISOString() : "",
     filingSource: row.filing_source || "",
-    authorities: row.authorities || [] };
+    authorities: row.authorities || [],
+    // Whether this document can take part in a comparison. Documents analysed
+    // before 037 kept no source text; the UI greys their checkbox rather than
+    // letting a comparison silently omit them.
+    hasText: Boolean(row.extracted_text),
+    textTruncated: Boolean(row.text_truncated) };
 }
 
 // ─── DOCUMENT AUTO-FILING ────────────────────────────────────────────────────
@@ -4835,9 +4840,13 @@ ${text}
 ${parsed.summary || ""}`
           : (parsed.summary || "");
 
+        // Keep the source text (037). Without it a document cannot take part
+        // in a comparison, cannot be re-analysed after a prompt improvement,
+        // and cannot answer "where does it actually say that?".
         await pool.query(
-          "update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, authorities=$10, analysed_at=now() where id=$1",
-          [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], summaryText, model, JSON.stringify(authorities)]
+          "update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, authorities=$10, extracted_text=$11, extracted_chars=$12, text_truncated=$13, analysed_at=now() where id=$1",
+          [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], summaryText, model, JSON.stringify(authorities),
+           text, originalChars || text.length, Boolean(truncated)]
         );
 
         // Auto-file from the extracted parties, but only if the uploader did not
@@ -4883,6 +4892,244 @@ app.delete("/api/documents/analyses/:id", authMiddleware, async (req, res, next)
   try {
     const result = await pool.query("delete from document_analyses where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]);
     if (!result.rowCount) return res.status(404).json({ error: "Analysis not found." });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// ─── COMPARATIVE ANALYSIS ────────────────────────────────────────────────────
+// A practitioner working a client's bundle is not asking "what does this
+// document say?" — single-document analysis already answers that. She is
+// asking "where do these DISAGREE?": a renewal term that changed between two
+// versions of the same relationship, an escalation clause nobody re-read, a
+// spreadsheet date that contradicts the contract it tracks. The finding IS the
+// divergence, so it cannot come from analysing documents one at a time.
+//
+// Runs on documents ALREADY uploaded — the source text is kept since 037, so
+// nothing is re-uploaded and no second AI extraction is paid for.
+
+const COMPARE_MAX_DOCS = 12;
+// Total characters of source text across the whole comparison. ~600K chars is
+// ~150K tokens, comfortably inside Opus 4.8's 1M window with room for the
+// instructions and a long structured answer. Split evenly, so comparing three
+// contracts gives each 200K and comparing twelve gives each 50K.
+const COMPARE_TOTAL_CHARS = Math.max(
+  50_000,
+  parseInt(process.env.COMPARE_TOTAL_CHARS || "600000", 10) || 600_000
+);
+
+function comparisonFromRow(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id || null,
+    title: row.title,
+    focus: row.focus || "",
+    documentIds: row.document_ids || [],
+    documentNames: row.document_names || [],
+    status: row.status,
+    issues: row.issues || [],
+    dateConflicts: row.date_conflicts || [],
+    anomalies: row.anomalies || [],
+    notes: row.notes || "",
+    summary: row.summary || "",
+    aiModel: row.ai_model || "",
+    createdAt: new Date(row.created_at).toISOString(),
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : ""
+  };
+}
+
+app.get("/api/documents/comparisons", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query(
+      "select * from document_comparisons where tenant_id = $1 order by created_at desc limit 50",
+      [req.user.tenantId]
+    );
+    res.json({ comparisons: r.rows.map(comparisonFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/documents/comparisons/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query(
+      "select * from document_comparisons where id = $1 and tenant_id = $2",
+      [req.params.id, req.user.tenantId]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Comparison not found." });
+    res.json({ comparison: comparisonFromRow(r.rows[0]) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/documents/compare", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const ids = Array.isArray(req.body.analysisIds) ? req.body.analysisIds.filter(Boolean) : [];
+  const focus = String(req.body.focus || "").trim().slice(0, 1000);
+  const matterId = req.body.matterId || null;
+
+  if (ids.length < 2) return res.status(400).json({ error: "Select at least two documents to compare." });
+  if (ids.length > COMPARE_MAX_DOCS) {
+    return res.status(400).json({ error: `Compare at most ${COMPARE_MAX_DOCS} documents at once. Narrow the selection — a comparison across more than that produces a matrix no one can read.` });
+  }
+
+  try {
+    const docs = (await pool.query(
+      `select id, file_name, document_type, extracted_text, extracted_chars, text_truncated, key_dates, matter_id
+         from document_analyses
+        where id = any($1::uuid[]) and tenant_id = $2
+        order by array_position($1::uuid[], id)`,
+      [ids, req.user.tenantId]
+    )).rows;
+
+    if (docs.length !== ids.length) {
+      return res.status(404).json({ error: "One or more documents were not found on this firm's file." });
+    }
+    // Documents analysed before 037 have no stored text. Name them rather than
+    // silently comparing a subset — a comparison that quietly skipped a
+    // contract would be worse than no comparison.
+    const missing = docs.filter(d => !d.extracted_text || !d.extracted_text.trim());
+    if (missing.length) {
+      return res.status(409).json({
+        error: `These were analysed before full text was retained, so there is nothing to compare against: ${missing.map(d => d.file_name).join(", ")}. Re-upload them and they will be included.`
+      });
+    }
+
+    const { provider, apiKey, model } = await getAiForFeature("document-intelligence");
+    if (!apiKey) return res.status(503).json({ error: "No AI provider is configured. Add a key under Settings → API keys." });
+
+    const created = await pool.query(
+      `insert into document_comparisons (tenant_id, matter_id, title, focus, document_ids, document_names, status, created_by)
+       values ($1,$2,$3,$4,$5,$6,'Analysing',$7) returning *`,
+      [req.user.tenantId, matterId || docs.find(d => d.matter_id)?.matter_id || null,
+       `Comparison of ${docs.length} documents`.slice(0, 300), focus || null,
+       docs.map(d => d.id), docs.map(d => d.file_name), req.user.sub]
+    );
+    const comparison = created.rows[0];
+
+    // Respond immediately; the analysis continues in the background and the
+    // register polls, exactly like single-document analysis.
+    res.status(201).json({ comparison: comparisonFromRow(comparison) });
+
+    (async () => {
+      try {
+        const perDoc = Math.floor(COMPARE_TOTAL_CHARS / docs.length);
+        const blocks = docs.map((d, i) => {
+          const body = String(d.extracted_text || "");
+          const clipped = body.length > perDoc;
+          const dates = Array.isArray(d.key_dates) ? d.key_dates : [];
+          return [
+            `───── [D${i + 1}] ${d.file_name}${d.document_type ? ` (${d.document_type})` : ""} ─────`,
+            dates.length ? `Key dates previously extracted: ${dates.map(x => `${x.label || "?"}=${x.date || "?"}`).join("; ")}` : "",
+            clipped ? `[NOTE: showing the first ${perDoc} of ${body.length} characters of this document]` : "",
+            body.slice(0, perDoc)
+          ].filter(Boolean).join("\n");
+        }).join("\n\n");
+
+        const systemPrompt = [
+          "You are a senior South African attorney comparing several documents from ONE client's file. They were drafted at different times by different hands and are NOT expected to be consistent — finding where they disagree is the entire job.",
+          "",
+          "Report ONLY differences you can point to in the supplied text. Quote the actual wording or value from each document you cite. Never infer a term that is not written, and never report a difference you cannot evidence — an invented inconsistency sends an attorney to argue a point that does not exist.",
+          "Where documents genuinely agree on a material term, do not manufacture an issue for it.",
+          "",
+          "Pay specific attention to:",
+          "- the same commercial term expressed differently across documents (rent, escalation, notice periods, renewal, termination, payment terms, interest, penalties, indemnities, jurisdiction, breach and cure periods)",
+          "- parties named inconsistently (an entity vs its trading name, a changed registration number, a signatory who differs between documents)",
+          "- DATES: where a spreadsheet's dates contradict the dates in a contract it appears to track, say so explicitly and give both values. This cross-check matters as much as the clause comparison.",
+          "- amounts and calculations that do not reconcile between a schedule and the agreement it supports (including VAT at 15%)",
+          "- a term present in some documents and conspicuously absent from others",
+          "",
+          "Return ONLY valid JSON (no prose, no markdown fences):",
+          '{"issues":[{"topic":"short label","severity":"high|medium|low","divergence":"what differs, in one or two sentences","findings":[{"doc":"D1","value":"the actual wording or value in that document","note":"optional"}]}],',
+          '"dateConflicts":[{"description":"what the date governs","doc":"D2","date":"YYYY-MM-DD or as written","conflictsWith":"D1","note":"what the other document says"}],',
+          '"anomalies":["anything odd that is not a clause-by-clause difference — a missing signature page, an unsigned amendment, a document that appears superseded"],',
+          '"notes":"full working notes for the attorney: what you compared, what you could not determine from the text supplied, and what to check next",',
+          '"summary":"3-5 sentences an attorney can read first"}',
+          "",
+          "Use the [D1], [D2] labels exactly as given. If you find no genuine divergence, return empty arrays and say so in the summary — that is a valid and useful answer."
+        ].join("\n");
+
+        const userPrompt = [
+          focus ? `THE ATTORNEY ASKED YOU TO FOCUS ON: ${focus}\n` : "",
+          `${docs.length} DOCUMENTS FROM ONE CLIENT'S FILE:\n`,
+          blocks
+        ].filter(Boolean).join("\n");
+
+        let aiText = "";
+        try {
+          aiText = await callAiProviderLogged(provider, apiKey, model, systemPrompt, userPrompt, {
+            tenantId: req.user.tenantId, userId: req.user.sub || null, feature: "document-intelligence"
+          });
+        } catch (err) {
+          await pool.query(
+            "update document_comparisons set status='Failed', summary=$2 where id=$1",
+            [comparison.id, `${provider} request failed: ${err.message}. Comparing ${docs.length} full documents is a large request — try fewer documents, or check the model and key under Settings → API keys.`]
+          );
+          return;
+        }
+
+        const m = String(aiText || "").match(/\{[\s\S]*\}/);
+        if (!m) {
+          await pool.query(
+            "update document_comparisons set status='Failed', summary=$2 where id=$1",
+            [comparison.id, "The AI did not return a structured comparison. Try again, or reduce the number of documents."]
+          );
+          return;
+        }
+        let parsed;
+        try { parsed = JSON.parse(m[0]); } catch {
+          await pool.query(
+            "update document_comparisons set status='Failed', summary=$2 where id=$1",
+            [comparison.id, "The AI returned a malformed comparison. Try again."]
+          );
+          return;
+        }
+
+        // Resolve [D#] labels back to real file names so the stored result
+        // reads correctly on its own, and drop any label the model invented.
+        const nameFor = (label) => {
+          const idx = parseInt(String(label || "").replace(/[^0-9]/g, ""), 10) - 1;
+          return docs[idx] ? docs[idx].file_name : null;
+        };
+        const issues = (Array.isArray(parsed.issues) ? parsed.issues : []).map(iss => ({
+          topic: String(iss?.topic || "").slice(0, 300),
+          severity: ["high", "medium", "low"].includes(iss?.severity) ? iss.severity : "medium",
+          divergence: String(iss?.divergence || "").slice(0, 2000),
+          findings: (Array.isArray(iss?.findings) ? iss.findings : [])
+            .map(f => ({ doc: nameFor(f?.doc), label: String(f?.doc || ""), value: String(f?.value || "").slice(0, 2000), note: String(f?.note || "").slice(0, 500) }))
+            .filter(f => f.doc)
+        })).filter(iss => iss.topic && iss.findings.length);
+
+        const dateConflicts = (Array.isArray(parsed.dateConflicts) ? parsed.dateConflicts : []).map(dc => ({
+          description: String(dc?.description || "").slice(0, 500),
+          doc: nameFor(dc?.doc), label: String(dc?.doc || ""),
+          date: String(dc?.date || "").slice(0, 100),
+          conflictsWith: nameFor(dc?.conflictsWith) || String(dc?.conflictsWith || ""),
+          note: String(dc?.note || "").slice(0, 1000)
+        })).filter(dc => dc.description && dc.doc);
+
+        await pool.query(
+          `update document_comparisons
+              set status='Complete', issues=$2, date_conflicts=$3, anomalies=$4,
+                  notes=$5, summary=$6, ai_model=$7, completed_at=now()
+            where id=$1`,
+          [comparison.id, JSON.stringify(issues), JSON.stringify(dateConflicts),
+           (Array.isArray(parsed.anomalies) ? parsed.anomalies : []).map(a => String(a).slice(0, 1000)),
+           String(parsed.notes || "").slice(0, 20000), String(parsed.summary || "").slice(0, 5000), model]
+        );
+      } catch (e) {
+        await pool.query(
+          "update document_comparisons set status='Failed', summary=$2 where id=$1",
+          [comparison.id, `Comparison pipeline error: ${e.message || "Unknown error"}.`]
+        ).catch(() => {});
+      }
+    })();
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/documents/comparisons/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query("delete from document_comparisons where id=$1 and tenant_id=$2", [req.params.id, req.user.tenantId]);
+    if (!r.rowCount) return res.status(404).json({ error: "Comparison not found." });
     res.json({ ok: true });
   } catch (error) { next(error); }
 });

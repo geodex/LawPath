@@ -1,7 +1,7 @@
-import { AlertTriangle, CalendarPlus, CheckCircle2, FileSearch, FileText, FolderOpen, Loader2, RefreshCw, Scale, Sparkles, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, CalendarPlus, CheckCircle2, Columns3, FileSearch, FileText, FolderOpen, Loader2, RefreshCw, Scale, Sparkles, Trash2, Upload, X } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { createDiaryEntry, deleteDocumentAnalysis, fileDocumentToMatter, getDocumentAnalyses, getDocumentMatterSuggestions, submitDocumentForAnalysis } from "./api";
-import type { MatterSuggestion } from "./api";
+import { compareDocuments, createDiaryEntry, deleteDocumentAnalysis, deleteDocumentComparison, fileDocumentToMatter, getDocumentAnalyses, getDocumentComparisons, getDocumentMatterSuggestions, submitDocumentForAnalysis } from "./api";
+import type { DocumentComparison, MatterSuggestion } from "./api";
 import type { DocumentAnalysis, DocumentAuthorityMatch } from "./types";
 
 /**
@@ -162,10 +162,152 @@ function StatusPill({ status }: { status: DocumentAnalysis["analysisStatus"] }) 
   return <span className={cls} data-status={key}>{status}</span>;
 }
 
+const SEVERITY_COLOUR: Record<string, string> = {
+  high: "var(--rose)", medium: "var(--gold)", low: "var(--muted)"
+};
+
+/**
+ * One comparison, ordered the way an attorney reads it: summary first, then the
+ * date conflicts (the cross-check she asked for by name, and the kind of error
+ * that costs a deadline), then clause divergences, then anomalies, then the
+ * full working notes.
+ *
+ * Each divergence shows the ACTUAL wording from each document side by side. A
+ * comparison that only said "these differ on notice periods" would send her
+ * back into both contracts to find out how — which is the work she was trying
+ * to avoid.
+ */
+function ComparisonResult({ c, onDelete }: { c: DocumentComparison; onDelete: (id: string) => void }) {
+  const [showNotes, setShowNotes] = useState(false);
+  const running = c.status === "Queued" || c.status === "Analysing";
+
+  return (
+    <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <Columns3 size={15} color="var(--green)" />
+        <strong style={{ fontSize: "0.9rem" }}>{c.documentNames.join("  ·  ")}</strong>
+        <StatusPill status={c.status} />
+        <button className="ghost small" onClick={() => onDelete(c.id)} style={{ marginLeft: "auto", color: "var(--muted)" }}>
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      {c.focus && (
+        <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8 }}>Focus: {c.focus}</div>
+      )}
+
+      {running && (
+        <div style={{ fontSize: "0.85rem", color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+          <Loader2 size={13} style={{ animation: "spin 0.8s linear infinite" }} />
+          Reading {c.documentNames.length} documents against each other…
+        </div>
+      )}
+
+      {c.status === "Failed" && (
+        <div className="doc-risk-item">
+          <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+          <span>{c.summary || "The comparison failed."}</span>
+        </div>
+      )}
+
+      {c.status === "Complete" && (
+        <>
+          {c.summary && <p style={{ fontSize: "0.88rem", marginTop: 0 }}>{c.summary}</p>}
+
+          {c.dateConflicts.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <h4 style={{ margin: "0 0 6px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--rose)" }}>
+                Date conflicts ({c.dateConflicts.length})
+              </h4>
+              {c.dateConflicts.map((d, i) => (
+                <div key={i} className="doc-risk-item" style={{ display: "block" }}>
+                  <strong>{d.description}</strong>
+                  <div style={{ fontSize: "0.82rem", marginTop: 2 }}>
+                    {d.doc}: <strong>{d.date}</strong>
+                    {d.conflictsWith ? <> — conflicts with {d.conflictsWith}</> : null}
+                  </div>
+                  {d.note && <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{d.note}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {c.issues.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <h4 style={{ margin: "0 0 6px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
+                Where the documents differ ({c.issues.length})
+              </h4>
+              {c.issues.map((iss, i) => (
+                <div key={i} style={{ borderLeft: "3px solid " + (SEVERITY_COLOUR[iss.severity] || "var(--line)"), paddingLeft: 10, marginBottom: 12 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: "0.88rem" }}>{iss.topic}</strong>
+                    <span style={{ fontSize: "0.72rem", textTransform: "uppercase", color: SEVERITY_COLOUR[iss.severity] || "var(--muted)", fontWeight: 700 }}>
+                      {iss.severity}
+                    </span>
+                  </div>
+                  {iss.divergence && <div style={{ fontSize: "0.84rem", margin: "2px 0 6px" }}>{iss.divergence}</div>}
+                  {iss.findings.map((f, j) => (
+                    <div key={j} style={{ fontSize: "0.82rem", marginBottom: 4 }}>
+                      <span style={{ color: "var(--muted)" }}>{f.doc}:</span> {f.value}
+                      {f.note && <span style={{ color: "var(--muted)" }}> — {f.note}</span>}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {c.anomalies.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <h4 style={{ margin: "0 0 6px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--gold)" }}>
+                Anomalies
+              </h4>
+              {c.anomalies.map((a, i) => (
+                <div key={i} className="doc-sa-law-item">
+                  <span style={{ flexShrink: 0 }}>!</span><span>{a}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!c.issues.length && !c.dateConflicts.length && !c.anomalies.length && (
+            <p style={{ fontSize: "0.86rem", color: "var(--muted)" }}>
+              No divergences were found between these documents on the terms compared. That is a finding, not a failure — but read the working notes for what was and was not covered.
+            </p>
+          )}
+
+          {c.notes && (
+            <>
+              <button className="ghost small" onClick={() => setShowNotes(v => !v)}>
+                {showNotes ? "Hide" : "Show"} full working notes
+              </button>
+              {showNotes && (
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.82rem", marginTop: 8, fontFamily: "inherit" }}>{c.notes}</pre>
+              )}
+            </>
+          )}
+
+          <p className="doc-attorney-review" style={{ marginTop: 12 }}>
+            AI-generated comparison. Every difference reported must be checked against the documents themselves before it is relied on or put to a client.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: Props) {
   const onAnalysisUpdated = (updated: DocumentAnalysis) =>
     setAnalyses(prev => prev.map(x => x.id === updated.id ? updated : x));
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Comparative analysis: which documents are ticked, and the comparisons run
+  // so far. Selection lives here (not in a modal) so the attorney can keep
+  // browsing and expanding documents while building up a set.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [comparisons, setComparisons] = useState<DocumentComparison[]>([]);
+  const [comparing, setComparing] = useState(false);
+  const [compareFocus, setCompareFocus] = useState("");
+  const [openComparisonId, setOpenComparisonId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -202,6 +344,59 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
     }
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [hasPending, setAnalyses]);
+
+  // Comparisons load once and then poll only while one is still running —
+  // a comparison over several full contracts takes a while.
+  const comparisonPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const comparisonPending = comparisons.some(c => c.status === "Queued" || c.status === "Analysing");
+
+  useEffect(() => {
+    getDocumentComparisons().then(r => setComparisons(r.comparisons)).catch(() => { /* non-fatal */ });
+  }, []);
+
+  useEffect(() => {
+    if (comparisonPending && !comparisonPollRef.current) {
+      comparisonPollRef.current = setInterval(async () => {
+        try { setComparisons((await getDocumentComparisons()).comparisons); } catch { /* retry */ }
+      }, 5000);
+    }
+    if (!comparisonPending && comparisonPollRef.current) {
+      clearInterval(comparisonPollRef.current);
+      comparisonPollRef.current = null;
+    }
+    return () => { if (comparisonPollRef.current) { clearInterval(comparisonPollRef.current); comparisonPollRef.current = null; } };
+  }, [comparisonPending]);
+
+  function toggleSelected(id: string) {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  async function runComparison() {
+    if (selectedIds.length < 2) return;
+    setComparing(true);
+    try {
+      const r = await compareDocuments({ analysisIds: selectedIds, focus: compareFocus.trim() || undefined });
+      setComparisons(prev => [r.comparison, ...prev]);
+      setOpenComparisonId(r.comparison.id);
+      setSelectedIds([]);
+      setCompareFocus("");
+      log(`Comparing ${r.comparison.documentNames.length} documents`);
+      showToast("info", "Comparison started", "Reading the documents against each other — this takes a minute for long contracts.");
+    } catch (error) {
+      showToast("error", "Could not compare", error instanceof Error ? error.message : "Please try again.");
+    }
+    setComparing(false);
+  }
+
+  async function removeComparison(id: string) {
+    try {
+      await deleteDocumentComparison(id);
+      setComparisons(prev => prev.filter(c => c.id !== id));
+      if (openComparisonId === id) setOpenComparisonId(null);
+    } catch {
+      showToast("error", "Could not delete", "Please try again.");
+    }
+  }
 
   const totalRiskFlags = analyses.reduce((acc, a) => acc + a.riskFlags.length, 0);
   const totalSaFlags = analyses.reduce((acc, a) => acc + a.saLawFlags.length, 0);
@@ -324,6 +519,18 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
         </form>
       </div>
 
+      {comparisons.length > 0 && (
+        <div className="panel" style={{ marginBottom: 20 }}>
+          <div className="panel-head">
+            <h3><Columns3 size={16} style={{ verticalAlign: "-3px", marginRight: 6, color: "var(--green)" }} /> Comparisons</h3>
+            <span className="pill">{comparisons.length}</span>
+          </div>
+          <div>
+            {comparisons.map(c => <ComparisonResult key={c.id} c={c} onDelete={removeComparison} />)}
+          </div>
+        </div>
+      )}
+
       {analyses.length > 0 && (
         <div className="panel">
           <div className="panel-head">
@@ -335,6 +542,31 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
               <span className="pill">{analyses.length}</span>
             </div>
           </div>
+
+          {selectedIds.length > 0 && (
+            <div style={{ padding: "10px 12px", margin: "0 0 8px", border: "1px solid var(--green)", borderRadius: 8, display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <Columns3 size={15} color="var(--green)" />
+                <strong style={{ fontSize: "0.88rem" }}>
+                  {selectedIds.length} selected{selectedIds.length < 2 ? " — pick at least one more" : ""}
+                </strong>
+                <button className="ghost small" onClick={() => setSelectedIds([])} style={{ marginLeft: "auto" }}>
+                  <X size={12} /> Clear
+                </button>
+                <button className="primary small" disabled={selectedIds.length < 2 || comparing} onClick={runComparison}>
+                  {comparing ? <Loader2 size={12} style={{ animation: "spin 0.8s linear infinite" }} /> : <Columns3 size={12} />}
+                  {comparing ? " Starting…" : ` Compare ${selectedIds.length} documents`}
+                </button>
+              </div>
+              <input
+                value={compareFocus}
+                onChange={(e) => setCompareFocus(e.target.value)}
+                placeholder="Optional — what should it focus on? e.g. escalation clauses and renewal dates"
+                style={{ fontSize: "0.84rem" }}
+              />
+            </div>
+          )}
+
           <div>
             {analyses.map((a) => {
               const expanded = expandedId === a.id;
@@ -347,6 +579,19 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                     tabIndex={0}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(a.id)}
+                        disabled={a.analysisStatus !== "Complete" || !a.hasText}
+                        title={
+                          a.analysisStatus !== "Complete" ? "Still analysing"
+                            : !a.hasText ? "Analysed before full text was retained — re-upload to include it in a comparison"
+                            : "Select for comparison"
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleSelected(a.id)}
+                        style={{ flexShrink: 0, cursor: "pointer" }}
+                      />
                       <FileText size={16} style={{ color: "var(--green)", flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 600, fontSize: "0.92rem", color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

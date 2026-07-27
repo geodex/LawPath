@@ -626,6 +626,10 @@ export type DocumentAnalysis = {
    * judgement, so these are reading starting points, not conclusions.
    */
   authorities: DocumentAuthorityMatch[];
+  /** False for documents analysed before source text was retained — they cannot be compared. */
+  hasText: boolean;
+  /** The analysis covered only part of the document (it exceeded the size cap). */
+  textTruncated: boolean;
 };
 
 export type DocumentAuthorityMatch = {
