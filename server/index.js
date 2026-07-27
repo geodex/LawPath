@@ -5012,7 +5012,8 @@ app.post("/api/documents/compare", authMiddleware, async (req, res, next) => {
 
   try {
     const docs = (await pool.query(
-      `select id, file_name, document_type, extracted_text, extracted_chars, text_truncated, key_dates, matter_id
+      `select id, file_name, document_type, extracted_text, extracted_chars, text_truncated,
+              key_dates, parties, obligations, risk_flags, sa_law_flags, summary, matter_id
          from document_analyses
         where id = any($1::uuid[]) and tenant_id = $2
         order by array_position($1::uuid[], id)`,
@@ -5022,15 +5023,13 @@ app.post("/api/documents/compare", authMiddleware, async (req, res, next) => {
     if (docs.length !== ids.length) {
       return res.status(404).json({ error: "One or more documents were not found on this firm's file." });
     }
-    // Documents analysed before 037 have no stored text. Name them rather than
-    // silently comparing a subset — a comparison that quietly skipped a
-    // contract would be worse than no comparison.
-    const missing = docs.filter(d => !d.extracted_text || !d.extracted_text.trim());
-    if (missing.length) {
-      return res.status(409).json({
-        error: `These were analysed before full text was retained, so there is nothing to compare against: ${missing.map(d => d.file_name).join(", ")}. Re-upload them and they will be included.`
-      });
-    }
+    // Documents analysed before 037 kept no source text, and the original file
+    // was never stored either — so the text cannot be backfilled. Blocking them
+    // would mean nothing already on the file could ever be compared, which is
+    // exactly the case this feature exists for. They are compared instead from
+    // their stored analysis (summary, parties, key dates, obligations, flags):
+    // a weaker comparison, not a fake one. It is labelled as such in the prompt
+    // that goes to the model, in each affected finding, and in the UI.
 
     const { provider, apiKey, model } = await getAiForFeature("document-intelligence");
     if (!apiKey) return res.status(503).json({ error: "No AI provider is configured. Add a key under Settings → API keys." });
@@ -5050,14 +5049,38 @@ app.post("/api/documents/compare", authMiddleware, async (req, res, next) => {
 
     (async () => {
       try {
-        const perDoc = Math.floor(COMPARE_TOTAL_CHARS / docs.length);
+        // Full-text documents share the character budget between them; a
+        // summary-only document costs almost nothing, so it does not dilute it.
+        const withText = docs.filter(d => d.extracted_text && d.extracted_text.trim());
+        const perDoc = withText.length ? Math.floor(COMPARE_TOTAL_CHARS / withText.length) : 0;
+        const list = (v) => (Array.isArray(v) ? v : []).filter(Boolean).join("; ");
+
         const blocks = docs.map((d, i) => {
-          const body = String(d.extracted_text || "");
-          const clipped = body.length > perDoc;
+          const header = `───── [D${i + 1}] ${d.file_name}${d.document_type ? ` (${d.document_type})` : ""} ─────`;
           const dates = Array.isArray(d.key_dates) ? d.key_dates : [];
+          const dateLine = dates.length
+            ? `Key dates: ${dates.map(x => `${x.label || "?"}=${x.date || "?"}`).join("; ")}`
+            : "";
+          const body = String(d.extracted_text || "");
+
+          if (!body.trim()) {
+            // Everything the document yielded, minus its words.
+            return [
+              header,
+              "[SUMMARY ONLY - the full text of this document is not retained, so it is compared from its extracted analysis. Any divergence involving this document is PROVISIONAL and must be confirmed against the document itself.]",
+              d.summary ? `Summary: ${d.summary}` : "",
+              list(d.parties) ? `Parties: ${list(d.parties)}` : "",
+              dateLine,
+              list(d.obligations) ? `Obligations: ${list(d.obligations)}` : "",
+              list(d.risk_flags) ? `Risk flags: ${list(d.risk_flags)}` : "",
+              list(d.sa_law_flags) ? `SA law flags: ${list(d.sa_law_flags)}` : ""
+            ].filter(Boolean).join("\n");
+          }
+
+          const clipped = body.length > perDoc;
           return [
-            `───── [D${i + 1}] ${d.file_name}${d.document_type ? ` (${d.document_type})` : ""} ─────`,
-            dates.length ? `Key dates previously extracted: ${dates.map(x => `${x.label || "?"}=${x.date || "?"}`).join("; ")}` : "",
+            header,
+            dateLine,
             clipped ? `[NOTE: showing the first ${perDoc} of ${body.length} characters of this document]` : "",
             body.slice(0, perDoc)
           ].filter(Boolean).join("\n");
@@ -5083,6 +5106,7 @@ app.post("/api/documents/compare", authMiddleware, async (req, res, next) => {
           '"notes":"full working notes for the attorney: what you compared, what you could not determine from the text supplied, and what to check next",',
           '"summary":"3-5 sentences an attorney can read first"}',
           "",
+          "Some documents may be marked [SUMMARY ONLY]. For those you are reading an extracted analysis, not the document itself. You may still compare them, but any divergence involving a summary-only document is PROVISIONAL: say so in that finding's note, and never quote wording for it as though it came from the document. If the only evidence of a difference is that one summary is briefer than another, that is not a difference — do not report it.",
           "Use the [D1], [D2] labels exactly as given. If you find no genuine divergence, return empty arrays and say so in the summary — that is a valid and useful answer."
         ].join("\n");
 

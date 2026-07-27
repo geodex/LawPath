@@ -564,6 +564,11 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                 placeholder="Optional — what should it focus on? e.g. escalation clauses and renewal dates"
                 style={{ fontSize: "0.84rem" }}
               />
+              {analyses.some(x => selectedIds.includes(x.id) && !x.hasText) && (
+                <small style={{ color: "var(--gold)" }}>
+                  Some of these were uploaded before full text was retained, so they are compared from their extracted analysis. Findings involving them are provisional — re-upload those documents for a full-text comparison.
+                </small>
+              )}
             </div>
           )}
 
@@ -589,10 +594,10 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                       <input
                         type="checkbox"
                         checked={selectedIds.includes(a.id)}
-                        disabled={a.analysisStatus !== "Complete" || !a.hasText}
+                        disabled={a.analysisStatus !== "Complete"}
                         title={
                           a.analysisStatus !== "Complete" ? "Still analysing"
-                            : !a.hasText ? "Analysed before full text was retained — re-upload to include it in a comparison"
+                            : !a.hasText ? "Will be compared from its extracted analysis — re-upload for a full-text comparison"
                             : "Select for comparison"
                         }
                         onClick={(e) => e.stopPropagation()}
@@ -606,6 +611,11 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                         </div>
                         <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: 2 }}>
                           {a.documentType || "Detecting…"} · {a.analysedAt ? new Date(a.analysedAt).toLocaleString() : "—"}
+                          {a.analysisStatus === "Complete" && !a.hasText && (
+                            <span title="Uploaded before full text was retained. It can still be compared, from its extracted analysis — re-upload for a full-text comparison." style={{ marginLeft: 6, color: "var(--gold)" }}>
+                              · summary only
+                            </span>
+                          )}
                         </div>
                       </div>
                       <StatusPill status={a.analysisStatus} />
