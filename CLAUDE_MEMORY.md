@@ -484,83 +484,192 @@ and the seeds upgrade in place as the daily run reaches them. Rollback:
 
 ---
 
+# SESSION L7 — 2026-07-27 (deploy executed, provider = Claude, Doc Intelligence rebuilt)
+
+## What shipped (all pushed to `main`, HEAD `2bc7d89`)
+
+The L6 deploy ran and was verified with the user, then 23 commits landed.
+
+**Corpus / research**
+| Commit | What |
+|---|---|
+| `be60f07` | **Provincial High Courts** — `parseWorkUri` only accepted `/akn/za/`, so 208 results/run were rejected, most of them the ZAGPJHC/ZAWCHC judgments the attorney cares about most. Now accepts `za-XX` and PRESERVES the jurisdiction in the stored URI (re-assembling as `/akn/za/` would break exact lookup). Citation→URI uses a court-code→locality map |
+| `0b4e74b` | **Budget guard** — the 02:00 cron fired with the process showing "stopped" and ate ~95 of the 100 daily Laws.Africa calls. Meter helpers moved into `saflii.js` (it owns the insert; `live-research` requires it → one meter, no cycle). Batch now takes `remaining − LIVE_RESERVE` (default 25) or skips |
+| `1d8235d` | **Drafts cite authorities, not `[S#]`** — chat's grounding rule teaches `[S#]` tags, which chat resolves into cards and a standalone opinion cannot. First prod opinion cited only "[S1]/[S2]/[S3]" with an empty SCHEDULE OF AUTHORITIES. Prompt override + `resolveSourceTags()` mechanical substitution |
+
+**PDF**
+| Commit | What |
+|---|---|
+| `2bfc7d6` | **Multi-page PDFs crashed** — footer pass over `doc._pageBuffer` without `bufferPages: true`; every ≥2-page document failed to download, one-pagers worked. Fixing it exposed a second bug: the footer writes inside the bottom margin and PDFKit auto-paginates past-margin text, so EVERY PDF ever had a phantom trailing page |
+| `4f2e442`, `1f79d52` | **WinAnsi** — PDFKit standard fonts are WinAnsi-only; the schedule's box-drawing divider rendered as `%&%&%&`. `winAnsiSafe()` sanitises at render time (so drafts already stored come out clean). `1f79d52` rewrites it as a code-point loop after tooling normalised regex escapes into a raw NUL byte and git flagged pdf.js binary |
+
+**WhatsApp**
+| Commit | What |
+|---|---|
+| `5f7abe8` | **Snap chromium** — `/usr/bin/chromium-browser` is a snap shim that passes `test -x` then refuses to launch from a service context. Candidate order now prefers the Google Chrome `.deb`; dropped `--single-process`/`--no-zygote` |
+| `4dedc9b` | **Standalone bridge** — `server/whatsapp-bridge.js` (PM2 app `lawpath-whatsapp-bridge`, 127.0.0.1:3080, bearer = `SESSION_SECRET`) hosts every tenant session. `server/whatsapp-client.js` is a drop-in HTTP client with the same five functions. Chrome is ~200-300MB/tenant and `lawpath-api` is capped at 512M |
+| `6bd64e2` | **Resume was a silent no-op** — LocalAuth stores `session-<clientId>`, our clientId is `tenant-<id>`, so folders are `session-tenant-<id>`; the filter looked for `tenant-<id>` and matched nothing. Only surfaced when the bridge relied on it |
+
+**Fixes found by running, not by reading**
+| Commit | What |
+|---|---|
+| `0e892f3` | **Clients page was dead** — `clientRowToJson` called `.toISOString()` on DATE columns, which arrive as strings since the L5 parser fix. Any client with a DOB 500'd the whole list |
+| `928f831` | **SMTP** — `secure:true` whenever the dropdown said "SSL", so SSL+587 opened implicit TLS against a STARTTLS greeting → `wrong version number`. Port decides the connection style now; dropdown decides enforced STARTTLS |
+| `6a478ac`, `a391851` | gitignore WhatsApp runtime dirs (they blocked deploy.sh's dirty check); `PUPPETEER_SKIP_DOWNLOAD` baked into deploy.sh (open since L3) |
+
+**Document Intelligence — rebuilt around a practitioner's actual work**
+| Commit | What |
+|---|---|
+| `d535bf2` | **XLSX ingestion** with a TABULAR-AWARE prompt — asking a bank statement for "parties and obligations" produces noise, so spreadsheets are asked for reconciliation failures, overdrawn balances (a trust shortfall is an LPC matter), round-number cash, reference gaps, VAT that doesn't compute at 15%, FICA thresholds. Same seven fields out, so nothing downstream changed. Dependency: `read-excel-file`, NOT exceljs (exceljs pulls its archiver/zip WRITE chain — 8 advisories — for a capability we never use) |
+| `8291f17` | **Analysis → matter file via sign-off** (034) — key dates become diary entries, obligations become `matter_obligations` (nullable due_date: most obligations have no date). Proposes; approving writes and marks actioned. The approval queue finally governs an act |
+| `2f90fca` | **Flags grounded in real case law** (035) — Doc Intelligence was the last ungrounded AI surface. Candidates come from `legal_corpus_documents`; the model may only CHOOSE among them by opaque id, and an id it invents (or borrows from another flag) is dropped before storage. Local-only retrieval (per-flag live would spend 8 of ~90 daily calls on one upload). Caught `plainto_tsquery` ANDing every word — a flag written as a sentence matched nothing, so C would have shipped as silence; added opt-in `matchAny` |
+| `2d98857` | **80KB → 1MB** and truncation is announced (`[PARTIAL ANALYSIS]`), not silent. The old code `.slice()`'d, so a 500-page contract yielded findings from the first 8% with nothing saying so |
+| `f32e467` | **Claude Opus 4.8 as primary provider** (036) — see below |
+| `7f55461` | **Comparative analysis** (037 text storage + 038 comparisons) — see below |
+| `93a8cb7` | **Voice notes** — Claude has no audio input, so transcription first. `server/transcribe.js` uses Speech-to-Text REST with the EXISTING GCP service account and `google-auth-library` (already in the tree via GCS) — no new vendor, no new dependency, no new POPIA processor |
+| `302a5d6`, `2bc7d89` | Two UI/UX corrections — see "Two mistakes worth remembering" |
+
+## AI PROVIDER — Claude is now primary
+
+`AI_PROVIDERS = ["anthropic", "gemini", "openai", "grok"]` — order is the fallback preference.
+`callAnthropicApi` uses the official `@anthropic-ai/sdk`. **Non-negotiable on Opus 4.8, each a 400 if wrong:**
+- NO `temperature` / `top_p` / `top_k` (we never sent them — don't add them)
+- `thinking: { type: "adaptive" }` must be EXPLICIT; omitting runs without thinking
+- `budget_tokens` is gone — depth is `output_config.effort`
+- Streaming (`messages.stream` + `finalMessage()`), because analysis now ships ~250K tokens
+- A safety refusal is HTTP 200 with an empty body — handled explicitly
+
+Model IDs (verified via the `claude-api` skill, cached 2026-06-24): `claude-opus-4-8` (1M ctx, $5/$25), `claude-sonnet-5` (1M, $3/$15), `claude-haiku-4-5` (200K, $1/$5). **1M context at standard pricing, no long-context premium** — that is what makes whole-contract analysis affordable (~$1.25 for 250K tokens).
+
+**Never verified live:** dev has no key. Provider wiring, routing fall-through, refusal handling and the migration are all tested; the first real call happens on prod.
+
+**The recommendation the user accepted:** single primary + fallbacks, NOT an ensemble. Two models agreeing does not make a citation real — the corpus verifier does that. Cross-referencing models measures inter-model agreement, not truth.
+
+## COMPARATIVE ANALYSIS — how it actually works
+
+`POST /api/documents/compare` with 2–12 analysis ids + optional `focus`. Runs in the background, register polls.
+- **037** keeps `extracted_text` on `document_analyses`. Before this the text was discarded, so comparison was impossible — not merely unbuilt. The original FILE is still never stored, so text cannot be backfilled.
+- **038** `document_comparisons` — stored because the call is expensive and the output is working product.
+- Prompt hunts differing commercial terms, inconsistently named parties, amounts that don't reconcile, terms present in some documents and absent in others, and **cross-checks spreadsheet dates against the contracts they track** (the practitioner asked for this by name).
+- `[D#]` labels resolve to real filenames mechanically; an invented label is dropped.
+- **Documents with no stored text are compared from their stored ANALYSIS** (summary/parties/dates/obligations/flags), labelled `[SUMMARY ONLY]` to the model and "· summary only" in the UI, findings marked provisional. Everything uploaded before 037 deployed is in this state.
+
+## Two mistakes worth remembering
+
+1. **`302a5d6` — CSS collision invisible to tsc.** `styles.css` has a global `input, select, textarea { width: 100%; padding: 10px 13px }`. The comparison checkbox inherited it and rendered as a full-width box that pushed every file name outside its card. I typechecked the UI but never LOOKED at it. Same class as L6's `payload.body`. The layout is now measured in puppeteer (`test-ui-layout.js`), not eyeballed.
+2. **`2bc7d89` — a correct principle applied to the wrong thing.** I made pre-037 documents BLOCK a comparison rather than be silently skipped. Right instinct, wrong target: it disabled every checkbox, so the feature could not be used at all on the bundle it exists for. Degrade with honest labelling beats refusing.
+
+## Operational facts (updated)
+
+- **Dev Postgres moved to port 55433** — another project's container took 55432 while ours was stopped. `.env` updated. `docker commit` does NOT preserve postgres data (VOLUME); reuse the volume. `schema_migrations` doesn't exist in dev (migrations applied by a psql loop) — that's normal, not drift.
+- **PM2 supervision** — prod logins were down 3 days (Fri 17th → Mon 20th). NOT auth, NOT a reboot, NOT OOM (251G RAM, ~229G free). `pm2-lawpath.service` had been `failed` since 2 min after boot; the serving daemon was a loose session-spawned one and died when the SSH session was cleaned up. Fixed: `loginctl enable-linger lawpath` + `pm2 kill` then `systemctl start pm2-lawpath` (the kill is the key — systemd can't adopt a pre-existing daemon; that's the `Result: protocol` failure). Now `Active: active (running)`.
+- **Test suites live in the session scratchpad**, not the repo: `test-doc-extract`, `test-doc-actions`, `test-ground-flags`, `test-corpus-retrieval`, `test-decide-http`, `test-compare-http`, `test-ui-layout` (puppeteer). 120+ checks. They are NOT committed — recreate or re-derive if needed.
+- **Heredocs mangle UTF-8** on this Windows shell — box-drawing/em-dash in a `python - <<'EOF'` block silently fails to match. Write the patch script to the scratchpad with the Write tool and run it.
+- **A python patch that asserts mid-script writes nothing** — an early assertion failure leaves the file untouched even if earlier replacements "succeeded". Check the file, don't assume.
+
 # HANDOFF PROMPT FOR THE NEXT SESSION
 
-> Continue LawPath SA. Read `CLAUDE_MEMORY.md` (this file) fully first —
-> especially SESSION L6 — plus the memory files listed at the top.
+> Continue LawPath SA — AI-native practice OS for South African law firms.
+> Repo `geodex/LawPath`. Local `E:\Replit-Clone\workspace\LawPath`.
 >
-> **State:** `main` @ `9166be9`, everything pushed. Migrations **027–033 pending
-> deploy** (I run deploys: `PUPPETEER_SKIP_DOWNLOAD=true bash deploy.sh`, then
-> the corpus runbook in L6 — quarantine, frbr backfill, restart indexer).
-> The attorney's original list [1]–[5] is COMPLETE. Dev stack per L6
-> "Operational facts": dev Postgres on 55432 (docker), API 3001, vite 5000,
-> puppeteer for real-UI verification. **Never claim anything works without
-> exercising it against the real dev DB — and for UI, the real rendered app.**
-> This session's worst bugs (identity discarded at the wrong JSON nesting level;
-> a generated column breaking restore; a payload field the UI never rendered)
-> were all invisible to tsc.
+> **READ FIRST, fully:** `CLAUDE_MEMORY.md` — especially **SESSION L7** (most
+> recent) and **SESSION L6** — plus the memory files indexed at the top of it
+> (`docs/memory/`), and the user-level memory index at
+> `C:\Users\DellUser\.claude\projects\E--Replit-Clone-workspace-LawPath\memory\MEMORY.md`
+> (notably `pm2-supervision.md` and `dev-db-port.md`).
 >
-> **Guardrails (unchanged):** additive migrations only, never edit an applied
-> one (next number is **034**); `npx tsc --noEmit` clean before every push; one
-> feature per commit, push, stop and report; I run all server/deploy commands;
-> no new npm deps without asking; nothing AI-generated reaches a client or
-> moves money without attorney sign-off; no SSH to prod — write me blocks to
-> paste.
+> **STATE:** `main` @ `2bc7d89`, everything pushed, worktree clean.
+> Migrations **034–038 PENDING DEPLOY**. Corpus deploy from L6 is DONE and
+> verified (666 rows → ~832 after the first indexer run; all citable).
 >
-> **FIRST: nothing is deployed.** Walk me through the L6 runbook and verify
-> with me (corpus counts before/after, a live research question, a citation
-> paste, a drafted opinion downloaded). Then I want the attorney's second 20
-> minutes — his reaction to verified-citation research with real SCA/High Court
-> authority is worth more than any item below and should reorder this list.
+> **DEPLOY THE USER STILL OWES (he runs all server commands — write him
+> paste-blocks, never SSH):**
+> ```bash
+> cd /home2/lawpath/app/LawPath
+> printf '\nANTHROPIC_API_KEY=sk-ant-...\n' >> .env   # his key, not yours
+> git pull --ff-only
+> bash deploy.sh                                       # 034-038
+> ```
+> Then Settings → API keys → Claude: paste key, model Opus 4.8, tick the
+> feature chips. For voice notes he must enable **Cloud Speech-to-Text** on the
+> same GCP project as the Vision OCR service account.
 >
-> **WORK QUEUE — small-practice-attorney lens (L6 session's product review):
-> the organs exist; build the connective tissue for the three workflows a
-> practice runs every day — new client in, correspondence, money out.**
+> **THREE THINGS ARE UNVERIFIED LIVE — say so, don't imply otherwise:**
+> 1. **Claude has never made a real call** (no key in dev). Wiring, routing
+>    fall-through, refusal handling and migration 036 are tested.
+> 2. **Comparison QUALITY** is unproven — plumbing, guards, storage, label
+>    safety and rendering are all verified end-to-end, but whether the findings
+>    are good depends on the model actually reading two contracts well.
+> 3. **Transcription** — format detection and routing tested; the
+>    Speech-to-Text call itself has never run.
+> First real failures will name themselves in `pm2 logs lawpath-api --err`.
 >
-> **[A] Intake-to-mandate flow.** The highest-stakes daily moment, currently
-> five separate screens: conflict check → client record → FICA → engagement
-> letter → trust deposit request. Everything exists — `ConflictCheck` takes
-> `initialClient/initialOpposing/compact` props built for this; contracts + PDF
-> + e-signature + approval queue are all live. One guided flow that ends with
-> an engagement letter in the approval queue and files the matter to the spine.
+> **GUARDRAILS (unchanged):** additive migrations only, never edit an applied
+> one (**next number is 039**); `npx tsc --noEmit` clean before every push; one
+> feature per commit, push, stop and report; the user runs all server/deploy
+> commands; **no new npm deps without asking**; nothing AI-generated reaches a
+> client or moves money without attorney sign-off.
 >
-> **[B] Wire the approval queue into the acts it governs.** It records
-> decisions but gates nothing. Invoice-send and trust payments should check for
-> an approval as a precondition, then mark it `actioned`. For trust money the
-> current state is a real risk, not polish: it LOOKS like working sign-off.
+> **VERIFICATION RULES — earned the hard way, do not skip:**
+> - Never claim anything works without exercising it against the real dev DB.
+> - **For UI, drive the real rendered app with puppeteer AND measure geometry.**
+>   L7 shipped a CSS collision (`input { width: 100% }` hit a checkbox) that
+>   tsc cannot see and that I did not look at. The in-app browser pane caches
+>   modules too hard — use puppeteer.
+> - Dev stack: docker `lawpath-dev-db` on **55433** (not 55432 — another
+>   project took it); API `PORT=3001 node server/index.js`; vite on 5000
+>   proxying /api→3001; login `history-test@example.co.za` /
+>   `dev-test-passw0rd`. Dev has NO AI key — seed a dummy provider row to
+>   exercise create/failure paths.
 >
-> **[C] Client auto-updates on stage transitions.** A conveyancing/litigation
-> stage change drafts a WhatsApp/email into the approval queue
-> (`kind:'client_message'`, `origin:'ai'`) — the DOTS poller already models
-> this pattern. Kills the most repetitive interruption in a small practice.
+> **THE TESTING ATTORNEY IS WORKING RIGHT NOW** on a client's bundle of
+> inconsistent contracts and spreadsheets. Her feedback outranks the queue
+> below. Known rough edges to expect from her:
+> - Everything she uploaded before 037 is "summary only" — comparable, but
+>   weaker. Re-uploading upgrades a document to full text.
+> - Voice notes are capped at ~1 minute (synchronous Speech-to-Text). Longer
+>   notes need `longrunningrecognize` with GCS staging — deliberately not built
+>   rather than silently truncating a transcript.
 >
-> **[D] Email-per-matter.** The biggest missing organ: 80% of a real file is
-> correspondence, so the matter file is hollow without it. Per-matter
-> forwarding address, inbound mail filed to the spine, thread summaries later.
-> Bigger build — needs a design conversation with me first (mail infra).
+> **WORK QUEUE — small-practice-attorney lens, unchanged priorities from L6
+> except where L7 closed items:**
 >
-> **[E] Documents on the matter file.** Per-matter upload/store/download (GCS
-> plumbing exists for analyses). An approved drafted opinion should file itself
-> here — closing the loop the L6 downloads feature started.
+> **[A] Intake-to-mandate flow** (NOT started) — conflict check → client →
+> FICA → engagement letter → trust deposit request as ONE guided flow ending in
+> the approval queue and filing the matter to the spine. `ConflictCheck`
+> already takes `initialClient`/`initialOpposing`/`compact` props built for it.
 >
-> **[F] Money truths:** disbursements on matters (sheriff/counsel/deeds fees →
-> invoices — small firms leak money here); mandate-cap warning when WIP
-> approaches the client's fee estimate.
+> **[B] Wire the approval queue into the acts it governs** — PARTIALLY DONE.
+> `8291f17` made `/decide` apply document actions and mark them `actioned`, so
+> the pattern exists and is tested. Still outstanding: **invoice-send and trust
+> payments must check for an approval as a precondition.** For trust money the
+> current state is a real risk — it LOOKS like working sign-off.
 >
-> **[G] Trust/compliance registers:** undertakings register (a missed
-> undertaking is a conduct matter — conveyancers give them daily);
-> practitioner verification of the `server/court-rules.js` catalogue (still
-> model recall, still flagged, arithmetic itself is tested).
+> **[C] Client auto-updates on stage transitions** (NOT started) — stage change
+> drafts a WhatsApp/email into the approval queue (`kind:'client_message'`,
+> `origin:'ai'`). The DOTS poller models the pattern; the WhatsApp bridge now
+> exists to actually send it.
 >
-> **Do NOT reach for new AI features** — the assistant is now
-> trustworthy-by-architecture (grounded, live-retrieving, verify-in/verify-out);
-> the gap is practice plumbing.
+> **[D] Email-per-matter** (NOT started) — the biggest missing organ; 80% of a
+> real file is correspondence. Bigger build: design conversation FIRST.
 >
-> **Open decisions that are mine (the user's), not yours:** default theme for
-> new accounts (dark passes AA now, but light may serve his re-test better);
-> emailing Laws.Africa for written confirmation of the storage OK; Build-plan
-> upgrade only when usage saturates 100 calls/day.
+> **[E] Documents on the matter file** — partially served: documents file to
+> matters, and 037 now stores their text. Still missing: per-matter
+> upload/store/download, and an approved drafted opinion filing itself there.
 >
-> **Parked small items:** matter picker on the draft buttons; "file to matter"
-> on approved documents (folds into [E]); corpus coverage panel (counts by
-> court/year from `legal_corpus_documents` — cheap now that identity is real).
+> **[F] Disbursements on matters → invoices; mandate-cap warning** when WIP
+> approaches the client's fee estimate. (NOT started.)
+>
+> **[G] Undertakings register** — `matter_obligations` (034) is the substrate;
+> an undertaking is an obligation the firm itself gave. Also: practitioner
+> verification of the `server/court-rules.js` catalogue (still model recall).
+>
+> **Parked small items:** matter picker on the draft buttons; corpus coverage
+> panel (cheap now identity is real); auto-fill template variables in WhatsApp
+> so `{{client_name}}` can never be sent literally (seen in prod on 16 Jul);
+> long-form voice notes via `longrunningrecognize`.
+>
+> **Open decisions that are the USER'S, not yours:** default theme for new
+> accounts; emailing Laws.Africa for written confirmation of the storage OK;
+> Laws.Africa Build-plan upgrade only when usage saturates 100 calls/day;
+> whether to re-upload the attorney's existing bundle for full-text comparison.
