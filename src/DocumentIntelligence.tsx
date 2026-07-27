@@ -579,6 +579,13 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                     tabIndex={0}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      {/*
+                        Sized explicitly: styles.css applies
+                        `input, select, textarea { width: 100%; padding: 10px 13px }`
+                        to every input, which renders a bare checkbox as a full-width
+                        box and shoves the file name out of the card. Kept inline rather
+                        than in a class so no other component can be affected.
+                      */}
                       <input
                         type="checkbox"
                         checked={selectedIds.includes(a.id)}
@@ -590,7 +597,7 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                         }
                         onClick={(e) => e.stopPropagation()}
                         onChange={() => toggleSelected(a.id)}
-                        style={{ flexShrink: 0, cursor: "pointer" }}
+                        style={{ width: 16, height: 16, padding: 0, margin: 0, flexShrink: 0, cursor: "pointer" }}
                       />
                       <FileText size={16} style={{ color: "var(--green)", flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
