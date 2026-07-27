@@ -1069,10 +1069,39 @@ export type MatterFile = {
   documents: DocumentAnalysis[];
   correspondence: { id: string; direction: "inbound" | "outbound"; body: string; status: string; sentAt: string }[];
   diary: { deadlines: LitigationDeadline[]; courtDates: CourtDate[]; entries: MatterDiaryEntry[] };
+  obligations: MatterObligation[];
+};
+
+// A commitment the file carries, usually lifted out of a document by Document
+// Intelligence and approved by an attorney. Undated by nature — "maintain
+// insurance until registration" has no diary date — which is why this is not
+// a diary entry.
+export type MatterObligation = {
+  id: string;
+  matterId: string;
+  description: string;
+  dueDate: string;
+  status: "open" | "done" | "waived";
+  source: "manual" | "document" | "ai";
+  sourceDocumentId: string | null;
+  note: string;
+  completedAt: string;
+  createdAt: string;
 };
 
 export async function getMatterFile(matterUuid: string) {
   return request<MatterFile>(`/api/matters/${matterUuid}/file`);
+}
+
+export async function setObligationStatus(
+  matterUuid: string,
+  obligationId: string,
+  status: MatterObligation["status"]
+) {
+  return request<{ obligation: MatterObligation }>(
+    `/api/matters/${matterUuid}/obligations/${obligationId}`,
+    { method: "PUT", body: JSON.stringify({ status }) }
+  );
 }
 
 export type CourtRule = {

@@ -1,7 +1,7 @@
 import { ArrowLeft, Banknote, CalendarClock, CheckCircle2, FileText, FolderOpen, Loader2, MessageSquare, Plus, Scale, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { completeDiaryEntry, computeCourtDeadline, createDiaryEntry, diariseFromRule, getCourtRules, getMatterFile } from "./api";
-import type { CourtCalc, CourtRule, MatterDiaryEntry, MatterFile as MatterFileData } from "./api";
+import { completeDiaryEntry, computeCourtDeadline, createDiaryEntry, diariseFromRule, getCourtRules, getMatterFile, setObligationStatus } from "./api";
+import type { CourtCalc, CourtRule, MatterDiaryEntry, MatterFile as MatterFileData, MatterObligation } from "./api";
 
 const money = (cents: number) =>
   new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 2 }).format(cents / 100);
@@ -428,7 +428,13 @@ function DiaryTab({ data, matterUuid, onChanged }: { data: MatterFileData; matte
     try { await completeDiaryEntry(matterUuid, id); onChanged(); } catch { /* no-op */ }
   }
 
-  const nothing = !deadlines.length && !courtDates.length && !entries.length;
+  const obligations = data.obligations || [];
+  const openObligations = obligations.filter(o => o.status === "open");
+  const nothing = !deadlines.length && !courtDates.length && !entries.length && !obligations.length;
+
+  async function setObligation(id: string, status: MatterObligation["status"]) {
+    try { await setObligationStatus(matterUuid, id, status); onChanged(); } catch { /* no-op */ }
+  }
 
   return (
     <>
@@ -478,6 +484,35 @@ function DiaryTab({ data, matterUuid, onChanged }: { data: MatterFileData; matte
           </div>
         );
       })}
+
+      {obligations.length > 0 && (
+        <h4 style={{ margin: "18px 0 8px" }}>
+          Obligations{openObligations.length ? ` — ${openObligations.length} open` : ""}
+        </h4>
+      )}
+      {obligations.map(o => (
+        <div key={o.id} className={`deadline-row${o.status !== "open" ? " completed" : ""}`}>
+          <div>
+            <strong style={{ fontSize: "0.86rem" }}>{o.description}</strong>
+            <small style={{ display: "block", color: "var(--muted)" }}>
+              {o.source === "document" ? "From a document" : o.source === "ai" ? "AI-identified" : "Added manually"}
+              {o.note ? ` · ${o.note}` : ""}
+            </small>
+          </div>
+          <span style={{ fontSize: "0.82rem", fontWeight: 700 }}>
+            {o.status === "done" ? "✓ Done" : o.status === "waived" ? "Waived" : "Open"}
+          </span>
+          <span style={{ fontSize: "0.82rem" }}>{o.dueDate || "—"}</span>
+          {o.status === "open" && (
+            <span style={{ display: "flex", gap: 6 }}>
+              <button className="ghost small" onClick={() => setObligation(o.id, "done")}>
+                <CheckCircle2 size={13} /> Done
+              </button>
+              <button className="ghost small" onClick={() => setObligation(o.id, "waived")}>Waive</button>
+            </span>
+          )}
+        </div>
+      ))}
 
       {courtDates.length > 0 && <h4 style={{ margin: "18px 0 8px" }}>Court dates</h4>}
       {courtDates.map(c => (

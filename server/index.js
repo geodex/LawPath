@@ -16,7 +16,7 @@ const verifynow  = require("./verifynow");
 const lightstone  = require("./lightstone");
 const searchworks = require("./searchworks");
 const { pollMatter: pollDotsMatter } = require("./dots-poller");
-const { createApprovalRequest, APPROVER_ROLES } = require("./approvals");
+const { createApprovalRequest, hasPendingFor, APPROVER_ROLES } = require("./approvals");
 const courtRules = require("./court-rules");
 const grounding = require("./legal-grounding");
 const liveResearch = require("./live-research");
@@ -2902,7 +2902,25 @@ app.post("/api/approvals/:id/decide", authMiddleware, async (req, res, next) => 
       [req.user.tenantId, req.user.sub, r.rows[0].id, decision,
        { kind: r.rows[0].kind, title: r.rows[0].title, origin: r.rows[0].origin, selfApproved: r.rows[0].requested_by === req.user.sub }]
     ).catch(() => {});
-    res.json({ approval: approvalFromRow(await withApprovalNames(r.rows[0])) });
+
+    // An approval that records a decision but changes nothing is theatre. If
+    // this request carries document actions, approving it writes them to the
+    // matter file and marks the request actioned. Applied AFTER the decision
+    // is recorded and never allowed to throw: a write failure must not undo
+    // the attorney's decision, it must be reported so it can be retried.
+    let applied = null;
+    if (decision === "approved" && r.rows[0].payload?.docActions) {
+      applied = await applyDocumentActions(r.rows[0], req.user.sub).catch(err => ({ error: err.message }));
+      if (applied && !applied.error) {
+        const done = await pool.query(
+          "update approval_requests set actioned_at = now() where id = $1 returning *",
+          [r.rows[0].id]
+        ).catch(() => null);
+        if (done?.rowCount) r.rows[0] = done.rows[0];
+      }
+    }
+
+    res.json({ approval: approvalFromRow(await withApprovalNames(r.rows[0])), ...(applied ? { applied } : {}) });
   } catch (error) { next(error); }
 });
 
@@ -3170,6 +3188,13 @@ app.get("/api/matters/:id/file", authMiddleware, async (req, res, next) => {
     const diaryRows = await q(
       "select * from matter_diary_entries where matter_id = $1 and tenant_id = $2 order by due_date", [id, tid]);
 
+    // Obligations extracted from the file's documents (034). Open ones first,
+    // then by due date — an undated obligation is not less important, it just
+    // has no clock, so it sorts last rather than being hidden.
+    const obligationRows = await q(
+      `select * from matter_obligations where matter_id = $1 and tenant_id = $2
+        order by (status <> 'open'), due_date nulls last, created_at`, [id, tid]);
+
     // Money rollup. Trust balance uses the same formula as the trust ledger —
     // never a second opinion on a trust balance.
     const bal = await q(
@@ -3197,8 +3222,37 @@ app.get("/api/matters/:id/file", authMiddleware, async (req, res, next) => {
         id: r.id, direction: r.direction, body: r.message_body,
         status: r.status, sentAt: r.sent_at ? new Date(r.sent_at).toISOString() : ""
       })),
-      diary: { deadlines, courtDates, entries: diaryRows.rows.map(diaryEntryFromRow) }
+      diary: { deadlines, courtDates, entries: diaryRows.rows.map(diaryEntryFromRow) },
+      obligations: obligationRows.rows.map(obligationFromRow)
     });
+  } catch (error) { next(error); }
+});
+
+// Close off an obligation. 'waived' is distinct from 'done' on purpose: an
+// obligation the parties released is not one the firm performed, and the file
+// should be able to tell the difference years later.
+app.put("/api/matters/:matterId/obligations/:id", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const { status, note } = req.body;
+  if (!["open", "done", "waived"].includes(status)) {
+    return res.status(400).json({ error: "status must be 'open', 'done' or 'waived'." });
+  }
+  try {
+    const r = await pool.query(
+      `update matter_obligations
+          set status = $3,
+              note = coalesce($4, note),
+              completed_at = case when $3 = 'open' then null else now() end,
+              -- $5::uuid explicitly: with a bare parameter, Postgres infers the
+              -- CASE's type from the null branch and rejects it as text.
+              completed_by = case when $3 = 'open' then null else $5::uuid end,
+              updated_at = now()
+        where id = $1 and tenant_id = $2 and matter_id = $6
+        returning *`,
+      [req.params.id, req.user.tenantId, status, note || null, req.user.sub, req.params.matterId]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Obligation not found." });
+    res.json({ obligation: obligationFromRow(r.rows[0]) });
   } catch (error) { next(error); }
 });
 
@@ -4098,6 +4152,132 @@ app.get("/api/documents/analyses", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ─── DOCUMENT ACTIONS: ANALYSIS → DIARY + OBLIGATIONS ────────────────────────
+// An analysis used to be a leaf node. It extracted the dates and commitments in
+// a document and then let them die in a card — the file knew about a deadline
+// the diary never heard about.
+//
+// These two functions close that loop, and deliberately in two steps:
+// propose (queue for sign-off) then apply (write to the file). Nothing an AI
+// read out of a PDF writes itself into a matter's diary. An attorney approves
+// the list first, exactly as they do for a drafted opinion or a trust payment.
+
+// Only a real ISO date can become a diary entry — due_date is NOT NULL and a
+// wrong date is worse than no date. Anything undated still becomes an
+// obligation, which is why obligations carry a nullable due_date.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+async function proposeDocumentActions({ tenantId, matterId, analysisId, fileName, keyDates, obligations, requestedBy }) {
+  // Without a matter there is no file to write to. The document can still be
+  // filed later, and re-analysis will propose again.
+  if (!tenantId || !matterId || !analysisId) return null;
+
+  const diary = (Array.isArray(keyDates) ? keyDates : [])
+    .map(d => ({
+      description: String(d?.label || "").trim().slice(0, 400),
+      dueDate: String(d?.date || "").trim()
+    }))
+    .filter(d => d.description && ISO_DATE_RE.test(d.dueDate));
+
+  const tasks = (Array.isArray(obligations) ? obligations : [])
+    .map(o => ({ description: String(o || "").trim().slice(0, 400) }))
+    .filter(o => o.description.length > 3);
+
+  if (!diary.length && !tasks.length) return null;
+
+  // A re-analysis of the same document must not queue a second copy.
+  if (await hasPendingFor({ tenantId, entityType: "document_analysis", entityId: analysisId, kind: "other" })) {
+    return null;
+  }
+
+  const bits = [];
+  if (diary.length) bits.push(`${diary.length} diary date${diary.length === 1 ? "" : "s"}`);
+  if (tasks.length) bits.push(`${tasks.length} obligation${tasks.length === 1 ? "" : "s"}`);
+
+  return createApprovalRequest({
+    tenantId,
+    matterId,
+    kind: "other",
+    title: `File ${bits.join(" and ")} from ${fileName}`.slice(0, 300),
+    summary: `Extracted by Document Intelligence from "${fileName}". Approving writes ${bits.join(" and ")} to the matter file. Check each against the document before approving — nothing is written until you do.`,
+    payload: { docActions: { diary, obligations: tasks }, analysisId, fileName },
+    entityType: "document_analysis",
+    entityId: analysisId,
+    origin: "ai",
+    requestedBy: requestedBy || null
+  });
+}
+
+// Write an approved proposal to the matter file. Idempotent on both sides:
+// obligations rely on the unique index from 034, diary entries are checked
+// first (the diary has no natural key). Never throws — a write failure must
+// leave the approval decided and reportable, not roll back the attorney's
+// decision.
+async function applyDocumentActions(approval, userId) {
+  const actions = approval?.payload?.docActions;
+  if (!actions) return null;
+  const tenantId = approval.tenant_id;
+  const matterId = approval.matter_id;
+  const analysisId = approval.payload?.analysisId || null;
+  if (!matterId) return { diaryCreated: 0, obligationsCreated: 0, error: "no matter on the request" };
+
+  let diaryCreated = 0, obligationsCreated = 0;
+  const errors = [];
+
+  for (const d of actions.diary || []) {
+    if (!d?.description || !ISO_DATE_RE.test(String(d.dueDate || ""))) continue;
+    try {
+      const dupe = await pool.query(
+        `select 1 from matter_diary_entries
+          where matter_id = $1 and tenant_id = $2 and description = $3 and due_date = $4 limit 1`,
+        [matterId, tenantId, d.description, d.dueDate]
+      );
+      if (dupe.rowCount) continue;
+      await pool.query(
+        `insert into matter_diary_entries
+           (tenant_id, matter_id, description, due_date, note, source, source_document_id, created_by)
+         values ($1,$2,$3,$4,$5,'document',$6,$7)`,
+        [tenantId, matterId, d.description, d.dueDate,
+         approval.payload?.fileName ? `From ${approval.payload.fileName}` : null, analysisId, userId || null]
+      );
+      diaryCreated++;
+    } catch (err) { errors.push(err.message); }
+  }
+
+  for (const o of actions.obligations || []) {
+    if (!o?.description) continue;
+    try {
+      const r = await pool.query(
+        `insert into matter_obligations
+           (tenant_id, matter_id, description, due_date, source, source_document_id, note, created_by)
+         values ($1,$2,$3,$4,'document',$5,$6,$7)
+         on conflict do nothing
+         returning id`,
+        [tenantId, matterId, o.description, ISO_DATE_RE.test(String(o.dueDate || "")) ? o.dueDate : null,
+         analysisId, approval.payload?.fileName ? `From ${approval.payload.fileName}` : null, userId || null]
+      );
+      if (r.rowCount) obligationsCreated++;
+    } catch (err) { errors.push(err.message); }
+  }
+
+  return { diaryCreated, obligationsCreated, ...(errors.length ? { error: errors[0] } : {}) };
+}
+
+function obligationFromRow(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id,
+    description: row.description,
+    dueDate: row.due_date ? String(row.due_date).slice(0, 10) : "",
+    status: row.status,
+    source: row.source,
+    sourceDocumentId: row.source_document_id || null,
+    note: row.note || "",
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : "",
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
 // Decode a data: URL into { buffer, mimeType }. Returns null for malformed
 // or non-base64 inputs. Used by the document analyser to recover the raw
 // upload bytes before extraction.
@@ -4436,6 +4616,25 @@ ${text}
           await autoFileDocument({
             analysisId: analysis.id, tenantId: analysis.tenant_id, parties: parsed.parties || []
           });
+        }
+
+        // Offer the dates and commitments to the matter file. Re-read the row:
+        // auto-filing above may have just given this document its matter, and
+        // without one there is nothing to attach to. Never throws — a queueing
+        // failure must not fail an analysis the attorney can already read.
+        try {
+          const filed = await pool.query("select matter_id from document_analyses where id = $1", [analysis.id]);
+          await proposeDocumentActions({
+            tenantId: analysis.tenant_id,
+            matterId: filed.rows[0]?.matter_id || null,
+            analysisId: analysis.id,
+            fileName,
+            keyDates: parsed.keyDates || [],
+            obligations: parsed.obligations || [],
+            requestedBy: analysis.created_by || null
+          });
+        } catch (err) {
+          console.warn(`[doc-intelligence] could not queue document actions: ${err.message}`);
         }
       } catch (e) {
         await pool.query(
@@ -6485,4 +6684,4 @@ app.listen(port, () => {
 // document extraction is otherwise only reachable through an endpoint that
 // needs an AI key, so the parsing rules would never be exercised locally.
 // Nothing requires this module in production — index.js is the entrypoint.
-module.exports = { extractDocumentText, spreadsheetToText };
+module.exports = { extractDocumentText, spreadsheetToText, proposeDocumentActions, applyDocumentActions };
