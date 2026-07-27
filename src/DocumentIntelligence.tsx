@@ -2,7 +2,41 @@ import { AlertTriangle, CalendarPlus, CheckCircle2, FileSearch, FileText, Folder
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { createDiaryEntry, deleteDocumentAnalysis, fileDocumentToMatter, getDocumentAnalyses, getDocumentMatterSuggestions, submitDocumentForAnalysis } from "./api";
 import type { MatterSuggestion } from "./api";
-import type { DocumentAnalysis } from "./types";
+import type { DocumentAnalysis, DocumentAuthorityMatch } from "./types";
+
+/**
+ * Case law bearing on a single flag.
+ *
+ * Framing is deliberate. Every citation shown here exists in the firm's corpus
+ * — the model chooses among real authorities and is never asked to produce one
+ * — but whether an authority truly governs these facts is its judgement, not a
+ * verified fact. So this reads "starting points to read", never "this is the
+ * law". The attorney goes and reads the judgment; that is the whole workflow.
+ */
+function FlagAuthorities({ flag, matches }: { flag: string; matches: DocumentAuthorityMatch[] }) {
+  const match = (matches || []).find(m => m.flag === flag);
+  if (!match || !match.authorities.length) return null;
+  return (
+    <div style={{ margin: "2px 0 12px 26px", paddingLeft: 10, borderLeft: "2px solid var(--line)" }}>
+      <div style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", marginBottom: 4 }}>
+        From the firm's corpus — read before relying
+      </div>
+      {match.authorities.map((a, i) => (
+        <div key={i} style={{ marginBottom: 6, fontSize: "0.82rem" }}>
+          <span style={{ fontWeight: 700 }}>{a.citation}</span>
+          {a.title ? <span> — {a.title}</span> : null}
+          {a.court ? <span style={{ color: "var(--muted)" }}> · {a.court}{a.year ? ` (${a.year})` : ""}</span> : null}
+          {a.note ? <div style={{ color: "var(--muted)" }}>{a.note}</div> : null}
+          {a.sourceUrl ? (
+            <a href={a.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem" }}>
+              Read the judgment
+            </a>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 type Props = {
   analyses: DocumentAnalysis[];
@@ -440,9 +474,12 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                             <AlertTriangle size={12} /> Risk flags
                           </h4>
                           {a.riskFlags.map((flag, i) => (
-                            <div key={i} className="doc-risk-item">
-                              <span style={{ flexShrink: 0 }}>⚠</span>
-                              <span>{flag}</span>
+                            <div key={i}>
+                              <div className="doc-risk-item">
+                                <span style={{ flexShrink: 0 }}>⚠</span>
+                                <span>{flag}</span>
+                              </div>
+                              <FlagAuthorities flag={flag} matches={a.authorities} />
                             </div>
                           ))}
                         </div>
@@ -454,9 +491,12 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
                             <Scale size={12} /> SA law flags
                           </h4>
                           {a.saLawFlags.map((flag, i) => (
-                            <div key={i} className="doc-sa-law-item">
-                              <span style={{ flexShrink: 0 }}>⚖</span>
-                              <span>{flag}</span>
+                            <div key={i}>
+                              <div className="doc-sa-law-item">
+                                <span style={{ flexShrink: 0 }}>⚖</span>
+                                <span>{flag}</span>
+                              </div>
+                              <FlagAuthorities flag={flag} matches={a.authorities} />
                             </div>
                           ))}
                         </div>

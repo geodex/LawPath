@@ -616,6 +616,26 @@ export type DocumentAnalysis = {
   filedAt: string;
   /** How it came to be filed — 'auto' is an inference a human should sanity-check. */
   filingSource: "" | "upload" | "auto" | "manual";
+  /**
+   * Case law bearing on the flags raised, chosen from the firm's corpus.
+   * Every citation here exists in legal_corpus_documents — the model selects
+   * among real authorities and never produces one — but relevance is still its
+   * judgement, so these are reading starting points, not conclusions.
+   */
+  authorities: DocumentAuthorityMatch[];
+};
+
+export type DocumentAuthorityMatch = {
+  flag: string;
+  kind: "risk" | "sa_law";
+  authorities: {
+    citation: string;
+    title: string;
+    court: string;
+    year: number | null;
+    sourceUrl: string;
+    note: string;
+  }[];
 };
 
 // ─── TIER 2: ACCOUNTING ───────────────────────────────────────────────────────

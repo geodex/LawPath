@@ -89,23 +89,48 @@ const PREFERRED_COURT_PATTERNS = ["%SCA%", "%Supreme Court of Appeal%", "%High C
  * Returns [] when nothing matches — and an empty result must lead to the
  * assistant saying it has no authority, never to it inventing some.
  */
-async function retrieveCorpusContext({ query, limit = 6, preferSuperiorCourts = true }) {
+// plainto_tsquery ANDs every word, which is right for a question the attorney
+// typed but wrong for a flag phrased as a statement: "Voetstoots clause with no
+// defect disclosure schedule" would require all five terms in one judgment and
+// match nothing. matchAny mode ORs the distinctive terms instead and lets
+// ts_rank sort out relevance — recall first, ranking second.
+//
+// Only [a-z0-9] survives, so nothing here can reach to_tsquery as syntax.
+const TSQUERY_STOPWORDS = new Set([
+  "with", "without", "that", "this", "from", "have", "has", "been", "the", "and",
+  "for", "not", "any", "all", "may", "must", "shall", "there", "which", "where",
+  "clause", "agreement", "document", "party", "parties", "section"
+]);
+function buildOrTsQuery(text) {
+  const terms = String(text || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(t => t.length >= 4 && !TSQUERY_STOPWORDS.has(t));
+  return [...new Set(terms)].slice(0, 8).join(" | ");
+}
+
+async function retrieveCorpusContext({ query, limit = 6, preferSuperiorCourts = true, matchAny = false }) {
   const q = String(query || "").trim();
   if (q.length < 3) return [];
+  // In matchAny mode the query text is rebuilt from sanitised terms; if nothing
+  // distinctive survives, that is an honest no-match rather than a broad sweep.
+  const searchText = matchAny ? buildOrTsQuery(q) : q;
+  if (!searchText) return [];
+  const tsqueryFn = matchAny ? "to_tsquery" : "plainto_tsquery";
   try {
     const r = await pool.query(
       `select id, frbr_uri, title, citation, court, year, decision_date, summary, full_text_snippet, source_url,
               ts_rank(
                 to_tsvector('english', coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(full_text_snippet,'')),
-                plainto_tsquery('english', $1)
+                ${tsqueryFn}('english', $1)
               ) as rank,
               case when ${preferSuperiorCourts ? `court ilike any($3::text[])` : "false"} then 1 else 0 end as preferred
          from legal_corpus_documents
         where to_tsvector('english', coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(full_text_snippet,''))
-              @@ plainto_tsquery('english', $1)
+              @@ ${tsqueryFn}('english', $1)
         order by preferred desc, rank desc
         limit $2`,
-      [q, limit, PREFERRED_COURT_PATTERNS]
+      [searchText, limit, PREFERRED_COURT_PATTERNS]
     );
     return r.rows;
   } catch (err) {

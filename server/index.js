@@ -4040,7 +4040,8 @@ function docAnalysisFromRow(row) {
   return { id: row.id, fileName: row.file_name, documentType: row.document_type || "", analysisStatus: row.analysis_status, parties: row.parties || [], keyDates: row.key_dates || [], obligations: row.obligations || [], riskFlags: row.risk_flags || [], saLawFlags: row.sa_law_flags || [], summary: row.summary || "", analysedAt: row.analysed_at ? new Date(row.analysed_at).toISOString() : "",
     matterId: row.matter_id || null, matterRef: row.matter_ref || "",
     filedAt: row.filed_at ? new Date(row.filed_at).toISOString() : "",
-    filingSource: row.filing_source || "" };
+    filingSource: row.filing_source || "",
+    authorities: row.authorities || [] };
 }
 
 // ─── DOCUMENT AUTO-FILING ────────────────────────────────────────────────────
@@ -4151,6 +4152,124 @@ app.get("/api/documents/analyses", authMiddleware, async (req, res, next) => {
     res.json({ analyses: result.rows.map(docAnalysisFromRow) });
   } catch (error) { next(error); }
 });
+
+// ─── DOCUMENT FLAGS → VERIFIED AUTHORITY ─────────────────────────────────────
+// Document analysis was the last AI surface in the product still speaking about
+// South African law from model recall. It would report "voetstoots concern" and
+// leave the attorney with nothing to read — the same shape of failure that lost
+// a testing attorney's trust when research invented a citation.
+//
+// The safety property here is structural, not a prompt instruction: the model
+// NEVER produces a citation. Candidates are retrieved from
+// legal_corpus_documents (every row citable and linked, since the L6 purge),
+// handed to the model with opaque ids, and it may only choose among them and
+// say why. Anything it names that is not in the candidate map is dropped before
+// storage, so an invented authority cannot reach the file.
+//
+// Budget: retrieval is LOCAL-ONLY. The obvious move — retrieveGroundingSources
+// per flag — would spend one Laws.Africa call per flag, so a single upload with
+// eight flags would take eight of the ~90 daily calls that live research needs
+// for the attorney's actual questions. Documents are not questions; they can
+// wait for the corpus. One AI call per document, no API budget at all.
+const MAX_GROUNDED_FLAGS = 8;
+
+// callAi is injectable so the invention-proof filter can be tested against
+// hostile model output without an API key. Production always uses the default.
+async function groundDocumentFlags({ riskFlags, saLawFlags, provider, apiKey, model, tenantId, userId, callAi = callAiProviderLogged }) {
+  const flags = [
+    ...(Array.isArray(riskFlags) ? riskFlags : []).map(f => ({ flag: String(f || "").trim(), kind: "risk" })),
+    ...(Array.isArray(saLawFlags) ? saLawFlags : []).map(f => ({ flag: String(f || "").trim(), kind: "sa_law" }))
+  ].filter(f => f.flag.length > 5).slice(0, MAX_GROUNDED_FLAGS);
+  if (!flags.length || !apiKey) return [];
+
+  // Retrieve candidates per flag, pooled and deduped by citation so the model
+  // sees each authority once no matter how many flags surfaced it.
+  const byId = new Map();
+  const perFlagIds = [];
+  for (const f of flags) {
+    const ids = [];
+    let docs = [];
+    try {
+      // matchAny: a flag is a statement, not a question — see the note on
+      // retrieveCorpusContext. ANDing its words would match nothing.
+      docs = await grounding.retrieveCorpusContext({ query: f.flag, limit: 3, matchAny: true });
+    } catch (err) {
+      console.warn(`[doc-intelligence] corpus retrieval failed for a flag: ${err.message}`);
+    }
+    for (const d of docs) {
+      if (!d.citation) continue; // uncitable row: nothing an attorney could look up
+      let id = [...byId.entries()].find(([, v]) => v.citation === d.citation)?.[0];
+      if (!id) {
+        id = `C${byId.size + 1}`;
+        byId.set(id, d);
+      }
+      ids.push(id);
+    }
+    perFlagIds.push(ids);
+  }
+  if (!byId.size) return [];
+
+  const candidateBlock = [...byId.entries()].map(([id, d]) =>
+    `[${id}] ${d.citation} — ${d.title || "Untitled"}${d.court ? ` (${d.court}${d.year ? `, ${d.year}` : ""})` : ""}\n` +
+    `      ${String(d.summary || d.full_text_snippet || "").slice(0, 400)}`
+  ).join("\n\n");
+
+  const concernBlock = flags.map((f, i) =>
+    `(${i}) [${f.kind === "risk" ? "risk" : "SA law"}] ${f.flag}` +
+    (perFlagIds[i].length ? `\n      candidates: ${perFlagIds[i].join(", ")}` : "\n      candidates: none")
+  ).join("\n");
+
+  const systemPrompt = [
+    "You match South African legal authorities to concerns raised in a document.",
+    "You may ONLY choose from the CANDIDATES listed. Never name a case, citation or authority that is not in that list — not one, under any circumstances.",
+    "Choose an authority only where it genuinely bears on the concern. A keyword overlap is NOT a reason to choose it. Returning nothing for a concern is a correct and useful answer; a wrong authority wastes an attorney's time and damages trust.",
+    "For each concern you can support, give a single short sentence saying what the authority establishes and why it bears on this concern. Do not overstate: these are starting points for the attorney to read, not conclusions.",
+    'Return ONLY valid JSON (no prose, no markdown fences): {"matches":[{"concern":0,"candidates":["C1"],"note":"..."}]}',
+    "Omit any concern you cannot support from the matches array."
+  ].join("\n");
+
+  const userPrompt = `CONCERNS RAISED BY THE DOCUMENT:\n${concernBlock}\n\nCANDIDATES (the only authorities you may cite):\n${candidateBlock}`;
+
+  let aiText = "";
+  try {
+    aiText = await callAi(provider, apiKey, model, systemPrompt, userPrompt, {
+      tenantId: tenantId || null, userId: userId || null, feature: "document-intelligence"
+    });
+  } catch (err) {
+    console.warn(`[doc-intelligence] authority matching failed: ${err.message}`);
+    return [];
+  }
+
+  const m = String(aiText || "").match(/\{[\s\S]*\}/);
+  if (!m) return [];
+  let parsed;
+  try { parsed = JSON.parse(m[0]); } catch { return []; }
+
+  const out = [];
+  for (const match of Array.isArray(parsed.matches) ? parsed.matches : []) {
+    const idx = Number(match?.concern);
+    if (!Number.isInteger(idx) || !flags[idx]) continue;
+    // The mechanical filter that makes invention impossible: an id the model
+    // returns is only honoured if we put it in the candidate map ourselves,
+    // AND it was offered for this particular concern.
+    const allowed = new Set(perFlagIds[idx]);
+    const authorities = (Array.isArray(match.candidates) ? match.candidates : [])
+      .filter(id => allowed.has(id))
+      .map(id => {
+        const d = byId.get(id);
+        return {
+          citation: d.citation,
+          title: d.title || "",
+          court: d.court || "",
+          year: d.year || null,
+          sourceUrl: d.source_url || "",
+          note: String(match.note || "").trim().slice(0, 300)
+        };
+      });
+    if (authorities.length) out.push({ flag: flags[idx].flag, kind: flags[idx].kind, authorities });
+  }
+  return out;
+}
 
 // ─── DOCUMENT ACTIONS: ANALYSIS → DIARY + OBLIGATIONS ────────────────────────
 // An analysis used to be a leaf node. It extracted the dates and commitments in
@@ -4605,9 +4724,24 @@ ${text}
           return;
         }
 
+        // Attach real authority to the concerns raised, before the analysis is
+        // marked Complete so the attorney never sees a half-grounded version.
+        // Never throws and never blocks: an analysis with no authorities is the
+        // old behaviour, which is still useful.
+        let authorities = [];
+        try {
+          authorities = await groundDocumentFlags({
+            riskFlags: parsed.riskFlags, saLawFlags: parsed.saLawFlags,
+            provider: docProvider, apiKey, model,
+            tenantId: req.user.tenantId, userId: req.user.sub
+          });
+        } catch (err) {
+          console.warn(`[doc-intelligence] could not ground flags: ${err.message}`);
+        }
+
         await pool.query(
-          "update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, analysed_at=now() where id=$1",
-          [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], parsed.summary || "", model]
+          "update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, authorities=$10, analysed_at=now() where id=$1",
+          [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], parsed.summary || "", model, JSON.stringify(authorities)]
         );
 
         // Auto-file from the extracted parties, but only if the uploader did not
@@ -6684,4 +6818,4 @@ app.listen(port, () => {
 // document extraction is otherwise only reachable through an endpoint that
 // needs an AI key, so the parsing rules would never be exercised locally.
 // Nothing requires this module in production — index.js is the entrypoint.
-module.exports = { extractDocumentText, spreadsheetToText, proposeDocumentActions, applyDocumentActions };
+module.exports = { extractDocumentText, spreadsheetToText, proposeDocumentActions, applyDocumentActions, groundDocumentFlags };
