@@ -275,6 +275,9 @@ export function App() {
   const [apiSettings, setApiSettings] = useState<ApiProviderSettings>({
     exchangeRatesApiKey: "",
     exchangeRatesBaseCurrency: "ZAR",
+    anthropicApiKey: "",
+    anthropicModel: "claude-opus-4-8",
+    anthropicFeatures: [],
     openAiApiKey: "",
     openAiModel: "gpt-5.4-mini",
     openAiFeatures: [],
@@ -3221,9 +3224,9 @@ function AdminSettings({
     "research-summaries": "Research Summaries"
   };
 
-  function toggleFeature(providerKey: "openAiFeatures" | "geminiFeatures" | "grokFeatures", feature: AiFeature) {
+  function toggleFeature(providerKey: "anthropicFeatures" | "openAiFeatures" | "geminiFeatures" | "grokFeatures", feature: AiFeature) {
     setApiSettings((prev) => {
-      const allKeys: ("openAiFeatures" | "geminiFeatures" | "grokFeatures")[] = ["openAiFeatures", "geminiFeatures", "grokFeatures"];
+      const allKeys: ("anthropicFeatures" | "openAiFeatures" | "geminiFeatures" | "grokFeatures")[] = ["anthropicFeatures", "openAiFeatures", "geminiFeatures", "grokFeatures"];
       const next = { ...prev };
       for (const k of allKeys) {
         if (k === providerKey) {
@@ -3542,6 +3545,33 @@ function AdminSettings({
                 <option>GBP</option>
               </select>
             </label>
+          </article>
+
+          <article className="integration-card">
+            <div className="integration-head">
+              <Sparkles size={20} />
+              <div>
+                <strong>Claude (Anthropic)</strong>
+                <span>Primary provider for research, drafting and document analysis. Opus 4.8 carries a 1M-token context, which is what lets a full contract be analysed in one pass.</span>
+              </div>
+            </div>
+            <label>API key<input type="password" value={apiSettings.anthropicApiKey} onChange={(event) => updateApi("anthropicApiKey", event.target.value)} placeholder="sk-ant-..." /></label>
+            <label>Model
+              <select value={apiSettings.anthropicModel} onChange={(event) => updateApi("anthropicModel", event.target.value)}>
+                <option value="claude-opus-4-8">Claude Opus 4.8 — most capable (1M context)</option>
+                <option value="claude-sonnet-5">Claude Sonnet 5 — faster, lower cost (1M context)</option>
+                <option value="claude-haiku-4-5">Claude Haiku 4.5 — cheapest, high volume (200K)</option>
+              </select>
+            </label>
+            <div style={{ marginTop: 6 }}>
+              <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Features using this provider</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                {(Object.keys(AI_FEATURE_LABELS) as AiFeature[]).map(f => {
+                  const active = apiSettings.anthropicFeatures.includes(f);
+                  return <button type="button" key={f} className={active ? "feature-chip active" : "feature-chip"} onClick={() => toggleFeature("anthropicFeatures", f)}>{active && <CheckCircle2 size={12} />}{AI_FEATURE_LABELS[f]}</button>;
+                })}
+              </div>
+            </div>
           </article>
 
           <article className="integration-card">

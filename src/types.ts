@@ -172,6 +172,9 @@ export type AiFeature = "ai-chat" | "document-intelligence" | "research-summarie
 export type ApiProviderSettings = {
   exchangeRatesApiKey: string;
   exchangeRatesBaseCurrency: "ZAR" | "USD" | "EUR" | "GBP";
+  anthropicApiKey: string;
+  anthropicModel: string;
+  anthropicFeatures: AiFeature[];
   openAiApiKey: string;
   openAiModel: string;
   openAiFeatures: AiFeature[];

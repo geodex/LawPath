@@ -165,6 +165,9 @@ function apiSettingsFromRows(rows) {
   return {
     exchangeRatesApiKey: byProvider.exchangerates?.api_key_secret_ref || "",
     exchangeRatesBaseCurrency: byProvider.exchangerates?.base_currency || "ZAR",
+    anthropicApiKey: byProvider.anthropic?.api_key_secret_ref || "",
+    anthropicModel: byProvider.anthropic?.default_model || "claude-opus-4-8",
+    anthropicFeatures: byProvider.anthropic?.features || [],
     openAiApiKey: byProvider.openai?.api_key_secret_ref || "",
     openAiModel: byProvider.openai?.default_model || "gpt-5.4-mini",
     openAiFeatures: byProvider.openai?.features || [],
@@ -326,8 +329,15 @@ function buildContextSummary(context) {
   ].join(" ");
 }
 
-const AI_PROVIDERS = ["gemini", "openai", "grok"];
+// Order is the fallback preference when no feature routing is configured.
+// Anthropic first: legal research and drafting are the reasoning-heavy
+// features this product lives or dies on, and Opus 4.8 carries a 1M-token
+// context at standard pricing — which is what lets a whole commercial lease
+// be analysed in one call. The others remain configured fallbacks so the
+// platform degrades instead of breaking when one provider is down.
+const AI_PROVIDERS = ["anthropic", "gemini", "openai", "grok"];
 const AI_ENV_DEFAULTS = {
+  anthropic: { keyEnv: "ANTHROPIC_API_KEY", modelEnv: "ANTHROPIC_MODEL", fallbackModel: "claude-opus-4-8" },
   openai:  { keyEnv: "OPENAI_API_KEY",  modelEnv: "OPENAI_MODEL",  fallbackModel: "gpt-5.4-mini" },
   gemini:  { keyEnv: "GEMINI_API_KEY",  modelEnv: "GEMINI_MODEL",  fallbackModel: "gemini-3.5-flash" },
   grok:    { keyEnv: "GROK_API_KEY",    modelEnv: "GROK_MODEL",    fallbackModel: "grok-4.3" }
@@ -401,7 +411,54 @@ async function callOpenAiApi(apiKey, model, systemPrompt, userPrompt) {
   return payload.output_text || payload.output?.flatMap(i => i.content || []).map(p => p.text || "").join("\n") || "";
 }
 
+// Claude, via the official SDK.
+//
+// Three things here are not optional on Opus 4.8 and cost a 400 if got wrong:
+//   * temperature / top_p / top_k are REMOVED — never send them (we never did);
+//   * thinking must be requested EXPLICITLY. Omitting the field runs without
+//     thinking, which is the wrong default for legal reasoning;
+//   * budget_tokens is gone — depth is set by output_config.effort instead.
+//
+// Streaming rather than a plain create(): document analysis now ships up to
+// ~250K tokens of contract in a single prompt, and a non-streaming request
+// that large risks an HTTP timeout before the first byte. The SDK's
+// finalMessage() gives back the assembled message, so the caller still just
+// gets a string.
+let anthropicClientCache = null;
+function anthropicClient(apiKey) {
+  if (anthropicClientCache?.key === apiKey) return anthropicClientCache.client;
+  const Anthropic = require("@anthropic-ai/sdk");
+  const Ctor = Anthropic.default || Anthropic;
+  anthropicClientCache = { key: apiKey, client: new Ctor({ apiKey }) };
+  return anthropicClientCache.client;
+}
+
+async function callAnthropicApi(apiKey, model, systemPrompt, userPrompt) {
+  const client = anthropicClient(apiKey);
+  const stream = client.messages.stream({
+    model: model || "claude-opus-4-8",
+    max_tokens: 16000,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "high" },
+    ...(systemPrompt ? { system: systemPrompt } : {}),
+    messages: [{ role: "user", content: userPrompt }]
+  });
+  const message = await stream.finalMessage();
+
+  // A safety decline is a successful HTTP 200 with an empty/partial body —
+  // reading content[0] blindly would surface as a confusing empty analysis.
+  if (message.stop_reason === "refusal") {
+    throw new Error("Claude declined this request on safety grounds. Rephrase, or route this feature to another provider under Settings → API keys.");
+  }
+  return (message.content || [])
+    .filter(b => b.type === "text")
+    .map(b => b.text)
+    .join("\n")
+    .trim();
+}
+
 async function callAiProvider(provider, apiKey, model, systemPrompt, userPrompt) {
+  if (provider === "anthropic") return callAnthropicApi(apiKey, model, systemPrompt, userPrompt);
   if (provider === "gemini") return callGeminiApi(apiKey, model, systemPrompt, userPrompt);
   if (provider === "grok") return callGrokApi(apiKey, model, systemPrompt, userPrompt);
   return callOpenAiApi(apiKey, model, systemPrompt, userPrompt);
@@ -958,6 +1015,7 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
   const settings = req.body;
   const providers = [
     ["exchangerates", settings.exchangeRatesApiKey || "", null, settings.exchangeRatesBaseCurrency || "ZAR", []],
+    ["anthropic", settings.anthropicApiKey || "", settings.anthropicModel || "claude-opus-4-8", null, settings.anthropicFeatures || []],
     ["openai", settings.openAiApiKey || "", settings.openAiModel || "gpt-5.4-mini", null, settings.openAiFeatures || []],
     ["gemini", settings.geminiApiKey || "", settings.geminiModel || "gemini-3.5-flash", null, settings.geminiFeatures || []],
     ["grok", settings.grokApiKey || "", settings.grokModel || "grok-4.3", null, settings.grokFeatures || []],
