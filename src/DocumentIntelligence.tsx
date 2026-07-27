@@ -493,11 +493,11 @@ export function DocumentIntelligence({ analyses, setAnalyses, log, showToast }: 
         <form className="form" onSubmit={handleSubmit}>
           <div className="form-row">
             <label>
-              <span>Document file <em style={{ color: "var(--muted)", fontStyle: "normal", fontWeight: 400 }}>(PDF, DOCX, XLSX, TXT, MD, CSV — max 50 MB)</em></span>
+              <span>Document file <em style={{ color: "var(--muted)", fontStyle: "normal", fontWeight: 400 }}>(PDF, DOCX, XLSX, TXT, MD, CSV, or a voice note: MP3, WAV, M4A, OGG — max 50 MB)</em></span>
               <input
                 id="doc-file-input"
                 type="file"
-                accept=".pdf,.docx,.xlsx,.txt,.md,.csv"
+                accept=".pdf,.docx,.xlsx,.txt,.md,.csv,.mp3,.wav,.m4a,.ogg,.opus,.webm,.flac"
                 disabled={uploading}
                 onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
               />

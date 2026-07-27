@@ -4570,6 +4570,12 @@ async function extractDocumentText(buffer, mimeType, fileName) {
     name.endsWith(".htm");
 
   try {
+    // Audio can't be read here — it needs a network transcription round-trip,
+    // and this function is synchronous-ish and used in places where spending a
+    // Speech-to-Text call would be wrong. Flag it; the analyse endpoint
+    // transcribes and re-enters with the transcript.
+    const { isAudio } = require("./transcribe");
+    if (isAudio(mimeType, fileName)) return { text: "", reason: "needs_transcription" };
     if (isLegacyXls) return { text: "", reason: "legacy_xls" };
     if (isXlsx) {
       // One call returns every sheet with its data.
@@ -4643,6 +4649,35 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // error before we even spend an AI call on an unanalysable file.
     const decoded = decodeDataUrl(fileDataUrl);
     let { text, reason, tabular, truncated, originalChars } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
+
+    // A voice note becomes a document whose text is its transcript, and then
+    // travels the identical path — flags, dates, obligations, filing, and
+    // comparison all work on it with no special-casing downstream.
+    let transcript = false;
+    if (reason === "needs_transcription") {
+      try {
+        const { transcribeAudio } = require("./transcribe");
+        const t = await transcribeAudio({ buffer: decoded?.buffer, mimeType: decoded?.mimeType, fileName });
+        if (t.reason === "ok") {
+          text = t.text; reason = "ok"; transcript = true;
+        } else {
+          const why = {
+            empty_audio: "The audio file is empty.",
+            unsupported_audio: "That audio format is not supported. Use MP3, WAV, FLAC, OGG/Opus, WebM or M4A.",
+            audio_too_large: "The recording is too long for transcription (limit ~1 minute / 10MB). Split it into shorter notes.",
+            no_speech_detected: "No speech was detected in the recording. Check the microphone and that the file is not silent."
+          }[t.reason] || "The recording could not be transcribed.";
+          await pool.query("update document_analyses set analysis_status='Failed', summary=$2 where id=$1", [analysis.id, why]);
+          const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+          return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
+        }
+      } catch (err) {
+        await pool.query("update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+          [analysis.id, `Transcription failed: ${err.message}`]);
+        const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+        return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
+      }
+    }
 
     if (reason === "unsupported_format") {
       await pool.query(
@@ -4743,7 +4778,11 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
         // Two prompts, one JSON shape. A spreadsheet and a contract need
         // completely different questions asked of them, but they land in the
         // same seven columns so nothing downstream (UI, filing, storage) changes.
-        const prompt = tabular
+        const transcriptPreamble = transcript
+          ? "This text is an AUTOMATIC TRANSCRIPT of a voice note dictated by an attorney — not a drafted document. Expect dictation artefacts, misheard names and no punctuation of legal precision. Treat names, figures and dates as PROVISIONAL and say so where one is load-bearing. Do not report a transcription artefact as a legal risk.\n\n"
+          : "";
+
+        const prompt = transcriptPreamble + (tabular
           ? `You are analysing a South African legal practice SPREADSHEET (e.g. a trust bank statement, bill of costs, estate liquidation & distribution account, disbursement or FICA schedule). Rows are pipe-delimited under a "=== Sheet: name ===" header. Return ONLY valid JSON (no prose, no markdown fences) with these exact fields:
 - documentType (short string, e.g. "Trust bank statement", "Bill of costs", "Estate L&D account", "Disbursement schedule")
 - parties (string array: account holders, clients, firms or entities named in the data)
@@ -4775,7 +4814,7 @@ Document filename: ${fileName}
 Document content:
 """
 ${text}
-"""`;
+"""`);
         let aiText = "";
         try {
           aiText = await callAiProviderLogged(docProvider, apiKey, model, "", prompt, {
