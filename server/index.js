@@ -4118,6 +4118,39 @@ function decodeDataUrl(dataUrl) {
 // path goes straight to the actual extractor.
 const pdfParse = require("pdf-parse/lib/pdf-parse.js");
 const mammoth = require("mammoth");
+// Read-only .xlsx reader. Chosen over exceljs deliberately: exceljs pulls its
+// archiver/zip WRITE chain (8 advisories, high, via brace-expansion glob DoS)
+// for a capability we never use — we only ever read an uploaded spreadsheet.
+// read-excel-file adds zero advisories. Legacy binary .xls is not supported by
+// either; the UI says so rather than failing mysteriously.
+const readXlsxFile = require("read-excel-file/node");
+
+// Render a workbook as plain text the analyser can read: one block per sheet,
+// pipe-delimited rows. Caps are per-sheet AND overall — a 50,000-row bank
+// statement must not blow the prompt budget or the process memory.
+const SHEET_ROW_CAP = 400;
+function spreadsheetToText(sheets) {
+  const blocks = [];
+  for (const { sheet, data } of sheets) {
+    const rows = Array.isArray(data) ? data : [];
+    const shown = rows.slice(0, SHEET_ROW_CAP);
+    const lines = shown.map(row =>
+      (Array.isArray(row) ? row : [])
+        .map(cell => {
+          if (cell === null || cell === undefined) return "";
+          if (cell instanceof Date) return cell.toISOString().slice(0, 10);
+          return String(cell).replace(/\s+/g, " ").trim();
+        })
+        .join(" | ")
+    );
+    blocks.push(
+      `=== Sheet: ${sheet} (${rows.length} row${rows.length === 1 ? "" : "s"}` +
+      `${rows.length > SHEET_ROW_CAP ? `, first ${SHEET_ROW_CAP} shown` : ""}) ===\n` +
+      lines.join("\n")
+    );
+  }
+  return blocks.join("\n\n");
+}
 
 // Extract text from common SA legal document uploads. Returns up to 80 KB
 // of plain text — that's deep enough to give the AI a substantial chunk
@@ -4132,6 +4165,12 @@ async function extractDocumentText(buffer, mimeType, fileName) {
   const isDocx =
     mt === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
     name.endsWith(".docx");
+  const isXlsx =
+    mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    name.endsWith(".xlsx");
+  // Legacy binary .xls is a different format entirely — caught explicitly so
+  // the user is told to re-save as .xlsx rather than getting "unsupported".
+  const isLegacyXls = mt === "application/vnd.ms-excel" || name.endsWith(".xls");
   const isTextLike =
     mt.startsWith("text/") ||
     mt === "application/json" ||
@@ -4142,6 +4181,17 @@ async function extractDocumentText(buffer, mimeType, fileName) {
     name.endsWith(".htm");
 
   try {
+    if (isLegacyXls) return { text: "", reason: "legacy_xls" };
+    if (isXlsx) {
+      // One call returns every sheet with its data.
+      const sheets = await readXlsxFile(buffer, { getSheets: true });
+      if (!Array.isArray(sheets) || !sheets.length) return { text: "", reason: "xlsx_empty" };
+      const text = spreadsheetToText(sheets).trim();
+      if (!text) return { text: "", reason: "xlsx_empty" };
+      // tabular drives a different analysis prompt: asking a bank statement for
+      // "parties and obligations" the way you'd ask a contract produces noise.
+      return { text: text.slice(0, 80_000), reason: "ok", tabular: true };
+    }
     if (isPdf) {
       const parsed = await pdfParse(buffer);
       const text = (parsed?.text || "").trim();
@@ -4203,12 +4253,24 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // Decode and extract text up front so we can give the user a useful
     // error before we even spend an AI call on an unanalysable file.
     const decoded = decodeDataUrl(fileDataUrl);
-    let { text, reason } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
+    let { text, reason, tabular } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
 
     if (reason === "unsupported_format") {
       await pool.query(
         "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
-        [analysis.id, "Unsupported file format. Supported types: PDF, DOCX, TXT, MD, CSV, HTML."]
+        [analysis.id, "Unsupported file format. Supported types: PDF, DOCX, XLSX, TXT, MD, CSV, HTML."]
+      );
+      const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
+      return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
+    }
+
+    if (reason === "legacy_xls" || reason === "xlsx_empty") {
+      const msg = reason === "legacy_xls"
+        ? "Legacy .xls files are not supported. Open the file in Excel or LibreOffice and re-save it as .xlsx, then upload again."
+        : "The spreadsheet opened correctly but contained no readable cells.";
+      await pool.query(
+        "update document_analyses set analysis_status='Failed', summary=$2 where id=$1",
+        [analysis.id, msg]
       );
       const refreshed = await pool.query("select * from document_analyses where id=$1", [analysis.id]);
       return res.status(201).json({ analysis: docAnalysisFromRow(refreshed.rows[0]) });
@@ -4286,7 +4348,28 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     (async () => {
       try {
         await pool.query("update document_analyses set analysis_status='Analysing' where id=$1", [analysis.id]);
-        const prompt = `You are analysing a South African legal document. Return ONLY valid JSON (no prose, no markdown fences) with these exact fields:
+        // Two prompts, one JSON shape. A spreadsheet and a contract need
+        // completely different questions asked of them, but they land in the
+        // same seven columns so nothing downstream (UI, filing, storage) changes.
+        const prompt = tabular
+          ? `You are analysing a South African legal practice SPREADSHEET (e.g. a trust bank statement, bill of costs, estate liquidation & distribution account, disbursement or FICA schedule). Rows are pipe-delimited under a "=== Sheet: name ===" header. Return ONLY valid JSON (no prose, no markdown fences) with these exact fields:
+- documentType (short string, e.g. "Trust bank statement", "Bill of costs", "Estate L&D account", "Disbursement schedule")
+- parties (string array: account holders, clients, firms or entities named in the data)
+- keyDates (array of { label: string, date: string } — ISO YYYY-MM-DD; include the statement/reporting period start and end, and any date a payment falls due)
+- obligations (string array: amounts that still require action — payments due, transfers to make, balances to clear — each in plain English with its amount)
+- riskFlags (string array of ANOMALIES visible in the numbers: totals or balances that do not reconcile, negative/overdrawn balances, round-number cash movements, gaps or duplicates in reference sequences, unexplained transfers, VAT that does not compute at 15%, entries far outside the pattern of the sheet)
+- saLawFlags (string array of SA-specific concerns raised by the data: Legal Practice Act s86 trust rules and any apparent trust shortfall, s86(4) interest, FICA cash-threshold reporting, VAT Act treatment, prescribed tariff limits)
+- summary (2–3 sentence plain English summary of what this spreadsheet shows)
+
+Report only what the numbers actually show. Do NOT infer contractual terms that are not in the data. If nothing anomalous is present, return an empty riskFlags array rather than inventing a concern.
+
+Spreadsheet filename: ${fileName}
+
+Spreadsheet content:
+"""
+${text}
+"""`
+          : `You are analysing a South African legal document. Return ONLY valid JSON (no prose, no markdown fences) with these exact fields:
 - documentType (short string, e.g. "Sale of Land Agreement", "Lease", "Notice of Motion")
 - parties (string array of party names)
 - keyDates (array of { label: string, date: string } — date in ISO YYYY-MM-DD if possible)
@@ -6397,3 +6480,9 @@ app.use((error, _req, res, _next) => {
 app.listen(port, () => {
   console.log(`LawPath API listening on port ${port}`);
 });
+
+// Exported for tests, on the same reasoning as saflii.js's identity helpers:
+// document extraction is otherwise only reachable through an endpoint that
+// needs an AI key, so the parsing rules would never be exercised locally.
+// Nothing requires this module in production — index.js is the entrypoint.
+module.exports = { extractDocumentText, spreadsheetToText };

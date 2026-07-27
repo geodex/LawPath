@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite-frontend",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--host", "0.0.0.0"],
+      "autoPort": true,
+      "port": 5173
+    },
+    {
+      "name": "express-api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "process.env.PORT='3001'; require('./server/index.js');"],
+      "port": 3001
+    }
+  ]
+}
