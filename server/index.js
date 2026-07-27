@@ -4451,10 +4451,37 @@ function spreadsheetToText(sheets) {
   return blocks.join("\n\n");
 }
 
-// Extract text from common SA legal document uploads. Returns up to 80 KB
-// of plain text — that's deep enough to give the AI a substantial chunk
-// of a typical contract / pleading / opinion without blowing the prompt
-// budget. Unsupported formats return reason: "unsupported_format".
+// How much extracted text an analysis may carry.
+//
+// Was a hard 80 KB (~20K tokens) chosen when context windows were small. A
+// commercial lease or a bundle of agreements runs well past that, and the old
+// code silently .slice()'d — so an attorney analysing a 500-page contract got
+// findings drawn from the first 8% of it with nothing on screen saying so.
+// That is the worst possible failure for this feature: confidently wrong.
+//
+// Claude Opus 4.8 carries a 1M-token window at standard pricing (no
+// long-context premium), so ~1M characters (~250K tokens) is comfortably
+// inside it and costs roughly R25 an analysis. Configurable because the
+// fallback providers have their own ceilings and a firm may want a tighter
+// cost cap.
+const DOC_TEXT_MAX_CHARS = Math.max(
+  10_000,
+  parseInt(process.env.DOC_TEXT_MAX_CHARS || "1000000", 10) || 1_000_000
+);
+
+// Truncate, and SAY SO. Callers surface `truncated` to the attorney.
+function capText(text) {
+  const t = String(text || "");
+  if (t.length <= DOC_TEXT_MAX_CHARS) return { text: t, truncated: false };
+  return {
+    text: t.slice(0, DOC_TEXT_MAX_CHARS),
+    truncated: true,
+    originalChars: t.length
+  };
+}
+
+// Extract text from common SA legal document uploads. Unsupported formats
+// return reason: "unsupported_format".
 async function extractDocumentText(buffer, mimeType, fileName) {
   if (!buffer) return { text: "", reason: "no_buffer" };
   const name = (fileName || "").toLowerCase();
@@ -4489,7 +4516,7 @@ async function extractDocumentText(buffer, mimeType, fileName) {
       if (!text) return { text: "", reason: "xlsx_empty" };
       // tabular drives a different analysis prompt: asking a bank statement for
       // "parties and obligations" the way you'd ask a contract produces noise.
-      return { text: text.slice(0, 80_000), reason: "ok", tabular: true };
+      return { ...capText(text), reason: "ok", tabular: true };
     }
     if (isPdf) {
       const parsed = await pdfParse(buffer);
@@ -4498,20 +4525,20 @@ async function extractDocumentText(buffer, mimeType, fileName) {
       const pageCount = parsed?.numpages || 1;
       const charsPerPage = text.length / pageCount;
       if (charsPerPage < 200) return { text, reason: "pdf_sparse" };
-      return { text: text.slice(0, 80_000), reason: "ok" };
+      return { ...capText(text), reason: "ok" };
     }
     if (isDocx) {
       const result = await mammoth.extractRawText({ buffer });
       const text = (result?.value || "").trim();
       if (!text) return { text: "", reason: "docx_empty" };
-      return { text: text.slice(0, 80_000), reason: "ok" };
+      return { ...capText(text), reason: "ok" };
     }
     if (isTextLike) {
       let text = buffer.toString("utf8");
       if (mt.includes("html") || name.endsWith(".html") || name.endsWith(".htm")) {
         text = htmlToText(text);
       }
-      return { text: text.slice(0, 80_000), reason: "ok" };
+      return { ...capText(text), reason: "ok" };
     }
     return { text: "", reason: "unsupported_format" };
   } catch (err) {
@@ -4552,7 +4579,7 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // Decode and extract text up front so we can give the user a useful
     // error before we even spend an AI call on an unanalysable file.
     const decoded = decodeDataUrl(fileDataUrl);
-    let { text, reason, tabular } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
+    let { text, reason, tabular, truncated, originalChars } = await extractDocumentText(decoded?.buffer, decoded?.mimeType, fileName);
 
     if (reason === "unsupported_format") {
       await pool.query(
@@ -4579,6 +4606,7 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // by definition text-bearing — an empty DOCX is genuinely empty).
     let ocrText = "";
     let ocrError = "";
+    truncated = truncated || false;
     const needsOcr = reason === "pdf_empty" || reason === "pdf_sparse";
     if (needsOcr) {
       console.log(`[doc-intelligence] ${fileName}: ${reason} (${text.length} chars from pdf-parse), attempting OCR…`);
@@ -4599,7 +4627,9 @@ app.post("/api/documents/analyse", authMiddleware, async (req, res, next) => {
     // If OCR succeeded, use it. For sparse PDFs, prefer OCR over the
     // thin text-layer fragments that pdf-parse found.
     if (needsOcr && ocrText.trim()) {
-      text = ocrText.slice(0, 80_000);
+      const capped = capText(ocrText);
+      text = capped.text;
+      truncated = capped.truncated || truncated;
       reason = "ok";
     }
 
@@ -4739,9 +4769,17 @@ ${text}
           console.warn(`[doc-intelligence] could not ground flags: ${err.message}`);
         }
 
+        // An analysis drawn from part of a document must say so on its face.
+        // Silent truncation is the one failure mode an attorney cannot detect.
+        const summaryText = truncated
+          ? `[PARTIAL ANALYSIS] Only the first ${Math.round(DOC_TEXT_MAX_CHARS / 1000)}K of ${Math.round((originalChars || 0) / 1000)}K characters were analysed — findings below do NOT cover the whole document. Split it or raise DOC_TEXT_MAX_CHARS.
+
+${parsed.summary || ""}`
+          : (parsed.summary || "");
+
         await pool.query(
           "update document_analyses set analysis_status='Complete', document_type=$2, parties=$3, key_dates=$4, obligations=$5, risk_flags=$6, sa_law_flags=$7, summary=$8, ai_model=$9, authorities=$10, analysed_at=now() where id=$1",
-          [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], parsed.summary || "", model, JSON.stringify(authorities)]
+          [analysis.id, parsed.documentType || "Unknown", parsed.parties || [], JSON.stringify(parsed.keyDates || []), parsed.obligations || [], parsed.riskFlags || [], parsed.saLawFlags || [], summaryText, model, JSON.stringify(authorities)]
         );
 
         // Auto-file from the extracted parties, but only if the uploader did not
