@@ -57,43 +57,107 @@ function httpsPost(urlStr, headers, bodyStr, timeoutMs = 15000) {
 // not exist in DNS (first live call ever made proved it).
 const VERIFYNOW_BASE = process.env.VERIFYNOW_BASE_URL || "https://www.verifynow.co.za/api/external";
 
-// Our stable service keys → what VerifyNow actually wants. Read off the full
-// published API reference (verifynow.co.za/api-docs, 2026-07-30).
+function httpsGet(urlStr, headers, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlStr);
+    const req = https.request(
+      { hostname: url.hostname, port: url.port || 443, path: url.pathname + url.search, method: "GET", headers },
+      (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", chunk => { raw += chunk; });
+        res.on("end", () => {
+          let json;
+          try { json = JSON.parse(raw); } catch { json = {}; }
+          resolve({ statusCode: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json, raw });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`VerifyNow request timed out after ${timeoutMs}ms`)));
+    req.end();
+  });
+}
+
+// Every service we expose, transcribed from the full published API reference
+// (verifynow.co.za/api-docs, read in full 2026-07-30). THIS TABLE IS THE ONLY
+// PLACE any of it is written down — the HTTP proxy validates against it and the
+// self-test walks it, so a service cannot exist in one place and not another.
 //
-// Three things this encodes that cost us a live 400 to learn:
-//   1. There is NO endpoint per service. Several services are ONE path
-//      distinguished by a `reportType` or `bundle` discriminator in the body —
-//      a consumer trace and an ID verification are both POST /verify.
-//   2. Vehicle lookup is POST /vehicle taking `registrationNumber`, not a
-//      /number-plate path taking `licence_number`.
-//   3. The provider does NOT report per-call cost in its response (only
-//      `remainingCredits`), so the price list is ours to carry. `cents` is the
-//      retail rand price — it is what a disbursement is recovered at.
+// Four things it encodes that we learned the expensive way:
+//   1. There is NO endpoint per service. Most services are ONE path
+//      distinguished by a `reportType`/`bundle` discriminator in the body — an
+//      ID verification, a consumer trace and a phone lookup are all POST /verify.
+//   2. Vehicle lookup is POST /vehicle taking `registrationNumber`.
+//   3. The provider never reports a per-call price, only `remainingCredits`. A
+//      credit is R2.99 at the standard rate, so cost is credits × 299 cents.
+//   4. Live Home Affairs / registry lookups routinely take longer than 15s.
+//      Each service carries its own timeout; the old flat 15s cut real
+//      searches off mid-flight.
 //
-// `fixed` is injected server-side so the discriminator can never be forgotten,
-// or contradicted, by a caller.
+// `fixed` is injected server-side so a discriminator can never be forgotten or
+// contradicted by a caller. `input` names the field(s) the service reads, which
+// is what the self-test uses to build a sandbox request.
+const CREDIT_CENTS = 299; // standard pay-as-you-go rate, R2.99 per credit
+
+const LIVE = 60000;   // real-time Home Affairs / eNaTIS / CIPC / bank rails
+const CACHED = 30000; // cached or "lite" lookups
+
 const SERVICE_SPECS = {
-  "verify":                    { path: "verify",                    fixed: { reportType: "said_verification" },     credits: 1,  cents: 299 },
-  "consumer-trace":            { path: "verify",                    fixed: { reportType: "consumer_trace" },        credits: 10, cents: 2990 },
-  "consumer-trace-lite":       { path: "consumer-trace-lite",       fixed: {},                                      credits: 3,  cents: 897 },
-  "aml-pep":                   { path: "aml-screening",             fixed: { entity: 0, country: "za", dataset: "all" }, credits: 5, cents: 1495 },
-  "cipc/company":              { path: "cipc",                      fixed: { reportType: "cipc_company_match" },    credits: 10, cents: 2990 },
-  "cipc/director":             { path: "cipc",                      fixed: { reportType: "cipc_director_search" },  credits: 10, cents: 2990 },
-  "bank-account-verification": { path: "bank-account-verification", fixed: { type: "Individual", identityType: "IDNumber" }, credits: 6, cents: 1794 },
-  "number-plate":              { path: "vehicle",                   fixed: { bundle: "vehicle_lookup" },            credits: 10, cents: 2990 },
-  // The reference says /vehicle also serves "supported VIN mode" but publishes
-  // no VIN example. Sending `vin` is our best reading; a wrong field name now
-  // returns the provider's own complaint (400s are not charged).
-  "vin-decode":                { path: "vehicle",                   fixed: { bundle: "vehicle_lookup" },            credits: 10, cents: 2990 },
-  "face-match":                { path: "facematch",                 fixed: { bundle: "facematch" },                 credits: 10, cents: 2990 },
-  "verify-document":           { path: "id-document-verify",        fixed: {},                                      credits: 8,  cents: 2392 }
+  // ── Identity ──────────────────────────────────────────────────────────────
+  "verify":              { path: "verify",       fixed: { reportType: "said_verification" },          credits: 1,  timeoutMs: CACHED, input: { idNumber: "8001015009087" } },
+  "id-photo":            { path: "verify",       fixed: { reportType: "home_affairs_id_photo" },      credits: 10, timeoutMs: LIVE,   input: { idNumber: "8001015009087" } },
+  "alive-status":        { path: "verify",       fixed: { reportType: "home_affairs_real_time_idv" }, credits: 10, timeoutMs: LIVE,   input: { idNumber: "7905011111118" } },
+  "marital-status":      { path: "verify",       fixed: { reportType: "marital-status-real-time" },   credits: 10, timeoutMs: LIVE,   input: { idNumber: "9103015257085" } },
+  "id-enhanced":         { path: "id-enhanced",  fixed: {},                                           credits: 8,  timeoutMs: CACHED, input: { idNumber: "8001015009087" } },
+  "verify-document":     { path: "id-document-verify", fixed: { bundle: "id_document_verification" }, credits: 3,  timeoutMs: LIVE,   input: {} },
+  "face-match":          { path: "facematch",    fixed: { bundle: "facematch" },                      credits: 10, timeoutMs: LIVE,   input: {} },
+
+  // ── Tracing (the insurance-claim workhorses) ──────────────────────────────
+  "consumer-trace":      { path: "verify",              fixed: { reportType: "consumer_trace" },  credits: 10, timeoutMs: LIVE,   input: { idNumber: "8803145123084" } },
+  "consumer-trace-lite": { path: "consumer-trace-lite", fixed: {},                                credits: 3,  timeoutMs: CACHED, input: { idNumber: "9103015257085" } },
+  "address-lookup":      { path: "address-lookup",      fixed: {},                                credits: 3,  timeoutMs: CACHED, input: { idNumber: "8803145123084" } },
+  "phone-lookup":        { path: "verify",              fixed: { reportType: "contact_enquiry" }, credits: 5,  timeoutMs: LIVE,   input: { contactNumber: "0821234567" } },
+  "property-search":     { path: "property-search",     fixed: {},                                credits: 10, timeoutMs: LIVE,   input: { idNumber: "8803145123084" } },
+
+  // ── Compliance / company / bank ───────────────────────────────────────────
+  "aml-pep":                   { path: "aml-screening",             fixed: { entity: 0, country: "za", dataset: "all" },      credits: 5,  timeoutMs: LIVE, input: { name: "John Doe" } },
+  "cipc/company":              { path: "cipc",                      fixed: { reportType: "cipc_company_match" },              credits: 10, timeoutMs: LIVE, input: { registration_number: "2020/123456/07" } },
+  "cipc/director":             { path: "cipc",                      fixed: { reportType: "cipc_director_search" },            credits: 10, timeoutMs: LIVE, input: { idNumber: "8001015009087" } },
+  "bank-account-verification": { path: "bank-account-verification", fixed: { type: "Individual", identityType: "IDNumber" },  credits: 6,  timeoutMs: LIVE,
+    input: { firstName: "John", surname: "Doe", identityNumber: "9604075249086", bankName: "FNB", bankAccountNumber: "123456789", bankBranchCode: "250655", bankAccountType: "Savings" } },
+
+  // ── Vehicle ───────────────────────────────────────────────────────────────
+  "number-plate":        { path: "vehicle", fixed: { bundle: "vehicle_lookup" }, credits: 10, timeoutMs: LIVE, input: { registrationNumber: "ABC 123 GP" } },
+  // The reference says /vehicle also serves a "supported VIN mode" but publishes
+  // no VIN example. `vin` is our best reading; a wrong field name returns the
+  // provider's own complaint and is not charged.
+  "vin-decode":          { path: "vehicle", fixed: { bundle: "vehicle_lookup" }, credits: 10, timeoutMs: LIVE, input: { vin: "AAVZZZ1KZAU000000" } }
 };
 
 /** Retail cost of one call. The provider reports only the remaining balance, so
- *  this table is the source of truth for what a search cost. */
+ *  this is the source of truth for what a search cost. */
 function serviceCost(service) {
-  const spec = SERVICE_SPECS[service];
-  return { credits: spec?.credits ?? 0, cents: spec?.cents ?? 0 };
+  const credits = SERVICE_SPECS[service]?.credits ?? 0;
+  return { credits, cents: credits * CREDIT_CENTS };
+}
+
+/** Current credit balance. Free, and shaped unlike every other response:
+ *  { Status: "Success", Result: { credits: "1500", last_refresh } }. */
+async function getCredits() {
+  const apiKey = await getApiKey();
+  const result = await httpsGet(`${VERIFYNOW_BASE}/my_credits`, { "x-api-key": apiKey }, CACHED);
+  if (!result.ok) {
+    const err = new Error(`VerifyNow ${result.statusCode}: ${extractErrorDetail(result.json, result.raw) || "could not read credit balance"}`);
+    err.statusCode = result.statusCode;
+    err.expose = true;
+    throw err;
+  }
+  const raw = result.json?.Result?.credits ?? result.json?.result?.credits ?? null;
+  return {
+    credits: raw === null ? null : Number(raw),
+    lastRefresh: result.json?.Result?.last_refresh ?? null
+  };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -161,32 +225,43 @@ function extractErrorDetail(payload, raw) {
   return null;
 }
 
-async function call({ service, body, tenantId, userId, inputRef }) {
+async function call({ service, body, tenantId, userId, inputRef, mode }) {
   const apiKey = await getApiKey();
   const idempotencyKey = crypto.randomUUID();
   const startTime = Date.now();
 
   const spec = SERVICE_SPECS[service];
-  // Every documented example carries an explicit mode; a live key must never
-  // silently run a sandbox search an attorney would rely on. The service's
-  // discriminator (reportType/bundle) is injected here, not trusted to callers.
-  const requestBody = { mode: "production", ...body, ...(spec?.fixed || {}) };
+  // Production unless a caller explicitly asks for sandbox (the self-test does):
+  // a live key must never silently run a mock search an attorney would rely on.
+  // The service's discriminator (reportType/bundle) is injected here, never
+  // trusted to callers.
+  const requestBody = { ...body, mode: mode === "sandbox" ? "sandbox" : "production", ...(spec?.fixed || {}) };
+  const timeoutMs = Number(process.env.VERIFYNOW_TIMEOUT_MS) || spec?.timeoutMs || LIVE;
 
   let result;
   try {
     result = await httpsPost(
       `${VERIFYNOW_BASE}/${spec?.path || service}`,
       {
-        // Auth confirmed from the integration guide: x-api-key, not Bearer.
+        // Auth confirmed from the reference: x-api-key, not Bearer.
         "x-api-key":       apiKey,
         "Content-Type":    "application/json",
         "Idempotency-Key": idempotencyKey
       },
-      JSON.stringify(requestBody)
+      JSON.stringify(requestBody),
+      timeoutMs
     );
   } catch (networkErr) {
     await logUsage({ tenantId, userId, service, creditsSpent: 0, latencyMs: Date.now() - startTime, status: "error", errorCode: "network_error", inputRef });
-    throw Object.assign(new Error("VerifyNow API unreachable: " + networkErr.message), { statusCode: 503, expose: true });
+    const timedOut = /timed out/i.test(networkErr.message || "");
+    throw Object.assign(
+      new Error(timedOut
+        // A timeout is genuinely ambiguous: the provider may have completed and
+        // charged the search. Say so rather than implying nothing happened.
+        ? `VerifyNow did not respond within ${Math.round(timeoutMs / 1000)}s. The search may still have been charged — check your balance before retrying.`
+        : "VerifyNow API unreachable: " + networkErr.message),
+      { statusCode: 504, expose: true }
+    );
   }
 
   const latencyMs = Date.now() - startTime;
@@ -220,34 +295,48 @@ async function call({ service, body, tenantId, userId, inputRef }) {
   return payload;
 }
 
-// ─── Service Methods ──────────────────────────────────────────────────────────
+// ─── Public surface ───────────────────────────────────────────────────────────
+
+/** Run any service in SERVICE_SPECS. Preferred over the named helpers: there is
+ *  no per-service list to keep in step with the spec table. */
+function runService(service, body, ctx = {}) {
+  if (!SERVICE_SPECS[service]) {
+    const err = new Error(`Unknown VerifyNow service: ${service}`);
+    err.statusCode = 400;
+    err.expose = true;
+    throw err;
+  }
+  return call({ service, body, ...ctx });
+}
+
+/** Service keys, for callers that need to validate or enumerate them. */
+function listServices() {
+  return Object.keys(SERVICE_SPECS);
+}
 
 module.exports = {
-  // Identity verification
-  verifyId:        (body, ctx) => call({ service: "verify",          body, ...ctx }),
-  verifyDocument:  (body, ctx) => call({ service: "verify-document", body, ...ctx }),
-  faceMatch:       (body, ctx) => call({ service: "face-match",      body, ...ctx }),
-
-  // Compliance screening
-  amlPep:           (body, ctx) => call({ service: "aml-pep",             body, ...ctx }),
-  consumerTrace:    (body, ctx) => call({ service: "consumer-trace",      body, ...ctx }),
-  consumerTraceLite:(body, ctx) => call({ service: "consumer-trace-lite", body, ...ctx }),
-
-  // Business verification
-  cipcCompany:  (body, ctx) => call({ service: "cipc/company",  body, ...ctx }),
-  cipcDirector: (body, ctx) => call({ service: "cipc/director", body, ...ctx }),
-
-  // Financial
-  bankAccountVerification: (body, ctx) => call({ service: "bank-account-verification", body, ...ctx }),
-
-  // Vehicle
-  numberPlate: (body, ctx) => call({ service: "number-plate", body, ...ctx }),
-  vinDecode:   (body, ctx) => call({ service: "vin-decode",   body, ...ctx }),
+  runService,
+  listServices,
+  getCredits,
 
   /** Retail cost of a call — used to record a search as a disbursement. */
   serviceCost,
 
-  // Exported for tests.
+  // Named helpers kept for existing callers.
+  verifyId:                (body, ctx) => runService("verify",                    body, ctx),
+  verifyDocument:          (body, ctx) => runService("verify-document",           body, ctx),
+  faceMatch:               (body, ctx) => runService("face-match",                body, ctx),
+  amlPep:                  (body, ctx) => runService("aml-pep",                   body, ctx),
+  consumerTrace:           (body, ctx) => runService("consumer-trace",            body, ctx),
+  consumerTraceLite:       (body, ctx) => runService("consumer-trace-lite",       body, ctx),
+  cipcCompany:             (body, ctx) => runService("cipc/company",              body, ctx),
+  cipcDirector:            (body, ctx) => runService("cipc/director",             body, ctx),
+  bankAccountVerification: (body, ctx) => runService("bank-account-verification", body, ctx),
+  numberPlate:             (body, ctx) => runService("number-plate",              body, ctx),
+  vinDecode:               (body, ctx) => runService("vin-decode",                body, ctx),
+
+  // Exported for tests and the self-test script.
   extractErrorDetail,
-  SERVICE_SPECS
+  SERVICE_SPECS,
+  CREDIT_CENTS
 };

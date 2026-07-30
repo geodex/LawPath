@@ -6071,14 +6071,9 @@ app.get("/api/admin/verifynow/usage/log", authMiddleware, async (req, res, next)
 });
 
 // Tenant-facing proxy — any VerifyNow service via POST /api/verifynow/:service
-// Validates the service name against the known list to prevent open proxy abuse.
-const VERIFYNOW_SERVICES = new Set([
-  "verify", "verify-document", "face-match",
-  "aml-pep", "consumer-trace", "consumer-trace-lite",
-  "cipc/company", "cipc/director",
-  "bank-account-verification",
-  "number-plate", "vin-decode"
-]);
+// The allow-list IS the wrapper's spec table (prevents open proxy abuse without
+// a second list that can drift out of step with it).
+const VERIFYNOW_SERVICES = new Set(verifynow.listServices());
 
 // Fields we never persist into matter_searches.input (biometric image payloads).
 function searchInputForStorage(body) {
@@ -6114,23 +6109,9 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
       if (!m.rowCount) return res.status(404).json({ error: "Matter not found." });
     }
     const ctx = { tenantId: req.user.tenantId, userId: req.user.sub, inputRef };
-    // Route to the matching wrapper method
-    const methodMap = {
-      "verify":                    verifynow.verifyId,
-      "verify-document":           verifynow.verifyDocument,
-      "face-match":                verifynow.faceMatch,
-      "aml-pep":                   verifynow.amlPep,
-      "consumer-trace":            verifynow.consumerTrace,
-      "consumer-trace-lite":       verifynow.consumerTraceLite,
-      "cipc/company":              verifynow.cipcCompany,
-      "cipc/director":             verifynow.cipcDirector,
-      "bank-account-verification": verifynow.bankAccountVerification,
-      "number-plate":              verifynow.numberPlate,
-      "vin-decode":                verifynow.vinDecode
-    };
     let result;
     try {
-      result = await methodMap[service](body, ctx);
+      result = await verifynow.runService(service, body, ctx);
     } catch (vnErr) {
       // The failed attempt still belongs on the register — an attorney needs to
       // see that a search was tried (and what it cost, if anything).
@@ -6172,6 +6153,15 @@ function matterSearchFromRow(row) {
     createdAt: new Date(row.created_at).toISOString()
   };
 }
+
+// Credit balance — free to call, and the first thing to check when a search
+// fails: an empty balance and a broken key look identical from the UI.
+app.get("/api/verifynow/credits", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    res.json(await verifynow.getCredits());
+  } catch (error) { next(error); }
+});
 
 // Search register — every stored third-party search, newest first.
 app.get("/api/searches", authMiddleware, async (req, res, next) => {

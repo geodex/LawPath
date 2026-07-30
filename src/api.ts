@@ -863,6 +863,11 @@ export type MatterSearch = {
   createdAt: string;
 };
 
+/** Remaining VerifyNow credit balance. Free to call. */
+export async function getVerifyNowCredits() {
+  return request<{ credits: number | null; lastRefresh: string | null }>("/api/verifynow/credits");
+}
+
 /** Every stored third-party search (vehicle, consumer, company, bank), newest first. */
 export async function getSearches(params?: { matterId?: string; limit?: number }) {
   const qs = new URLSearchParams();

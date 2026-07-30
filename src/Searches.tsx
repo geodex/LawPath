@@ -1,6 +1,6 @@
 import { Car, CircleDollarSign, FileSearch, History, Search, ShieldCheck, User, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { callVerifyNow, getMatters, getSearches, MatterSearch } from "./api";
+import { callVerifyNow, getMatters, getSearches, getVerifyNowCredits, MatterSearch } from "./api";
 import type { Matter } from "./types";
 
 type Props = {
@@ -34,23 +34,48 @@ const SERVICES: ServiceDef[] = [
     fields: [{ key: "vin", label: "VIN", placeholder: "17-character VIN", required: true }]
   },
   {
-    service: "consumer-trace", label: "Consumer Trace", group: "Consumer", cents: 2990,
+    service: "consumer-trace", label: "Consumer Trace", group: "Trace", cents: 2990,
     description: "Comprehensive trace — current and historical addresses, employment history and contact numbers.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "consumer-trace-lite", label: "Consumer Trace Lite", group: "Consumer", cents: 897,
+    service: "consumer-trace-lite", label: "Consumer Trace Lite", group: "Trace", cents: 897,
     description: "Faster, focused trace — core identity, marital and deceased status, essential contact and address details.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "aml-pep", label: "AML / PEP Screening", group: "Consumer", cents: 1495,
+    service: "address-lookup", label: "Address Lookup", group: "Trace", cents: 897,
+    description: "Last-known recorded physical address for an SA ID number. Not proof of current residence. A lookup that finds no address is still charged.",
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
+  },
+  {
+    service: "phone-lookup", label: "Phone Lookup (Reverse)", group: "Trace", cents: 1495,
+    description: "Identify the person linked to an SA mobile or landline number.",
+    fields: [{ key: "contactNumber", label: "Phone number", placeholder: "e.g. 0821234567", required: true }]
+  },
+  {
+    service: "property-search", label: "Property Search", group: "Trace", cents: 2990,
+    description: "Property records linked to an SA ID number — useful when assessing what a debtor or claimant owns. A no-record result is still charged.",
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
+  },
+  {
+    service: "aml-pep", label: "AML / PEP Screening", group: "Person", cents: 1495,
     description: "Screen against global sanctions lists, PEP databases and adverse media records.",
     fields: [{ key: "name", label: "Full name", placeholder: "Name to screen", required: true }]
   },
   {
-    service: "verify", label: "ID Verification", group: "Consumer", cents: 299,
-    description: "Verify an SA ID number against Home Affairs.",
+    service: "verify", label: "ID Verification", group: "Person", cents: 299,
+    description: "Verify an SA ID number against Home Affairs. The cheapest check — confirms the number is real and whose it is.",
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
+  },
+  {
+    service: "alive-status", label: "Alive / Deceased", group: "Person", cents: 2990,
+    description: "Real-time Home Affairs status — deceased status and date, blocked status, citizenship, marital status. Establishes whether a claimant or witness is alive.",
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
+  },
+  {
+    service: "marital-status", label: "Marital Status", group: "Person", cents: 2990,
+    description: "Real-time marital status as recorded by Home Affairs — matters for matrimonial-property consequences and locus standi.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
@@ -78,8 +103,8 @@ const SERVICES: ServiceDef[] = [
   }
 ];
 
-const GROUPS = ["Vehicle", "Consumer", "Company", "Bank"];
-const GROUP_ICONS: Record<string, typeof Car> = { Vehicle: Car, Consumer: User, Company: FileSearch, Bank: CircleDollarSign };
+const GROUPS = ["Vehicle", "Trace", "Person", "Company", "Bank"];
+const GROUP_ICONS: Record<string, typeof Car> = { Vehicle: Car, Trace: History, Person: User, Company: FileSearch, Bank: CircleDollarSign };
 
 function flatten(obj: unknown, prefix = "", out: Record<string, string> = {}): Record<string, string> {
   if (obj && typeof obj === "object" && !Array.isArray(obj)) {
@@ -104,6 +129,11 @@ export function Searches({ log, showToast }: Props) {
   const [history, setHistory] = useState<MatterSearch[]>([]);
   const [historyMatter, setHistoryMatter] = useState<string>("");
   const [openEntry, setOpenEntry] = useState<string | null>(null);
+  const [credits, setCredits] = useState<number | null>(null);
+
+  const refreshCredits = useCallback(() => {
+    getVerifyNowCredits().then(r => setCredits(r.credits)).catch(() => setCredits(null));
+  }, []);
 
   const loadHistory = useCallback(async (mid: string) => {
     try {
@@ -115,7 +145,8 @@ export function Searches({ log, showToast }: Props) {
   useEffect(() => {
     getMatters().then(res => setMatters(res.matters)).catch(() => {});
     loadHistory("");
-  }, [loadHistory]);
+    refreshCredits();
+  }, [loadHistory, refreshCredits]);
 
   function pickService(def: ServiceDef) {
     setSelected(def);
@@ -153,6 +184,7 @@ export function Searches({ log, showToast }: Props) {
     } finally {
       setRunning(false);
       loadHistory(historyMatter);
+      refreshCredits();
     }
   }
 
@@ -175,6 +207,11 @@ export function Searches({ log, showToast }: Props) {
           <div className="panel">
             <div className="panel-head">
               <h3><Search size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} /> Run a search</h3>
+              {credits !== null && (
+                <span className="pill" style={credits < 20 ? { background: "var(--rose-bg)", color: "var(--rose)" } : {}}>
+                  {credits} credits
+                </span>
+              )}
             </div>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
