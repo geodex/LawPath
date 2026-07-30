@@ -6092,7 +6092,7 @@ function searchInputForStorage(body) {
 
 // Best human one-liner for what was searched, when the caller gave no input_ref.
 function deriveInputRef(body) {
-  for (const key of ["input_ref", "licence_number", "vin", "id_number", "identityNumber", "registration_number", "bankAccountNumber", "full_name", "name"]) {
+  for (const key of ["input_ref", "registrationNumber", "vin", "idNumber", "id_number", "identityNumber", "registration_number", "bankAccountNumber", "full_name", "name"]) {
     const v = body?.[key];
     if (typeof v === "string" && v.trim()) return v.trim();
   }
@@ -6141,11 +6141,14 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
       ).catch(() => {});
       throw vnErr;
     }
+    // credits_spent here is RAND CENTS (what the search is recovered at as a
+    // disbursement), not provider credits — the provider does not report a
+    // per-call cost, so it comes from the wrapper's price list.
     const stored = await pool.query(
       `insert into matter_searches (tenant_id, matter_id, user_id, provider, service, input, input_ref, result, credits_spent, status)
        values ($1,$2,$3,'verifynow',$4,$5,$6,$7,$8,'success')
        returning id`,
-      [req.user.tenantId, matterId || null, req.user.sub, service, JSON.stringify(searchInputForStorage(body)), inputRef, JSON.stringify(result ?? null), result?.metadata?.credits_spent ?? 0]
+      [req.user.tenantId, matterId || null, req.user.sub, service, JSON.stringify(searchInputForStorage(body)), inputRef, JSON.stringify(result ?? null), verifynow.serviceCost(service).cents]
     ).catch(() => ({ rows: [] }));
     res.json({ ...result, search_id: stored.rows[0]?.id ?? null });
   } catch (error) { next(error); }

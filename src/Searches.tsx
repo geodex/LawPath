@@ -14,71 +14,67 @@ type ServiceDef = {
   label: string;
   group: string;
   description: string;
+  /** Retail rand price per call, from the provider's published price list. */
+  cents: number;
   fields: FieldDef[];
-  /** Constant fields the provider requires but the attorney never types. */
-  fixed?: Record<string, unknown>;
 };
 
-// The catalogue is deliberately data-driven: VerifyNow has never been called
-// live (no key until now), so if a field name is wrong for a service, the fix
-// is one line here — not a rebuild.
+// Field names and prices come from the VerifyNow API reference (2026-07-30).
+// The provider's own discriminators (reportType / bundle) are injected
+// server-side, so they are deliberately absent here — one source of truth.
 const SERVICES: ServiceDef[] = [
   {
-    service: "number-plate", label: "Number Plate", group: "Vehicle",
-    description: "Vehicle lookup by licence plate — registration details for a vehicle involved in a claim.",
-    fields: [{ key: "licence_number", label: "Licence plate number", placeholder: "e.g. CA 123-456", required: true }]
+    service: "number-plate", label: "Number Plate", group: "Vehicle", cents: 2990,
+    description: "Vehicle specification lookup by registration number — make, model, year and engine details for a vehicle involved in a claim.",
+    fields: [{ key: "registrationNumber", label: "Registration number", placeholder: "e.g. ABC 123 GP", required: true }]
   },
   {
-    service: "vin-decode", label: "VIN Decode", group: "Vehicle",
-    description: "Decode a Vehicle Identification Number into make, model and build details.",
+    service: "vin-decode", label: "VIN Decode", group: "Vehicle", cents: 2990,
+    description: "Vehicle lookup by VIN. The provider documents a VIN mode on this endpoint but publishes no example — if the field name is wrong, the error will say so and nothing is charged.",
     fields: [{ key: "vin", label: "VIN", placeholder: "17-character VIN", required: true }]
   },
   {
-    service: "consumer-trace", label: "Consumer Trace", group: "Consumer",
-    description: "Full trace on an individual — addresses, contact details, employment indicators.",
-    fields: [{ key: "id_number", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
+    service: "consumer-trace", label: "Consumer Trace", group: "Consumer", cents: 2990,
+    description: "Comprehensive trace — current and historical addresses, employment history and contact numbers.",
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "consumer-trace-lite", label: "Consumer Trace Lite", group: "Consumer",
-    description: "Lighter, cheaper trace — most recent contact details only.",
-    fields: [{ key: "id_number", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
+    service: "consumer-trace-lite", label: "Consumer Trace Lite", group: "Consumer", cents: 897,
+    description: "Faster, focused trace — core identity, marital and deceased status, essential contact and address details.",
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "aml-pep", label: "AML / PEP Screening", group: "Consumer",
-    description: "Sanctions, adverse media and politically-exposed-person screening.",
-    fields: [{ key: "name", label: "Full name", placeholder: "Name to screen", required: true }],
-    fixed: { entity: 0, country: "za", dataset: "all" }
+    service: "aml-pep", label: "AML / PEP Screening", group: "Consumer", cents: 1495,
+    description: "Screen against global sanctions lists, PEP databases and adverse media records.",
+    fields: [{ key: "name", label: "Full name", placeholder: "Name to screen", required: true }]
   },
   {
-    service: "verify", label: "ID Verification", group: "Consumer",
+    service: "verify", label: "ID Verification", group: "Consumer", cents: 299,
     description: "Verify an SA ID number against Home Affairs.",
-    fields: [
-      { key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }
-    ]
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "cipc/company", label: "CIPC Company", group: "Company",
-    description: "Company registration details and status from the CIPC register.",
-    fields: [{ key: "registration_number", label: "Registration number", placeholder: "e.g. 2019/123456/07", required: true }],
-    fixed: { reportType: "cipc_company_match" }
+    service: "cipc/company", label: "CIPC Company", group: "Company", cents: 2990,
+    description: "Company registration details and status from CIPC. Must be a registration number such as 2020/123456/07 — not a company name.",
+    fields: [{ key: "registration_number", label: "Registration number", placeholder: "e.g. 2019/123456/07", required: true }]
   },
   {
-    service: "cipc/director", label: "CIPC Director", group: "Company",
-    description: "Directorships held by an individual, by ID number.",
-    fields: [{ key: "id_number", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
+    service: "cipc/director", label: "CIPC Director", group: "Company", cents: 2990,
+    description: "All active and historical directorships held by an individual, by SA ID number.",
+    fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "bank-account-verification", label: "Bank Account Verification", group: "Bank",
-    description: "Verify a bank account belongs to the named individual before paying out.",
+    service: "bank-account-verification", label: "Bank Account Verification", group: "Bank", cents: 1794,
+    description: "Verify a bank account belongs to the named individual before paying it. Unsuccessful outcomes are not charged.",
     fields: [
       { key: "firstName", label: "First name", required: true },
       { key: "surname", label: "Surname", required: true },
       { key: "identityNumber", label: "SA ID number", required: true },
       { key: "bankName", label: "Bank", placeholder: "e.g. FNB", required: true },
       { key: "bankAccountNumber", label: "Account number", required: true },
-      { key: "bankBranchCode", label: "Branch code", required: true }
-    ],
-    fixed: { type: "Individual", identityType: "IDNumber" }
+      { key: "bankBranchCode", label: "Branch code", placeholder: "e.g. 250655", required: true },
+      { key: "bankAccountType", label: "Account type", placeholder: "e.g. Savings or Cheque", required: true }
+    ]
   }
 ];
 
@@ -104,7 +100,7 @@ export function Searches({ log, showToast }: Props) {
   const [matters, setMatters] = useState<Matter[]>([]);
   const [matterId, setMatterId] = useState<string>("");
   const [running, setRunning] = useState(false);
-  const [lastResult, setLastResult] = useState<{ service: string; flat: Record<string, string>; credits: number } | null>(null);
+  const [lastResult, setLastResult] = useState<{ service: string; flat: Record<string, string>; remaining: number | null } | null>(null);
   const [history, setHistory] = useState<MatterSearch[]>([]);
   const [historyMatter, setHistoryMatter] = useState<string>("");
   const [openEntry, setOpenEntry] = useState<string | null>(null);
@@ -129,7 +125,7 @@ export function Searches({ log, showToast }: Props) {
 
   async function handleRun(e: FormEvent) {
     e.preventDefault();
-    const body: Record<string, unknown> = { ...(selected.fixed || {}) };
+    const body: Record<string, unknown> = {};
     for (const f of selected.fields) {
       const v = (values[f.key] || "").trim();
       if (f.required && !v) { showToast("error", selected.label, `${f.label} is required.`); return; }
@@ -141,10 +137,15 @@ export function Searches({ log, showToast }: Props) {
     log(`Search: ${selected.label}${matterId ? " (filed to matter)" : ""}`);
     try {
       const res = await callVerifyNow(selected.service, body);
-      const flat = flatten(res.data);
-      const credits = res.metadata?.credits_spent ?? 0;
-      setLastResult({ service: selected.service, flat, credits });
-      showToast("success", selected.label, `Search complete${credits ? ` — ${credits} credits` : ""}.`);
+      // This provider nests the payload under `results`, and reports what is
+      // left rather than what was spent.
+      const payload = res as unknown as Record<string, unknown>;
+      const flat = flatten(payload.results ?? payload.data ?? payload);
+      const remaining = typeof payload.remainingCredits === "number"
+        ? payload.remainingCredits
+        : typeof payload.remaining_credits === "number" ? payload.remaining_credits : null;
+      setLastResult({ service: selected.service, flat, remaining });
+      showToast("success", selected.label, `Search complete — ${money(selected.cents)}${remaining !== null ? `, ${remaining} credits left` : ""}.`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Search failed";
       showToast("error", selected.label, msg);
@@ -199,7 +200,10 @@ export function Searches({ log, showToast }: Props) {
               })}
             </div>
 
-            <p style={{ margin: "0 0 14px", fontSize: "0.85rem", color: "var(--muted)" }}>{selected.description}</p>
+            <p style={{ margin: "0 0 6px", fontSize: "0.85rem", color: "var(--muted)" }}>{selected.description}</p>
+            <p style={{ margin: "0 0 14px", fontSize: "0.85rem", fontWeight: 600 }}>
+              Cost: {money(selected.cents)} per search
+            </p>
 
             <form className="form" onSubmit={handleRun}>
               {selected.fields.map(f => (
@@ -233,7 +237,7 @@ export function Searches({ log, showToast }: Props) {
             <div className="panel" style={{ marginTop: 18 }}>
               <div className="panel-head">
                 <h3>Result</h3>
-                {lastResult.credits > 0 && <span className="pill">{lastResult.credits} credits</span>}
+                {lastResult.remaining !== null && <span className="pill">{lastResult.remaining} credits left</span>}
               </div>
               {Object.keys(lastResult.flat).length === 0 ? (
                 <p style={{ margin: 0, color: "var(--muted)", fontStyle: "italic" }}>The provider returned no data fields.</p>
@@ -299,7 +303,7 @@ export function Searches({ log, showToast }: Props) {
                           ) : (
                             <table className="cipc-directors-table">
                               <tbody>
-                                {Object.entries(flatten((s.result as Record<string, unknown>)?.data ?? s.result)).slice(0, 20).map(([k, v]) => (
+                                {Object.entries(flatten((s.result as Record<string, unknown>)?.results ?? (s.result as Record<string, unknown>)?.data ?? s.result)).slice(0, 20).map(([k, v]) => (
                                   <tr key={k}>
                                     <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{k.replace(/_/g, " ")}</td>
                                     <td style={{ color: "var(--muted)", wordBreak: "break-word" }}>{v}</td>

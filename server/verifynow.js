@@ -36,7 +36,9 @@ function httpsPost(urlStr, headers, bodyStr, timeoutMs = 15000) {
       res.on("end", () => {
         let json;
         try { json = JSON.parse(raw); } catch { json = {}; }
-        resolve({ statusCode: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json });
+        // `raw` is kept: on a validation failure the provider's own wording is
+        // the only thing that says which field it wants.
+        resolve({ statusCode: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, json, raw });
       });
     });
 
@@ -55,23 +57,44 @@ function httpsPost(urlStr, headers, bodyStr, timeoutMs = 15000) {
 // not exist in DNS (first live call ever made proved it).
 const VERIFYNOW_BASE = process.env.VERIFYNOW_BASE_URL || "https://www.verifynow.co.za/api/external";
 
-// Our stable service keys → VerifyNow's actual endpoint paths. Paths marked
-// confirmed come from the integration guide; the rest are the provider's
-// service names and will be corrected here (one line) once the dashboard docs
-// or the first live error names the real path.
-const SERVICE_PATHS = {
-  "verify":                    "verify",                    // confirmed
-  "verify-document":           "verify-document",
-  "face-match":                "facematch",                 // confirmed
-  "aml-pep":                   "aml-screening",             // confirmed
-  "consumer-trace":            "consumer-trace",
-  "consumer-trace-lite":       "consumer-trace-lite",
-  "cipc/company":              "cipc",                      // confirmed — reportType in body selects the report
-  "cipc/director":             "cipc",
-  "bank-account-verification": "bank-account-verification", // confirmed
-  "number-plate":              "number-plate",
-  "vin-decode":                "vin-decode"
+// Our stable service keys → what VerifyNow actually wants. Read off the full
+// published API reference (verifynow.co.za/api-docs, 2026-07-30).
+//
+// Three things this encodes that cost us a live 400 to learn:
+//   1. There is NO endpoint per service. Several services are ONE path
+//      distinguished by a `reportType` or `bundle` discriminator in the body —
+//      a consumer trace and an ID verification are both POST /verify.
+//   2. Vehicle lookup is POST /vehicle taking `registrationNumber`, not a
+//      /number-plate path taking `licence_number`.
+//   3. The provider does NOT report per-call cost in its response (only
+//      `remainingCredits`), so the price list is ours to carry. `cents` is the
+//      retail rand price — it is what a disbursement is recovered at.
+//
+// `fixed` is injected server-side so the discriminator can never be forgotten,
+// or contradicted, by a caller.
+const SERVICE_SPECS = {
+  "verify":                    { path: "verify",                    fixed: { reportType: "said_verification" },     credits: 1,  cents: 299 },
+  "consumer-trace":            { path: "verify",                    fixed: { reportType: "consumer_trace" },        credits: 10, cents: 2990 },
+  "consumer-trace-lite":       { path: "consumer-trace-lite",       fixed: {},                                      credits: 3,  cents: 897 },
+  "aml-pep":                   { path: "aml-screening",             fixed: { entity: 0, country: "za", dataset: "all" }, credits: 5, cents: 1495 },
+  "cipc/company":              { path: "cipc",                      fixed: { reportType: "cipc_company_match" },    credits: 10, cents: 2990 },
+  "cipc/director":             { path: "cipc",                      fixed: { reportType: "cipc_director_search" },  credits: 10, cents: 2990 },
+  "bank-account-verification": { path: "bank-account-verification", fixed: { type: "Individual", identityType: "IDNumber" }, credits: 6, cents: 1794 },
+  "number-plate":              { path: "vehicle",                   fixed: { bundle: "vehicle_lookup" },            credits: 10, cents: 2990 },
+  // The reference says /vehicle also serves "supported VIN mode" but publishes
+  // no VIN example. Sending `vin` is our best reading; a wrong field name now
+  // returns the provider's own complaint (400s are not charged).
+  "vin-decode":                { path: "vehicle",                   fixed: { bundle: "vehicle_lookup" },            credits: 10, cents: 2990 },
+  "face-match":                { path: "facematch",                 fixed: { bundle: "facematch" },                 credits: 10, cents: 2990 },
+  "verify-document":           { path: "id-document-verify",        fixed: {},                                      credits: 8,  cents: 2392 }
 };
+
+/** Retail cost of one call. The provider reports only the remaining balance, so
+ *  this table is the source of truth for what a search cost. */
+function serviceCost(service) {
+  const spec = SERVICE_SPECS[service];
+  return { credits: spec?.credits ?? 0, cents: spec?.cents ?? 0 };
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -117,19 +140,42 @@ async function logUsage({
   }
 }
 
+// The provider is not consistent about where a complaint lives, and a 400 whose
+// reason we swallowed is indistinguishable from a bug of ours. Try every shape
+// seen in their docs, then fall back to the raw body.
+function extractErrorDetail(payload, raw) {
+  const candidates = [
+    payload?.error?.message,
+    payload?.message,
+    payload?.detail,
+    Array.isArray(payload?.errors)
+      ? payload.errors.map(e => e?.message || e?.msg || (typeof e === "string" ? e : JSON.stringify(e))).filter(Boolean).join("; ")
+      : null,
+    typeof payload?.error === "string" ? payload.error : null,
+    payload?.error && typeof payload.error === "object" ? JSON.stringify(payload.error) : null,
+    (raw || "").trim().slice(0, 400)
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return null;
+}
+
 async function call({ service, body, tenantId, userId, inputRef }) {
   const apiKey = await getApiKey();
   const idempotencyKey = crypto.randomUUID();
   const startTime = Date.now();
 
+  const spec = SERVICE_SPECS[service];
   // Every documented example carries an explicit mode; a live key must never
-  // silently run a sandbox search an attorney would rely on.
-  const requestBody = { mode: "production", ...body };
+  // silently run a sandbox search an attorney would rely on. The service's
+  // discriminator (reportType/bundle) is injected here, not trusted to callers.
+  const requestBody = { mode: "production", ...body, ...(spec?.fixed || {}) };
 
   let result;
   try {
     result = await httpsPost(
-      `${VERIFYNOW_BASE}/${SERVICE_PATHS[service] || service}`,
+      `${VERIFYNOW_BASE}/${spec?.path || service}`,
       {
         // Auth confirmed from the integration guide: x-api-key, not Bearer.
         "x-api-key":       apiKey,
@@ -143,14 +189,28 @@ async function call({ service, body, tenantId, userId, inputRef }) {
     throw Object.assign(new Error("VerifyNow API unreachable: " + networkErr.message), { statusCode: 503, expose: true });
   }
 
-  const latencyMs    = Date.now() - startTime;
-  const payload      = result.json;
-  const creditsSpent = payload?.metadata?.credits_spent ?? 0;
-  const requestId    = payload?.metadata?.request_id    ?? null;
+  const latencyMs = Date.now() - startTime;
+  const payload   = result.json;
+  // This API returns `requestId` and `remainingCredits` at the top level. The
+  // old code read payload.metadata.{request_id,credits_spent}, which this
+  // provider has never sent — so every logged call recorded 0 credits and a
+  // null request id.
+  const requestId    = payload?.requestId ?? payload?.request_id ?? null;
+  const creditsSpent = serviceCost(service).credits;
 
   if (!result.ok) {
-    await logUsage({ tenantId, userId, service, requestId, creditsSpent, latencyMs, status: "error", errorCode: payload?.error?.code || String(result.statusCode), inputRef });
-    const err = new Error(payload?.error?.message || `VerifyNow error ${result.statusCode}`);
+    // A rejected call is not charged (the reference is explicit that
+    // unsuccessful outcomes do not deduct credits), so never log a cost here.
+    await logUsage({ tenantId, userId, service, requestId, creditsSpent: 0, latencyMs, status: "error", errorCode: payload?.error?.code || String(result.statusCode), inputRef });
+    const detailText = extractErrorDetail(payload, result.raw);
+    console.warn(
+      `[verifynow] ${service} -> ${spec?.path || service} ${result.statusCode}: ${(result.raw || "").slice(0, 600)}`
+    );
+    const err = new Error(
+      detailText
+        ? `VerifyNow ${result.statusCode}: ${detailText}`
+        : `VerifyNow error ${result.statusCode}`
+    );
     err.statusCode = result.statusCode;
     err.expose = true;
     throw err;
@@ -183,4 +243,11 @@ module.exports = {
   // Vehicle
   numberPlate: (body, ctx) => call({ service: "number-plate", body, ...ctx }),
   vinDecode:   (body, ctx) => call({ service: "vin-decode",   body, ...ctx }),
+
+  /** Retail cost of a call — used to record a search as a disbursement. */
+  serviceCost,
+
+  // Exported for tests.
+  extractErrorDetail,
+  SERVICE_SPECS
 };
