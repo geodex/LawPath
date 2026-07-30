@@ -1,6 +1,6 @@
 import { Car, CircleDollarSign, FileSearch, History, Search, ShieldCheck, User, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { callVerifyNow, getMatters, getSearches, getVerifyNowCredits, MatterSearch } from "./api";
+import { callVerifyNow, getMatters, getSearchServices, getSearches, getVerifyNowCredits, MatterSearch } from "./api";
 import type { Matter } from "./types";
 
 type Props = {
@@ -14,82 +14,81 @@ type ServiceDef = {
   label: string;
   group: string;
   description: string;
-  /** Retail rand price per call, from the provider's published price list. */
-  cents: number;
   fields: FieldDef[];
 };
 
-// Field names and prices come from the VerifyNow API reference (2026-07-30).
-// The provider's own discriminators (reportType / bundle) are injected
-// server-side, so they are deliberately absent here — one source of truth.
+// Labels, descriptions and input fields only. PRICES ARE NOT HERE: they depend
+// on the platform's credit cost and markup, so they are fetched from the server
+// (a hardcoded price would eventually quote one figure and charge another).
+// The provider's discriminators (reportType/bundle) are injected server-side.
 const SERVICES: ServiceDef[] = [
   {
-    service: "number-plate", label: "Number Plate", group: "Vehicle", cents: 2990,
+    service: "number-plate", label: "Number Plate", group: "Vehicle",
     description: "Vehicle specification lookup by registration number — make, model, year and engine details for a vehicle involved in a claim.",
     fields: [{ key: "registrationNumber", label: "Registration number", placeholder: "e.g. ABC 123 GP", required: true }]
   },
   {
-    service: "vin-decode", label: "VIN Decode", group: "Vehicle", cents: 2990,
+    service: "vin-decode", label: "VIN Decode", group: "Vehicle",
     description: "Vehicle lookup by VIN. The provider documents a VIN mode on this endpoint but publishes no example — if the field name is wrong, the error will say so and nothing is charged.",
     fields: [{ key: "vin", label: "VIN", placeholder: "17-character VIN", required: true }]
   },
   {
-    service: "consumer-trace", label: "Consumer Trace", group: "Trace", cents: 2990,
+    service: "consumer-trace", label: "Consumer Trace", group: "Trace",
     description: "Comprehensive trace — current and historical addresses, employment history and contact numbers.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "consumer-trace-lite", label: "Consumer Trace Lite", group: "Trace", cents: 897,
+    service: "consumer-trace-lite", label: "Consumer Trace Lite", group: "Trace",
     description: "Faster, focused trace — core identity, marital and deceased status, essential contact and address details.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "address-lookup", label: "Address Lookup", group: "Trace", cents: 897,
+    service: "address-lookup", label: "Address Lookup", group: "Trace",
     description: "Last-known recorded physical address for an SA ID number. Not proof of current residence. A lookup that finds no address is still charged.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "phone-lookup", label: "Phone Lookup (Reverse)", group: "Trace", cents: 1495,
+    service: "phone-lookup", label: "Phone Lookup (Reverse)", group: "Trace",
     description: "Identify the person linked to an SA mobile or landline number.",
     fields: [{ key: "contactNumber", label: "Phone number", placeholder: "e.g. 0821234567", required: true }]
   },
   {
-    service: "property-search", label: "Property Search", group: "Trace", cents: 2990,
+    service: "property-search", label: "Property Search", group: "Trace",
     description: "Property records linked to an SA ID number — useful when assessing what a debtor or claimant owns. A no-record result is still charged.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "aml-pep", label: "AML / PEP Screening", group: "Person", cents: 1495,
+    service: "aml-pep", label: "AML / PEP Screening", group: "Person",
     description: "Screen against global sanctions lists, PEP databases and adverse media records.",
     fields: [{ key: "name", label: "Full name", placeholder: "Name to screen", required: true }]
   },
   {
-    service: "verify", label: "ID Verification", group: "Person", cents: 299,
+    service: "verify", label: "ID Verification", group: "Person",
     description: "Verify an SA ID number against Home Affairs. The cheapest check — confirms the number is real and whose it is.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "alive-status", label: "Alive / Deceased", group: "Person", cents: 2990,
+    service: "alive-status", label: "Alive / Deceased", group: "Person",
     description: "Real-time Home Affairs status — deceased status and date, blocked status, citizenship, marital status. Establishes whether a claimant or witness is alive.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "marital-status", label: "Marital Status", group: "Person", cents: 2990,
+    service: "marital-status", label: "Marital Status", group: "Person",
     description: "Real-time marital status as recorded by Home Affairs — matters for matrimonial-property consequences and locus standi.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "cipc/company", label: "CIPC Company", group: "Company", cents: 2990,
+    service: "cipc/company", label: "CIPC Company", group: "Company",
     description: "Company registration details and status from CIPC. Must be a registration number such as 2020/123456/07 — not a company name.",
     fields: [{ key: "registration_number", label: "Registration number", placeholder: "e.g. 2019/123456/07", required: true }]
   },
   {
-    service: "cipc/director", label: "CIPC Director", group: "Company", cents: 2990,
+    service: "cipc/director", label: "CIPC Director", group: "Company",
     description: "All active and historical directorships held by an individual, by SA ID number.",
     fields: [{ key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }]
   },
   {
-    service: "bank-account-verification", label: "Bank Account Verification", group: "Bank", cents: 1794,
+    service: "bank-account-verification", label: "Bank Account Verification", group: "Bank",
     description: "Verify a bank account belongs to the named individual before paying it. Unsuccessful outcomes are not charged.",
     fields: [
       { key: "firstName", label: "First name", required: true },
@@ -278,6 +277,10 @@ export function Searches({ log, showToast }: Props) {
   const [historyMatter, setHistoryMatter] = useState<string>("");
   const [openEntry, setOpenEntry] = useState<string | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
+  // Prices come from the server (they depend on the platform's markup), so
+  // until they arrive no figure is shown rather than a wrong one.
+  const [prices, setPrices] = useState<Record<string, { credits: number; chargeCents: number }>>({});
+  const selectedPrice = prices[selected.service] ?? null;
 
   const refreshCredits = useCallback(() => {
     getVerifyNowCredits().then(r => setCredits(r.credits)).catch(() => setCredits(null));
@@ -292,6 +295,9 @@ export function Searches({ log, showToast }: Props) {
 
   useEffect(() => {
     getMatters().then(res => setMatters(res.matters)).catch(() => {});
+    getSearchServices()
+      .then(res => setPrices(Object.fromEntries(res.services.map(s => [s.service, { credits: s.credits, chargeCents: s.chargeCents }]))))
+      .catch(() => {});
     loadHistory("");
     refreshCredits();
   }, [loadHistory, refreshCredits]);
@@ -323,7 +329,7 @@ export function Searches({ log, showToast }: Props) {
         ? payload.remainingCredits
         : typeof payload.remaining_credits === "number" ? payload.remaining_credits : null;
       setLastResult({ service: selected.service, data: resultPayload(payload), remaining });
-      showToast("success", selected.label, `Search complete — ${money(selected.cents)}${remaining !== null ? `, ${remaining} credits left` : ""}.`);
+      showToast("success", selected.label, `Search complete${selectedPrice ? ` — ${money(selectedPrice.chargeCents)}` : ""}${remaining !== null ? `, ${remaining} credits left` : ""}.`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Search failed";
       showToast("error", selected.label, msg);
@@ -385,9 +391,11 @@ export function Searches({ log, showToast }: Props) {
             </div>
 
             <p style={{ margin: "0 0 6px", fontSize: "0.85rem", color: "var(--muted)" }}>{selected.description}</p>
-            <p style={{ margin: "0 0 14px", fontSize: "0.85rem", fontWeight: 600 }}>
-              Cost: {money(selected.cents)} per search
-            </p>
+            {selectedPrice && (
+              <p style={{ margin: "0 0 14px", fontSize: "0.85rem", fontWeight: 600 }}>
+                Cost: {money(selectedPrice.chargeCents)} per search — recoverable as a disbursement
+              </p>
+            )}
 
             <form className="form" onSubmit={handleRun}>
               {selected.fields.map(f => (
@@ -459,7 +467,7 @@ export function Searches({ log, showToast }: Props) {
                         <strong style={{ fontSize: "0.85rem" }}>{def?.label || s.service}</strong>
                         {s.status === "error"
                           ? <span className="pill" style={{ background: "var(--rose-bg)", color: "var(--rose)" }}><X size={11} style={{ verticalAlign: "-1px" }} /> failed</span>
-                          : s.creditsSpent > 0 && <span className="pill">{money(s.creditsSpent)}</span>}
+                          : s.chargeCents !== null && s.chargeCents > 0 && <span className="pill">{money(s.chargeCents)}</span>}
                       </div>
                       <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: 2 }}>
                         {s.inputRef && <span style={{ fontFamily: "var(--font-mono)" }}>{s.inputRef}</span>}

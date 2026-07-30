@@ -857,11 +857,25 @@ export type MatterSearch = {
   input: Record<string, unknown>;
   inputRef: string | null;
   result: Record<string, unknown> | null;
-  creditsSpent: number;
+  /** Provider credits consumed. Null on rows recorded before pricing existed. */
+  credits: number | null;
+  /** What the firm owes for this search and recovers as a disbursement, priced
+   *  when the search ran. Never recomputed from current rates. */
+  chargeCents: number | null;
+  /** Platform cost. Present for platform super admins only. */
+  baseCostCents?: number;
   status: "success" | "error";
   errorMessage: string | null;
   createdAt: string;
 };
+
+/** Price list, computed from the platform's current rates — never hardcoded in
+ *  the UI, so a quoted price and a charged price cannot diverge. */
+export async function getSearchServices() {
+  return request<{ services: { service: string; credits: number; chargeCents: number }[] }>(
+    "/api/verifynow/services"
+  );
+}
 
 /** Remaining VerifyNow credit balance. Free to call. */
 export async function getVerifyNowCredits() {

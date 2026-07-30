@@ -1060,11 +1060,13 @@ app.put("/api/platform/api-settings", authMiddleware, async (req, res, next) => 
 app.get("/api/platform/pricing-config", authMiddleware, async (req, res, next) => {
   if (!requirePlatformSuperAdmin(req, res)) return;
   try {
-    const r = await pool.query("select vat_rate, markup_rate, updated_at from platform_pricing_config where id = 1");
-    const row = r.rows[0] || { vat_rate: "0.15", markup_rate: "0", updated_at: null };
+    const r = await pool.query("select vat_rate, markup_rate, verifynow_credit_cost_cents, updated_at from platform_pricing_config where id = 1");
+    const row = r.rows[0] || { vat_rate: "0.15", markup_rate: "0", verifynow_credit_cost_cents: 299, updated_at: null };
     res.json({
       vatRate:    Number(row.vat_rate),
       markupRate: Number(row.markup_rate),
+      // What a VerifyNow credit costs us — lower it after buying a volume pack.
+      verifyNowCreditCostCents: Number(row.verifynow_credit_cost_cents ?? 299),
       updatedAt:  row.updated_at
     });
   } catch (err) { next(err); }
@@ -1074,16 +1076,22 @@ app.put("/api/platform/pricing-config", authMiddleware, async (req, res, next) =
   if (!requirePlatformSuperAdmin(req, res)) return;
   const vatRate    = Number(req.body?.vatRate);
   const markupRate = Number(req.body?.markupRate);
+  const creditCost = req.body?.verifyNowCreditCostCents === undefined
+    ? null : Number(req.body.verifyNowCreditCostCents);
   if (!isFinite(vatRate)    || vatRate    < 0 || vatRate    > 1) return res.status(400).json({ error: "vatRate must be between 0 and 1 (e.g. 0.15 for 15%)" });
   if (!isFinite(markupRate) || markupRate < 0 || markupRate > 5) return res.status(400).json({ error: "markupRate must be between 0 and 5 (e.g. 0.30 for 30%)" });
+  if (creditCost !== null && (!isFinite(creditCost) || creditCost < 0)) return res.status(400).json({ error: "verifyNowCreditCostCents must be a non-negative number of cents (299 = R2.99)" });
   try {
     await pool.query(
-      `insert into platform_pricing_config (id, vat_rate, markup_rate, updated_at, updated_by)
-       values (1, $1, $2, now(), $3)
-       on conflict (id) do update set vat_rate = $1, markup_rate = $2, updated_at = now(), updated_by = $3`,
-      [vatRate, markupRate, req.user.sub]
+      `insert into platform_pricing_config (id, vat_rate, markup_rate, verifynow_credit_cost_cents, updated_at, updated_by)
+       values (1, $1, $2, coalesce($4, 299), now(), $3)
+       on conflict (id) do update set
+         vat_rate = $1, markup_rate = $2,
+         verifynow_credit_cost_cents = coalesce($4, platform_pricing_config.verifynow_credit_cost_cents),
+         updated_at = now(), updated_by = $3`,
+      [vatRate, markupRate, req.user.sub, creditCost]
     );
-    res.json({ vatRate, markupRate, updatedAt: new Date().toISOString() });
+    res.json({ vatRate, markupRate, verifyNowCreditCostCents: creditCost, updatedAt: new Date().toISOString() });
   } catch (err) { next(err); }
 });
 
@@ -6075,6 +6083,24 @@ app.get("/api/admin/verifynow/usage/log", authMiddleware, async (req, res, next)
 // a second list that can drift out of step with it).
 const VERIFYNOW_SERVICES = new Set(verifynow.listServices());
 
+/** What a search costs the platform, and what the firm is charged for it.
+ *  Platform buys credits (volume packs beat the R2.99 pay-as-you-go rate) and
+ *  resells with a markup; the firm recovers its charge as a disbursement. */
+async function priceSearch(service) {
+  const credits = verifynow.serviceCost(service).credits;
+  const cfg = await pool.query(
+    "select vat_rate, markup_rate, verifynow_credit_cost_cents from platform_pricing_config where id = 1"
+  ).then(r => r.rows[0]).catch(() => null);
+
+  const creditCostCents = Number(cfg?.verifynow_credit_cost_cents ?? 299);
+  const markupRate = Number(cfg?.markup_rate ?? 0);
+  const vatRate    = Number(cfg?.vat_rate    ?? 0);
+
+  const baseCostCents = Math.round(credits * creditCostCents);
+  const chargeCents   = Math.round(baseCostCents * (1 + markupRate) * (1 + vatRate));
+  return { credits, baseCostCents, chargeCents, markupRate, vatRate };
+}
+
 // Fields we never persist into matter_searches.input (biometric image payloads).
 function searchInputForStorage(body) {
   const out = {};
@@ -6122,20 +6148,24 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
       ).catch(() => {});
       throw vnErr;
     }
-    // credits_spent here is RAND CENTS (what the search is recovered at as a
-    // disbursement), not provider credits — the provider does not report a
-    // per-call cost, so it comes from the wrapper's price list.
+    // Price it NOW, at the rates in force now. A later markup change must never
+    // re-price a search the firm has already recharged to a client.
+    const price = await priceSearch(service);
     const stored = await pool.query(
-      `insert into matter_searches (tenant_id, matter_id, user_id, provider, service, input, input_ref, result, credits_spent, status)
-       values ($1,$2,$3,'verifynow',$4,$5,$6,$7,$8,'success')
+      `insert into matter_searches
+         (tenant_id, matter_id, user_id, provider, service, input, input_ref, result, status,
+          credits, base_cost_cents, charge_cents, markup_rate, vat_rate, credits_spent)
+       values ($1,$2,$3,'verifynow',$4,$5,$6,$7,'success',$8,$9,$10,$11,$12,$10)
        returning id`,
-      [req.user.tenantId, matterId || null, req.user.sub, service, JSON.stringify(searchInputForStorage(body)), inputRef, JSON.stringify(result ?? null), verifynow.serviceCost(service).cents]
+      [req.user.tenantId, matterId || null, req.user.sub, service,
+       JSON.stringify(searchInputForStorage(body)), inputRef, JSON.stringify(result ?? null),
+       price.credits, price.baseCostCents, price.chargeCents, price.markupRate, price.vatRate]
     ).catch(() => ({ rows: [] }));
     res.json({ ...result, search_id: stored.rows[0]?.id ?? null });
   } catch (error) { next(error); }
 });
 
-function matterSearchFromRow(row) {
+function matterSearchFromRow(row, { includeCost = false } = {}) {
   return {
     id: row.id,
     matterId: row.matter_id || null,
@@ -6147,12 +6177,33 @@ function matterSearchFromRow(row) {
     input: row.input || {},
     inputRef: row.input_ref || null,
     result: row.result ?? null,
-    creditsSpent: Number(row.credits_spent || 0),
+    credits: row.credits === null || row.credits === undefined ? null : Number(row.credits),
+    // What the firm owes and recovers as a disbursement — priced when the
+    // search ran, never recomputed.
+    chargeCents: row.charge_cents === null || row.charge_cents === undefined ? null : Number(row.charge_cents),
+    // Platform cost is commercially sensitive: super admins only.
+    ...(includeCost ? { baseCostCents: Number(row.base_cost_cents || 0) } : {}),
     status: row.status,
     errorMessage: row.error_message || null,
     createdAt: new Date(row.created_at).toISOString()
   };
 }
+
+// The price list, priced for THIS platform's current rates. Served rather than
+// hardcoded in the UI so the attorney can never be quoted one figure and
+// charged another.
+app.get("/api/verifynow/services", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const services = await Promise.all(
+      verifynow.listServices().map(async service => {
+        const p = await priceSearch(service);
+        return { service, credits: p.credits, chargeCents: p.chargeCents };
+      })
+    );
+    res.json({ services });
+  } catch (error) { next(error); }
+});
 
 // Credit balance — free to call, and the first thing to check when a search
 // fails: an empty balance and a broken key look identical from the UI.
@@ -6182,7 +6233,8 @@ app.get("/api/searches", authMiddleware, async (req, res, next) => {
        limit $${params.length}`,
       params
     );
-    res.json({ searches: result.rows.map(matterSearchFromRow) });
+    const includeCost = req.user.role === "platform_super_admin";
+    res.json({ searches: result.rows.map(r => matterSearchFromRow(r, { includeCost })) });
   } catch (error) { next(error); }
 });
 
