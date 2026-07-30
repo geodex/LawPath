@@ -1,6 +1,6 @@
 import { AlertTriangle, CreditCard, History, Wallet } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { getSearchWallet, getSearchWalletLedger, topUpSearchWallet, SearchWallet, WalletLedgerEntry } from "./api";
+import { getSearchWallet, getSearchWalletLedger, setAutoTopup, topUpSearchWallet, SearchWallet, WalletLedgerEntry } from "./api";
 
 type Props = {
   showToast: (type: "success" | "error" | "info", title: string, msg: string) => void;
@@ -95,6 +95,33 @@ export function SearchWalletPanel({ showToast, refreshKey = 0 }: Props) {
           <CreditCard size={14} /> {busy ? "Opening…" : "Top up by card"}
         </button>
       </div>
+
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 14, fontSize: "0.85rem", cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={wallet.autoTopupEnabled}
+          disabled={busy}
+          onChange={async (e) => {
+            const enabled = e.target.checked;
+            setBusy(true);
+            try {
+              setWallet(await setAutoTopup(enabled, wallet.autoTopupAmountCents));
+              showToast("success", "Auto top-up", enabled ? "We'll email a ready-to-pay link when your credit runs low." : "Auto top-up off.");
+            } catch (err: unknown) {
+              showToast("error", "Auto top-up", err instanceof Error ? err.message : "Could not save.");
+            } finally { setBusy(false); }
+          }}
+          // Sized explicitly: the global `input { width: 100% }` rule would
+          // otherwise stretch this checkbox across the panel.
+          style={{ width: 16, height: 16, flexShrink: 0, margin: "2px 0 0", padding: 0 }}
+        />
+        <span>
+          Email me a {money(wallet.autoTopupAmountCents)} top-up link when credit runs low.
+          <span style={{ display: "block", color: "var(--muted)", fontSize: "0.78rem", marginTop: 2 }}>
+            One click to pay — we never store your card, and nothing is charged without you.
+          </span>
+        </span>
+      </label>
 
       {showLedger && (
         <div style={{ marginTop: 16 }}>

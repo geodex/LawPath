@@ -875,6 +875,10 @@ export type SearchWallet = {
   balanceCents: number;
   lowBalanceThresholdCents: number;
   low: boolean;
+  /** When on, a low balance emails a ready-to-pay top-up link for the amount
+   *  below. Not a card-on-file charge — Yoco supports no such thing. */
+  autoTopupEnabled: boolean;
+  autoTopupAmountCents: number;
   /** False while the platform has not switched enforcement on — searches still
    *  run past zero and the balance shows what is owed. */
   enforced: boolean;
@@ -912,6 +916,12 @@ export async function topUpSearchWallet(amountCents: number) {
 export async function setSearchWalletThreshold(lowBalanceThresholdCents: number) {
   return request<SearchWallet>("/api/search-wallet/threshold", {
     method: "PUT", body: JSON.stringify({ lowBalanceThresholdCents })
+  });
+}
+
+export async function setAutoTopup(enabled: boolean, amountCents: number) {
+  return request<SearchWallet>("/api/search-wallet/auto-topup", {
+    method: "PUT", body: JSON.stringify({ enabled, amountCents })
   });
 }
 

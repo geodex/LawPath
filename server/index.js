@@ -6121,6 +6121,23 @@ async function notifyLowSearchCredit(tenantId, balanceCents, thresholdCents) {
   if (!recipient) return;
 
   const balance = randFromCents(balanceCents);
+
+  // Auto top-up: Yoco has no card-on-file, so the most we can automate is
+  // preparing the payment. The firm still enters card details on Yoco's page.
+  let checkout = null;
+  const w = await wallet.getWallet(tenantId);
+  if (w.autoTopupEnabled) {
+    checkout = await createTopupCheckout({
+      tenantId, amountCents: w.autoTopupAmountCents, userId: null, origin: "auto"
+    }).catch(err => { console.error("[wallet] auto top-up checkout failed:", err.message); return null; });
+  }
+  const topupLine = checkout
+    ? `Top up ${randFromCents(checkout.amountCents)} now: ${checkout.checkoutUrl}`
+    : `Top up under Searches to avoid interruption.`;
+  const topupHtml = checkout
+    ? `<p><a href="${checkout.checkoutUrl}" style="display:inline-block;padding:10px 18px;background:#177a5f;color:#fff;text-decoration:none;border-radius:6px">Top up ${randFromCents(checkout.amountCents)}</a></p>`
+    : `<p>Top up under <strong>Searches</strong> to avoid interruption.</p>`;
+
   const { sendNotification } = require("./notifications");
   await sendNotification({
     tenantId,
@@ -6128,9 +6145,9 @@ async function notifyLowSearchCredit(tenantId, balanceCents, thresholdCents) {
     recipientEmail: recipient.email,
     subject: `Search credit low — ${balance} remaining`,
     text: `Your LawPath search credit balance is ${balance}, below your ${randFromCents(thresholdCents)} warning level.\n\n`
-        + `Searches (vehicle, consumer trace, CIPC, bank verification) draw on this balance. Top up under Searches to avoid interruption.`,
+        + `Searches (vehicle, consumer trace, deeds, CIPC, bank verification) draw on this balance.\n\n${topupLine}`,
     html: `<p>Your LawPath search credit balance is <strong>${balance}</strong>, below your ${randFromCents(thresholdCents)} warning level.</p>`
-        + `<p>Searches — vehicle, consumer trace, CIPC, bank verification — draw on this balance. Top up under <strong>Searches</strong> to avoid interruption.</p>`,
+        + `<p>Searches — vehicle, consumer trace, deeds, CIPC, bank verification — draw on this balance.</p>${topupHtml}`,
     entityType: "tenant_search_wallet",
     entityId: tenantId
   });
@@ -6287,18 +6304,28 @@ function matterSearchFromRow(row, { includeCost = false } = {}) {
 
 // ─── SEARCH WALLET ───────────────────────────────────────────────────────────
 
+/** One wallet shape for every endpoint that returns one. Built because the
+ *  threshold and auto-top-up routes were returning the raw record without
+ *  `low`/`enforced`, so saving a preference silently dropped the low-balance
+ *  badge and the enforcement notice from the UI until the next reload. */
+async function walletResponse(tenantId) {
+  const [w, enforced] = await Promise.all([wallet.getWallet(tenantId), wallet.isEnforced()]);
+  return {
+    balanceCents: w.balanceCents,
+    lowBalanceThresholdCents: w.lowBalanceThresholdCents,
+    low: w.balanceCents < w.lowBalanceThresholdCents,
+    autoTopupEnabled: w.autoTopupEnabled,
+    autoTopupAmountCents: w.autoTopupAmountCents,
+    // While enforcement is off a firm can search past zero; say so rather than
+    // showing a balance that looks binding when it is not.
+    enforced
+  };
+}
+
 app.get("/api/search-wallet", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
-    const [w, enforced] = await Promise.all([wallet.getWallet(req.user.tenantId), wallet.isEnforced()]);
-    res.json({
-      balanceCents: w.balanceCents,
-      lowBalanceThresholdCents: w.lowBalanceThresholdCents,
-      low: w.balanceCents < w.lowBalanceThresholdCents,
-      // While enforcement is off a firm can search past zero; say so rather than
-      // showing a balance that looks binding when it is not.
-      enforced
-    });
+    res.json(await walletResponse(req.user.tenantId));
   } catch (error) { next(error); }
 });
 
@@ -6319,7 +6346,7 @@ app.put("/api/search-wallet/threshold", authMiddleware, async (req, res, next) =
        on conflict (tenant_id) do update set low_balance_threshold_cents = $2, updated_at = now()`,
       [req.user.tenantId, Math.round(cents)]
     );
-    res.json(await wallet.getWallet(req.user.tenantId));
+    res.json(await walletResponse(req.user.tenantId));
   } catch (error) { next(error); }
 });
 
@@ -7289,6 +7316,39 @@ app.post("/api/billing/checkout", authMiddleware, async (req, res, next) => {
 const TOPUP_MIN_CENTS = 10000;    // R100
 const TOPUP_MAX_CENTS = 5000000;  // R50,000
 
+/** Prepare a Yoco checkout for search credit and record the intent.
+ *  Shared by the manual button and the automatic low-balance email, so both
+ *  produce an identical, reconcilable payment. Returns null if Yoco is not
+ *  configured or refuses. */
+async function createTopupCheckout({ tenantId, amountCents, userId = null, origin = "manual" }) {
+  if (!YOCO_SECRET_KEY) return null;
+  const baseUrl = process.env.VITE_APP_URL || "https://lawpath.co.za";
+  const yocoRes = await fetch(`${YOCO_API}/checkouts`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${YOCO_SECRET_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      amount: amountCents,
+      currency: "ZAR",
+      successUrl: `${baseUrl}/?topup=success`,
+      cancelUrl: `${baseUrl}/?topup=cancelled`,
+      // `purpose` is what keeps this out of the subscription webhook branch,
+      // which would otherwise read a missing plan as "solo" and downgrade them.
+      metadata: { tenantId, userId, purpose: "search_credit", amountCents: String(amountCents), origin }
+    })
+  });
+  if (!yocoRes.ok) {
+    console.error("[yoco topup] Failed:", await yocoRes.text());
+    return null;
+  }
+  const data = await yocoRes.json();
+  await pool.query(
+    `insert into wallet_topup_intents (tenant_id, checkout_id, amount_cents, origin, created_by)
+     values ($1,$2,$3,$4,$5) on conflict (checkout_id) do nothing`,
+    [tenantId, data.id, amountCents, origin, userId]
+  ).catch(err => console.error("[wallet] could not record top-up intent:", err.message));
+  return { checkoutUrl: data.redirectUrl, checkoutId: data.id, amountCents };
+}
+
 app.post("/api/search-wallet/topup", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   if (!YOCO_SECRET_KEY) return res.status(503).json({ error: "Card payments are not configured. Set YOCO_SECRET_KEY in .env." });
@@ -7297,25 +7357,29 @@ app.post("/api/search-wallet/topup", authMiddleware, async (req, res, next) => {
     return res.status(400).json({ error: `Top-up must be between ${randFromCents(TOPUP_MIN_CENTS)} and ${randFromCents(TOPUP_MAX_CENTS)}.` });
   }
   try {
-    const baseUrl = process.env.VITE_APP_URL || "https://lawpath.co.za";
-    const yocoRes = await fetch(`${YOCO_API}/checkouts`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${YOCO_SECRET_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount: amountCents,
-        currency: "ZAR",
-        successUrl: `${baseUrl}/?topup=success`,
-        cancelUrl: `${baseUrl}/?topup=cancelled`,
-        // `purpose` is what keeps this out of the subscription branch below.
-        metadata: { tenantId: req.user.tenantId, userId: req.user.sub, purpose: "search_credit", amountCents: String(amountCents) }
-      })
-    });
-    if (!yocoRes.ok) {
-      console.error("[yoco topup] Failed:", await yocoRes.text());
-      return res.status(502).json({ error: "Could not start the card payment. Please try again." });
-    }
-    const yocoData = await yocoRes.json();
-    res.json({ checkoutUrl: yocoData.redirectUrl, checkoutId: yocoData.id, amountCents });
+    const checkout = await createTopupCheckout({ tenantId: req.user.tenantId, amountCents, userId: req.user.sub, origin: "manual" });
+    if (!checkout) return res.status(502).json({ error: "Could not start the card payment. Please try again." });
+    res.json(checkout);
+  } catch (error) { next(error); }
+});
+
+// Auto top-up preference. Not a card-on-file charge — Yoco supports neither
+// recurring billing nor merchant-initiated payments — so this controls whether
+// the low-balance email carries a ready-to-pay link for this amount.
+app.put("/api/search-wallet/auto-topup", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const enabled = Boolean(req.body?.enabled);
+  const amountCents = Math.round(Number(req.body?.amountCents ?? 50000));
+  if (enabled && (!isFinite(amountCents) || amountCents < TOPUP_MIN_CENTS || amountCents > TOPUP_MAX_CENTS)) {
+    return res.status(400).json({ error: `Auto top-up amount must be between ${randFromCents(TOPUP_MIN_CENTS)} and ${randFromCents(TOPUP_MAX_CENTS)}.` });
+  }
+  try {
+    await pool.query(
+      `insert into tenant_search_wallets (tenant_id, auto_topup_enabled, auto_topup_amount_cents) values ($1,$2,$3)
+       on conflict (tenant_id) do update set auto_topup_enabled = $2, auto_topup_amount_cents = $3, updated_at = now()`,
+      [req.user.tenantId, enabled, amountCents]
+    );
+    res.json(await walletResponse(req.user.tenantId));
   } catch (error) { next(error); }
 });
 
@@ -7387,6 +7451,10 @@ app.post("/api/billing/webhook", async (req, res, next) => {
           createdBy: metadata.userId || null
         });
         console.info(`[wallet] Top-up ${movement.duplicate ? "IGNORED (replay)" : "credited"}: tenant ${tenantId}, ${randFromCents(amountCents)}`);
+        await pool.query(
+          "update wallet_topup_intents set status='paid', paid_at=now() where checkout_id = any($1::text[]) and status='pending'",
+          [[payload.id, checkoutId, metadata.checkoutId].filter(Boolean)]
+        ).catch(() => {});
       } else {
         console.error("[wallet] Top-up webhook missing tenantId or amount:", { tenantId, amountCents });
       }

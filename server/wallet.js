@@ -27,7 +27,8 @@ async function getWallet(tenantId) {
     [tenantId]
   );
   const r = await pool.query(
-    `select tenant_id, balance_cents, low_balance_threshold_cents, low_balance_notified_at
+    `select tenant_id, balance_cents, low_balance_threshold_cents, low_balance_notified_at,
+            auto_topup_enabled, auto_topup_amount_cents
      from tenant_search_wallets where tenant_id = $1`,
     [tenantId]
   );
@@ -36,7 +37,9 @@ async function getWallet(tenantId) {
     tenantId,
     balanceCents: Number(row?.balance_cents ?? 0),
     lowBalanceThresholdCents: Number(row?.low_balance_threshold_cents ?? DEFAULT_LOW_BALANCE_CENTS),
-    lowBalanceNotifiedAt: row?.low_balance_notified_at ?? null
+    lowBalanceNotifiedAt: row?.low_balance_notified_at ?? null,
+    autoTopupEnabled: Boolean(row?.auto_topup_enabled),
+    autoTopupAmountCents: Number(row?.auto_topup_amount_cents ?? 50000)
   };
 }
 
