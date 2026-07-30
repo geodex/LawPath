@@ -106,15 +106,163 @@ const SERVICES: ServiceDef[] = [
 const GROUPS = ["Vehicle", "Trace", "Person", "Company", "Bank"];
 const GROUP_ICONS: Record<string, typeof Car> = { Vehicle: Car, Trace: History, Person: User, Company: FileSearch, Bank: CircleDollarSign };
 
-function flatten(obj: unknown, prefix = "", out: Record<string, string> = {}): Record<string, string> {
-  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-      flatten(v, prefix ? `${prefix}_${k}` : k, out);
-    }
-  } else if (prefix) {
-    out[prefix] = Array.isArray(obj) ? JSON.stringify(obj) : String(obj ?? "");
+// ─── Result rendering ─────────────────────────────────────────────────────────
+// These payloads are deeply nested and inconsistent: a directorship list is an
+// array of objects, a vehicle's extras are an array of [label, value] pairs,
+// Home Affairs fields arrive as {CarMake:{CurrentTextValue:"…"}}, and some
+// providers hand back JSON as a *string*. Flattening it all to one key/value map
+// produced walls of raw JSON, so each shape is rendered as what it is.
+
+/** Provider noise that carries no meaning for a reader. */
+const NOISE_KEYS = new Set(["CurrentTextValue", "currentTextValue", "value", "Value"]);
+
+function humanise(key: string): string {
+  const cleaned = key
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/** Some fields arrive as a JSON string rather than parsed JSON. */
+function maybeParse(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const t = value.trim();
+  if (!(t.startsWith("{") || t.startsWith("["))) return value;
+  try { return JSON.parse(t); } catch { return value; }
+}
+
+/** {CarMake: {CurrentTextValue: "LAND ROVER"}} reads as "Land Rover", not a nest. */
+function unwrapNoise(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 1 && NOISE_KEYS.has(entries[0][0])) return entries[0][1];
+  return value;
+}
+
+function isEmpty(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value as object).length === 0;
+  return false;
+}
+
+/** An array of [label, value] pairs, as the vehicle "Extended" block uses. */
+function isPairArray(value: unknown): value is [string, unknown][] {
+  return Array.isArray(value) && value.length > 0 &&
+    value.every(v => Array.isArray(v) && v.length === 2 && typeof v[0] === "string");
+}
+
+function Scalar({ value }: { value: unknown }) {
+  const text = typeof value === "boolean" ? (value ? "Yes" : "No") : String(value);
+  const isBad = /^(false|no|deregist|not verified|failed)/i.test(text);
+  const isGood = /^(true|yes|active|approved|verified|success)/i.test(text);
+  return (
+    <span style={{ color: isBad ? "var(--rose)" : isGood ? "var(--green)" : undefined, fontWeight: isBad || isGood ? 600 : undefined }}>
+      {text}
+    </span>
+  );
+}
+
+function ResultValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  const v = unwrapNoise(maybeParse(value));
+
+  if (isEmpty(v)) return <span style={{ color: "var(--muted)", fontStyle: "italic" }}>—</span>;
+  if (depth > 5) return <span style={{ color: "var(--muted)" }}>…</span>;
+
+  if (isPairArray(v)) {
+    return (
+      <table className="cipc-directors-table">
+        <tbody>
+          {v.map(([k, val], i) => (
+            <tr key={`${k}-${i}`}>
+              <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{humanise(k)}</td>
+              <td><ResultValue value={val} depth={depth + 1} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
   }
-  return out;
+
+  if (Array.isArray(v)) {
+    const objects = v.filter(x => x && typeof x === "object" && !Array.isArray(x));
+    // A list of records (directorships, properties, addresses) — one card each.
+    if (objects.length === v.length && v.length > 0) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {v.map((item, i) => (
+            <div key={i} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px" }}>
+              <div style={{ fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)", marginBottom: 4 }}>
+                {v.length > 1 ? `${i + 1} of ${v.length}` : "Record"}
+              </div>
+              <ResultValue value={item} depth={depth + 1} />
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return (
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        {v.map((item, i) => <li key={i}><ResultValue value={item} depth={depth + 1} /></li>)}
+      </ul>
+    );
+  }
+
+  if (typeof v === "object") {
+    const rows = Object.entries(v as Record<string, unknown>).filter(([, val]) => !isEmpty(unwrapNoise(maybeParse(val))));
+    if (!rows.length) return <span style={{ color: "var(--muted)", fontStyle: "italic" }}>—</span>;
+    return (
+      <table className="cipc-directors-table">
+        <tbody>
+          {rows.map(([k, val]) => (
+            <tr key={k}>
+              <td style={{ fontWeight: 600, whiteSpace: "nowrap", verticalAlign: "top" }}>{humanise(k)}</td>
+              <td><ResultValue value={val} depth={depth + 1} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+
+  return <Scalar value={v} />;
+}
+
+/** The `results` block, whose top-level keys are the provider's report names. */
+function ResultTree({ data }: { data: unknown }) {
+  const parsed = maybeParse(data);
+  if (isEmpty(parsed)) {
+    return <p style={{ margin: 0, color: "var(--muted)", fontStyle: "italic" }}>The provider returned no data.</p>;
+  }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const sections = Object.entries(parsed as Record<string, unknown>).filter(([, v]) => !isEmpty(v));
+    if (sections.length > 1) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {sections.map(([name, value]) => (
+            <div key={name}>
+              <h4 style={{ margin: "0 0 6px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
+                {humanise(name)}
+              </h4>
+              <ResultValue value={value} />
+            </div>
+          ))}
+        </div>
+      );
+    }
+    if (sections.length === 1) return <ResultValue value={sections[0][1]} />;
+  }
+  return <ResultValue value={parsed} />;
+}
+
+/** Strip the envelope so only the report content is rendered. */
+function resultPayload(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const r = raw as Record<string, unknown>;
+  return r.results ?? r.result ?? r.data ?? r.Result ?? raw;
 }
 
 const money = (cents: number) => `R ${(cents / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
@@ -125,7 +273,7 @@ export function Searches({ log, showToast }: Props) {
   const [matters, setMatters] = useState<Matter[]>([]);
   const [matterId, setMatterId] = useState<string>("");
   const [running, setRunning] = useState(false);
-  const [lastResult, setLastResult] = useState<{ service: string; flat: Record<string, string>; remaining: number | null } | null>(null);
+  const [lastResult, setLastResult] = useState<{ service: string; data: unknown; remaining: number | null } | null>(null);
   const [history, setHistory] = useState<MatterSearch[]>([]);
   const [historyMatter, setHistoryMatter] = useState<string>("");
   const [openEntry, setOpenEntry] = useState<string | null>(null);
@@ -171,11 +319,10 @@ export function Searches({ log, showToast }: Props) {
       // This provider nests the payload under `results`, and reports what is
       // left rather than what was spent.
       const payload = res as unknown as Record<string, unknown>;
-      const flat = flatten(payload.results ?? payload.data ?? payload);
       const remaining = typeof payload.remainingCredits === "number"
         ? payload.remainingCredits
         : typeof payload.remaining_credits === "number" ? payload.remaining_credits : null;
-      setLastResult({ service: selected.service, flat, remaining });
+      setLastResult({ service: selected.service, data: resultPayload(payload), remaining });
       showToast("success", selected.label, `Search complete — ${money(selected.cents)}${remaining !== null ? `, ${remaining} credits left` : ""}.`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Search failed";
@@ -276,20 +423,7 @@ export function Searches({ log, showToast }: Props) {
                 <h3>Result</h3>
                 {lastResult.remaining !== null && <span className="pill">{lastResult.remaining} credits left</span>}
               </div>
-              {Object.keys(lastResult.flat).length === 0 ? (
-                <p style={{ margin: 0, color: "var(--muted)", fontStyle: "italic" }}>The provider returned no data fields.</p>
-              ) : (
-                <table className="cipc-directors-table">
-                  <tbody>
-                    {Object.entries(lastResult.flat).map(([k, v]) => (
-                      <tr key={k}>
-                        <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{k.replace(/_/g, " ")}</td>
-                        <td style={{ color: "var(--muted)", wordBreak: "break-word" }}>{v}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+              <ResultTree data={lastResult.data} />
             </div>
           )}
         </section>
@@ -338,16 +472,7 @@ export function Searches({ log, showToast }: Props) {
                           {s.status === "error" ? (
                             <p style={{ margin: 0, color: "var(--rose)" }}>{s.errorMessage || "Search failed."}</p>
                           ) : (
-                            <table className="cipc-directors-table">
-                              <tbody>
-                                {Object.entries(flatten((s.result as Record<string, unknown>)?.results ?? (s.result as Record<string, unknown>)?.data ?? s.result)).slice(0, 20).map(([k, v]) => (
-                                  <tr key={k}>
-                                    <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{k.replace(/_/g, " ")}</td>
-                                    <td style={{ color: "var(--muted)", wordBreak: "break-word" }}>{v}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                            <ResultTree data={resultPayload(s.result)} />
                           )}
                         </div>
                       )}
