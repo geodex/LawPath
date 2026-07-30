@@ -869,6 +869,52 @@ export type MatterSearch = {
   createdAt: string;
 };
 
+// ─── SEARCH WALLET ────────────────────────────────────────────────────────────
+
+export type SearchWallet = {
+  balanceCents: number;
+  lowBalanceThresholdCents: number;
+  low: boolean;
+  /** False while the platform has not switched enforcement on — searches still
+   *  run past zero and the balance shows what is owed. */
+  enforced: boolean;
+};
+
+export type WalletLedgerEntry = {
+  id: string;
+  entryType: "topup" | "search" | "refund" | "adjustment" | "opening";
+  amountCents: number;
+  balanceAfterCents: number;
+  description: string;
+  service: string | null;
+  inputRef: string | null;
+  paymentRef: string | null;
+  createdByName: string | null;
+  createdAt: string;
+};
+
+export async function getSearchWallet() {
+  return request<SearchWallet>("/api/search-wallet");
+}
+
+export async function getSearchWalletLedger(limit = 50) {
+  return request<{ entries: WalletLedgerEntry[] }>(`/api/search-wallet/ledger?limit=${limit}`);
+}
+
+/** Starts a Yoco card payment; returns the URL to send the firm to. */
+export async function topUpSearchWallet(amountCents: number) {
+  return request<{ checkoutUrl: string; checkoutId: string; amountCents: number }>(
+    "/api/search-wallet/topup",
+    { method: "POST", body: JSON.stringify({ amountCents }) }
+  );
+}
+
+export async function setSearchWalletThreshold(lowBalanceThresholdCents: number) {
+  return request<SearchWallet>("/api/search-wallet/threshold", {
+    method: "PUT", body: JSON.stringify({ lowBalanceThresholdCents })
+  });
+}
+
 /** Price list, computed from the platform's current rates — never hardcoded in
  *  the UI, so a quoted price and a charged price cannot diverge. */
 export async function getSearchServices() {

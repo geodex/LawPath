@@ -1,6 +1,7 @@
 import { Car, CircleDollarSign, FileSearch, History, Search, ShieldCheck, User, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { callVerifyNow, getMatters, getSearchServices, getSearches, getVerifyNowCredits, MatterSearch } from "./api";
+import { SearchWalletPanel } from "./SearchWalletPanel";
 import type { Matter } from "./types";
 
 type Props = {
@@ -277,6 +278,8 @@ export function Searches({ log, showToast }: Props) {
   const [historyMatter, setHistoryMatter] = useState<string>("");
   const [openEntry, setOpenEntry] = useState<string | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
+  // Bumped after every search so the wallet balance reflects the debit.
+  const [walletVersion, setWalletVersion] = useState(0);
   // Prices come from the server (they depend on the platform's markup), so
   // until they arrive no figure is shown rather than a wrong one.
   const [prices, setPrices] = useState<Record<string, { credits: number; chargeCents: number }>>({});
@@ -338,6 +341,7 @@ export function Searches({ log, showToast }: Props) {
       setRunning(false);
       loadHistory(historyMatter);
       refreshCredits();
+      setWalletVersion(v => v + 1);
     }
   }
 
@@ -357,6 +361,7 @@ export function Searches({ log, showToast }: Props) {
 
       <div className="split">
         <section>
+          <SearchWalletPanel showToast={showToast} refreshKey={walletVersion} />
           <div className="panel">
             <div className="panel-head">
               <h3><Search size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} /> Run a search</h3>

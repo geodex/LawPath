@@ -13,6 +13,7 @@ const { authMiddleware, signToken } = require("./auth");
 const { sendTransactionalEmail } = require("./mailer");
 const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText, downloadText } = require("./gcs");
 const verifynow  = require("./verifynow");
+const wallet     = require("./wallet");
 const lightstone  = require("./lightstone");
 const searchworks = require("./searchworks");
 const { pollMatter: pollDotsMatter } = require("./dots-poller");
@@ -6083,6 +6084,36 @@ app.get("/api/admin/verifynow/usage/log", authMiddleware, async (req, res, next)
 // a second list that can drift out of step with it).
 const VERIFYNOW_SERVICES = new Set(verifynow.listServices());
 
+const randFromCents = (cents) => `R ${(Number(cents || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
+
+/** Warn a firm once per depletion that its search credit is running out. */
+async function notifyLowSearchCredit(tenantId, balanceCents, thresholdCents) {
+  const admin = await pool.query(
+    `select email, full_name from users
+      where tenant_id = $1 and status = 'active' and role in ('firm_admin','attorney','admin')
+      order by created_at limit 1`,
+    [tenantId]
+  ).catch(() => ({ rows: [] }));
+  const recipient = admin.rows[0];
+  if (!recipient) return;
+
+  const balance = randFromCents(balanceCents);
+  const { sendNotification } = require("./notifications");
+  await sendNotification({
+    tenantId,
+    type: "search_credit_low",
+    recipientEmail: recipient.email,
+    subject: `Search credit low — ${balance} remaining`,
+    text: `Your LawPath search credit balance is ${balance}, below your ${randFromCents(thresholdCents)} warning level.\n\n`
+        + `Searches (vehicle, consumer trace, CIPC, bank verification) draw on this balance. Top up under Searches to avoid interruption.`,
+    html: `<p>Your LawPath search credit balance is <strong>${balance}</strong>, below your ${randFromCents(thresholdCents)} warning level.</p>`
+        + `<p>Searches — vehicle, consumer trace, CIPC, bank verification — draw on this balance. Top up under <strong>Searches</strong> to avoid interruption.</p>`,
+    entityType: "tenant_search_wallet",
+    entityId: tenantId
+  });
+  await wallet.markLowBalanceNotified(tenantId);
+}
+
 /** What a search costs the platform, and what the firm is charged for it.
  *  Platform buys credits (volume packs beat the R2.99 pay-as-you-go rate) and
  *  resells with a markup; the firm recovers its charge as a disbursement. */
@@ -6134,6 +6165,20 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
       const m = await pool.query("select 1 from matters where id = $1 and tenant_id = $2", [matterId, req.user.tenantId]);
       if (!m.rowCount) return res.status(404).json({ error: "Matter not found." });
     }
+    // Price and check affordability BEFORE the provider is called. Once they
+    // answer we have been billed, whether or not the firm can pay us.
+    const price = await priceSearch(service);
+    const funds = await wallet.checkAffordable(req.user.tenantId, price.chargeCents);
+    if (!funds.ok) {
+      return res.status(402).json({
+        error: `Not enough search credit. This search costs ${randFromCents(price.chargeCents)} and your balance is ${randFromCents(funds.balanceCents)}. Top up to continue.`,
+        code: "insufficient_search_credit",
+        balanceCents: funds.balanceCents,
+        requiredCents: price.chargeCents,
+        shortfallCents: funds.shortfallCents
+      });
+    }
+
     const ctx = { tenantId: req.user.tenantId, userId: req.user.sub, inputRef };
     let result;
     try {
@@ -6148,9 +6193,8 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
       ).catch(() => {});
       throw vnErr;
     }
-    // Price it NOW, at the rates in force now. A later markup change must never
+    // Priced above, at the rates in force then. A later markup change must never
     // re-price a search the firm has already recharged to a client.
-    const price = await priceSearch(service);
     const stored = await pool.query(
       `insert into matter_searches
          (tenant_id, matter_id, user_id, provider, service, input, input_ref, result, status,
@@ -6161,7 +6205,31 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
        JSON.stringify(searchInputForStorage(body)), inputRef, JSON.stringify(result ?? null),
        price.credits, price.baseCostCents, price.chargeCents, price.markupRate, price.vatRate]
     ).catch(() => ({ rows: [] }));
-    res.json({ ...result, search_id: stored.rows[0]?.id ?? null });
+    const searchId = stored.rows[0]?.id ?? null;
+
+    // Charge the wallet. The provider has already billed us, so a failure to
+    // debit must not fail the request — the attorney has her result and the
+    // debt is real either way; it is logged loudly instead.
+    let balanceCents = null;
+    try {
+      const movement = await wallet.debitForSearch({
+        tenantId: req.user.tenantId,
+        searchId,
+        amountCents: price.chargeCents,
+        description: `${service}${inputRef ? ` — ${inputRef}` : ""}`,
+        createdBy: req.user.sub
+      });
+      balanceCents = movement?.balanceCents ?? null;
+      const w = await wallet.getWallet(req.user.tenantId);
+      if (wallet.justCrossedLowBalance({ ...w, lowBalanceNotifiedAt: null }, movement)) {
+        notifyLowSearchCredit(req.user.tenantId, movement.balanceCents, w.lowBalanceThresholdCents)
+          .catch(err => console.error("[wallet] low-balance notification failed:", err.message));
+      }
+    } catch (err) {
+      console.error(`[wallet] FAILED TO DEBIT tenant ${req.user.tenantId} for search ${searchId}: ${err.message}`);
+    }
+
+    res.json({ ...result, search_id: searchId, balance_cents: balanceCents });
   } catch (error) { next(error); }
 });
 
@@ -6188,6 +6256,58 @@ function matterSearchFromRow(row, { includeCost = false } = {}) {
     createdAt: new Date(row.created_at).toISOString()
   };
 }
+
+// ─── SEARCH WALLET ───────────────────────────────────────────────────────────
+
+app.get("/api/search-wallet", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const [w, enforced] = await Promise.all([wallet.getWallet(req.user.tenantId), wallet.isEnforced()]);
+    res.json({
+      balanceCents: w.balanceCents,
+      lowBalanceThresholdCents: w.lowBalanceThresholdCents,
+      low: w.balanceCents < w.lowBalanceThresholdCents,
+      // While enforcement is off a firm can search past zero; say so rather than
+      // showing a balance that looks binding when it is not.
+      enforced
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/search-wallet/ledger", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    res.json({ entries: await wallet.getLedger(req.user.tenantId, Number(req.query.limit) || 50) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/search-wallet/threshold", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const cents = Number(req.body?.lowBalanceThresholdCents);
+  if (!isFinite(cents) || cents < 0) return res.status(400).json({ error: "lowBalanceThresholdCents must be a non-negative number of cents." });
+  try {
+    await pool.query(
+      `insert into tenant_search_wallets (tenant_id, low_balance_threshold_cents) values ($1,$2)
+       on conflict (tenant_id) do update set low_balance_threshold_cents = $2, updated_at = now()`,
+      [req.user.tenantId, Math.round(cents)]
+    );
+    res.json(await wallet.getWallet(req.user.tenantId));
+  } catch (error) { next(error); }
+});
+
+// Platform super admin: manual credit or write-off (goodwill, refund, migration).
+app.post("/api/admin/search-wallet/adjust", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  const { tenantId, amountCents, description } = req.body || {};
+  const amount = Number(amountCents);
+  if (!tenantId) return res.status(400).json({ error: "tenantId is required." });
+  if (!isFinite(amount) || amount === 0) return res.status(400).json({ error: "amountCents must be a non-zero number." });
+  if (!description) return res.status(400).json({ error: "description is required — an adjustment must say why." });
+  try {
+    const movement = await wallet.adjust({ tenantId, amountCents: Math.round(amount), description, createdBy: req.user.sub });
+    res.json({ balanceCents: movement.balanceCents });
+  } catch (error) { next(error); }
+});
 
 // The price list, priced for THIS platform's current rates. Served rather than
 // hardcoded in the UI so the attorney can never be quoted one figure and
@@ -7065,6 +7185,42 @@ app.post("/api/billing/checkout", authMiddleware, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Top up search credit by card. Same Yoco checkout flow as a subscription, but
+// metadata.purpose marks it so the webhook credits a wallet instead of touching
+// the plan.
+const TOPUP_MIN_CENTS = 10000;    // R100
+const TOPUP_MAX_CENTS = 5000000;  // R50,000
+
+app.post("/api/search-wallet/topup", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  if (!YOCO_SECRET_KEY) return res.status(503).json({ error: "Card payments are not configured. Set YOCO_SECRET_KEY in .env." });
+  const amountCents = Math.round(Number(req.body?.amountCents));
+  if (!isFinite(amountCents) || amountCents < TOPUP_MIN_CENTS || amountCents > TOPUP_MAX_CENTS) {
+    return res.status(400).json({ error: `Top-up must be between ${randFromCents(TOPUP_MIN_CENTS)} and ${randFromCents(TOPUP_MAX_CENTS)}.` });
+  }
+  try {
+    const baseUrl = process.env.VITE_APP_URL || "https://lawpath.co.za";
+    const yocoRes = await fetch(`${YOCO_API}/checkouts`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${YOCO_SECRET_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: amountCents,
+        currency: "ZAR",
+        successUrl: `${baseUrl}/?topup=success`,
+        cancelUrl: `${baseUrl}/?topup=cancelled`,
+        // `purpose` is what keeps this out of the subscription branch below.
+        metadata: { tenantId: req.user.tenantId, userId: req.user.sub, purpose: "search_credit", amountCents: String(amountCents) }
+      })
+    });
+    if (!yocoRes.ok) {
+      console.error("[yoco topup] Failed:", await yocoRes.text());
+      return res.status(502).json({ error: "Could not start the card payment. Please try again." });
+    }
+    const yocoData = await yocoRes.json();
+    res.json({ checkoutUrl: yocoData.redirectUrl, checkoutId: yocoData.id, amountCents });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/billing/portal", authMiddleware, async (req, res, next) => {
   // Yoco doesn't have a managed billing portal like Stripe.
   // Direct users to the Yoco merchant dashboard.
@@ -7116,6 +7272,29 @@ app.post("/api/billing/webhook", async (req, res, next) => {
     const metadata = payload.metadata || {};
     const checkoutId = metadata.checkoutId || payload.id;
     const tenantId = metadata.tenantId;
+
+    // Search-credit top-up. MUST be handled before the subscription branch:
+    // that branch defaults to `metadata.plan || "solo"`, so a top-up falling
+    // through it would silently downgrade the firm's subscription to Solo.
+    if (event.type === "payment.succeeded" && metadata.purpose === "search_credit") {
+      const amountCents = Math.round(Number(metadata.amountCents ?? payload.amount ?? 0));
+      if (tenantId && amountCents > 0) {
+        // paymentRef makes this idempotent — Yoco retries webhooks, and a
+        // replay must not credit the same payment twice.
+        const movement = await wallet.creditTopup({
+          tenantId,
+          amountCents,
+          paymentRef: `yoco:${payload.id || checkoutId || webhookIdStr}`,
+          description: `Card top-up ${randFromCents(amountCents)}`,
+          createdBy: metadata.userId || null
+        });
+        console.info(`[wallet] Top-up ${movement.duplicate ? "IGNORED (replay)" : "credited"}: tenant ${tenantId}, ${randFromCents(amountCents)}`);
+      } else {
+        console.error("[wallet] Top-up webhook missing tenantId or amount:", { tenantId, amountCents });
+      }
+      await pool.query("update yoco_webhook_events set processed=true where webhook_id=$1", [webhookIdStr]).catch(() => {});
+      return res.json({ received: true });
+    }
 
     if (event.type === "payment.succeeded") {
       if (tenantId) {
