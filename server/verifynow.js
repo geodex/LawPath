@@ -50,7 +50,28 @@ function httpsPost(urlStr, headers, bodyStr, timeoutMs = 15000) {
   });
 }
 
-const VERIFYNOW_BASE = "https://api.verifynow.co.za";
+// Base URL confirmed from verifynow.co.za/api-docs/integration-guide (2026-07-30):
+// all requests go to www.verifynow.co.za/api/external — api.verifynow.co.za does
+// not exist in DNS (first live call ever made proved it).
+const VERIFYNOW_BASE = process.env.VERIFYNOW_BASE_URL || "https://www.verifynow.co.za/api/external";
+
+// Our stable service keys → VerifyNow's actual endpoint paths. Paths marked
+// confirmed come from the integration guide; the rest are the provider's
+// service names and will be corrected here (one line) once the dashboard docs
+// or the first live error names the real path.
+const SERVICE_PATHS = {
+  "verify":                    "verify",                    // confirmed
+  "verify-document":           "verify-document",
+  "face-match":                "facematch",                 // confirmed
+  "aml-pep":                   "aml-screening",             // confirmed
+  "consumer-trace":            "consumer-trace",
+  "consumer-trace-lite":       "consumer-trace-lite",
+  "cipc/company":              "cipc",                      // confirmed — reportType in body selects the report
+  "cipc/director":             "cipc",
+  "bank-account-verification": "bank-account-verification", // confirmed
+  "number-plate":              "number-plate",
+  "vin-decode":                "vin-decode"
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,16 +122,21 @@ async function call({ service, body, tenantId, userId, inputRef }) {
   const idempotencyKey = crypto.randomUUID();
   const startTime = Date.now();
 
+  // Every documented example carries an explicit mode; a live key must never
+  // silently run a sandbox search an attorney would rely on.
+  const requestBody = { mode: "production", ...body };
+
   let result;
   try {
     result = await httpsPost(
-      `${VERIFYNOW_BASE}/${service}`,
+      `${VERIFYNOW_BASE}/${SERVICE_PATHS[service] || service}`,
       {
-        "Authorization":   `Bearer ${apiKey}`,
+        // Auth confirmed from the integration guide: x-api-key, not Bearer.
+        "x-api-key":       apiKey,
         "Content-Type":    "application/json",
         "Idempotency-Key": idempotencyKey
       },
-      JSON.stringify(body)
+      JSON.stringify(requestBody)
     );
   } catch (networkErr) {
     await logUsage({ tenantId, userId, service, creditsSpent: 0, latencyMs: Date.now() - startTime, status: "error", errorCode: "network_error", inputRef });

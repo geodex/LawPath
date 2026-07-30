@@ -51,10 +51,9 @@ const SERVICES: ServiceDef[] = [
   },
   {
     service: "verify", label: "ID Verification", group: "Consumer",
-    description: "Verify an SA ID number against Home Affairs, optionally matching the name.",
+    description: "Verify an SA ID number against Home Affairs.",
     fields: [
-      { key: "id_number", label: "SA ID number", placeholder: "13-digit ID number", required: true },
-      { key: "full_name", label: "Full name (optional)", placeholder: "For name matching" }
+      { key: "idNumber", label: "SA ID number", placeholder: "13-digit ID number", required: true }
     ]
   },
   {
