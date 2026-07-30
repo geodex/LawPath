@@ -695,7 +695,7 @@ export type ViewKey =
   | "trust" | "fica" | "time" | "popia"
   | "conveyancing" | "litigation" | "conflicts" | "whatsapp" | "cipc" | "searches" | "documents" | "accounting"
   | "research-db" | "esignature" | "agents" | "analytics"
-  | "staff" | "billing-portal" | "ai-library" | "super-tenants";
+  | "staff" | "billing-portal" | "ai-library" | "super-tenants" | "search-margin";
 
 // ─── CRM: CLIENTS ─────────────────────────────────────────────────────────────
 

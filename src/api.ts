@@ -919,6 +919,33 @@ export async function setSearchWalletThreshold(lowBalanceThresholdCents: number)
   });
 }
 
+// ─── SEARCH MARGIN (platform super admin) ─────────────────────────────────────
+
+export type MarginRow = {
+  searches: number;
+  costCents: number;
+  revenueCents: number;
+  marginCents: number;
+  /** Null when nothing was billed — an empty period is not a 0% margin. */
+  marginPct: number | null;
+};
+
+export type SearchMargin = {
+  days: number;
+  totals: MarginRow & { failed: number };
+  byTenant: (MarginRow & { tenantId: string; tenantName: string; balanceCents: number })[];
+  byProvider: (MarginRow & { provider: string })[];
+  byService: (MarginRow & { provider: string; service: string })[];
+  /** Prepaid credit held but not yet consumed — money in the bank, not earned. */
+  floatCents: number;
+  /** Owed by firms whose balance went negative. */
+  owedCents: number;
+};
+
+export async function getSearchMargin(days = 30) {
+  return request<SearchMargin>(`/api/admin/search-margin?days=${days}`);
+}
+
 export async function setAutoTopup(enabled: boolean, amountCents: number) {
   return request<SearchWallet>("/api/search-wallet/auto-topup", {
     method: "PUT", body: JSON.stringify({ enabled, amountCents })

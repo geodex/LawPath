@@ -6350,6 +6350,97 @@ app.put("/api/search-wallet/threshold", authMiddleware, async (req, res, next) =
   } catch (error) { next(error); }
 });
 
+// Platform super admin: what searches cost us, what we billed, what we kept.
+// Reads the SNAPSHOTTED per-search figures (040), so historic months keep the
+// margin they actually earned rather than being recomputed at today's rates.
+app.get("/api/admin/search-margin", authMiddleware, async (req, res, next) => {
+  if (!requirePlatformSuperAdmin(req, res)) return;
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+  try {
+    const [totals, byTenant, byProvider, byService, wallets] = await Promise.all([
+      pool.query(
+        `select count(*)::int                                as searches,
+                coalesce(sum(base_cost_cents), 0)::bigint    as cost_cents,
+                coalesce(sum(charge_cents), 0)::bigint       as revenue_cents,
+                count(*) filter (where status = 'error')::int as failed
+           from matter_searches
+          where created_at >= now() - ($1 || ' days')::interval`,
+        [days]
+      ),
+      pool.query(
+        `select t.id as tenant_id, t.company_name as tenant_name,
+                count(*)::int                             as searches,
+                coalesce(sum(s.base_cost_cents), 0)::bigint as cost_cents,
+                coalesce(sum(s.charge_cents), 0)::bigint    as revenue_cents,
+                w.balance_cents::bigint                     as balance_cents
+           from matter_searches s
+           join tenants t on t.id = s.tenant_id
+           left join tenant_search_wallets w on w.tenant_id = t.id
+          where s.created_at >= now() - ($1 || ' days')::interval
+            and s.status = 'success'
+          group by t.id, t.company_name, w.balance_cents
+          order by revenue_cents desc
+          limit 50`,
+        [days]
+      ),
+      pool.query(
+        `select provider,
+                count(*)::int                             as searches,
+                coalesce(sum(base_cost_cents), 0)::bigint as cost_cents,
+                coalesce(sum(charge_cents), 0)::bigint    as revenue_cents
+           from matter_searches
+          where created_at >= now() - ($1 || ' days')::interval and status = 'success'
+          group by provider order by revenue_cents desc`,
+        [days]
+      ),
+      pool.query(
+        `select provider, service,
+                count(*)::int                             as searches,
+                coalesce(sum(base_cost_cents), 0)::bigint as cost_cents,
+                coalesce(sum(charge_cents), 0)::bigint    as revenue_cents
+           from matter_searches
+          where created_at >= now() - ($1 || ' days')::interval and status = 'success'
+          group by provider, service order by revenue_cents desc limit 25`,
+        [days]
+      ),
+      // Float held: prepaid credit taken but not yet consumed. It is money in
+      // the bank that is not yet earned, so it is not revenue.
+      pool.query(
+        `select coalesce(sum(balance_cents) filter (where balance_cents > 0), 0)::bigint as float_cents,
+                coalesce(sum(balance_cents) filter (where balance_cents < 0), 0)::bigint as owed_cents
+           from tenant_search_wallets`
+      )
+    ]);
+
+    const withMargin = (r) => {
+      const cost = Number(r.cost_cents), revenue = Number(r.revenue_cents);
+      return {
+        ...r,
+        searches: Number(r.searches),
+        costCents: cost,
+        revenueCents: revenue,
+        marginCents: revenue - cost,
+        // Margin as a share of revenue. Undefined rather than 0 when nothing
+        // was billed, so an empty period does not read as a 0% margin.
+        marginPct: revenue > 0 ? Math.round(((revenue - cost) / revenue) * 1000) / 10 : null
+      };
+    };
+
+    res.json({
+      days,
+      totals: { ...withMargin(totals.rows[0]), failed: Number(totals.rows[0].failed) },
+      byTenant: byTenant.rows.map(r => ({
+        tenantId: r.tenant_id, tenantName: r.tenant_name,
+        ...withMargin(r), balanceCents: Number(r.balance_cents ?? 0)
+      })),
+      byProvider: byProvider.rows.map(r => ({ provider: r.provider, ...withMargin(r) })),
+      byService: byService.rows.map(r => ({ provider: r.provider, service: r.service, ...withMargin(r) })),
+      floatCents: Number(wallets.rows[0].float_cents),
+      owedCents: Math.abs(Number(wallets.rows[0].owed_cents))
+    });
+  } catch (error) { next(error); }
+});
+
 // Platform super admin: manual credit or write-off (goodwill, refund, migration).
 app.post("/api/admin/search-wallet/adjust", authMiddleware, async (req, res, next) => {
   if (!requirePlatformSuperAdmin(req, res)) return;

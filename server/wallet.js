@@ -153,7 +153,10 @@ async function getLedger(tenantId, limit = 50) {
        left join users u on u.id = l.created_by
        left join matter_searches s on s.id = l.search_id
       where l.tenant_id = $1
-      order by l.created_at desc
+      -- seq, not created_at: same-millisecond movements (concurrent debits, or
+      -- a top-up followed straight away by a search) would otherwise come back
+      -- in arbitrary order and the running balance would look wrong.
+      order by l.seq desc
       limit $2`,
     [tenantId, Math.min(limit, 200)]
   );

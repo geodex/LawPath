@@ -63,6 +63,7 @@ import { LitigationPipeline } from "./LitigationPipeline";
 import { WhatsAppComms } from "./WhatsAppComms";
 import { CipcSearch } from "./CipcSearch";
 import { Searches } from "./Searches";
+import { SearchMargin } from "./SearchMargin";
 import { DocumentIntelligence } from "./DocumentIntelligence";
 import { AccountingSync } from "./AccountingSync";
 import { LegalResearchDB } from "./LegalResearchDB";
@@ -116,6 +117,7 @@ const nav: NavItem[] = [
   { key: "training-guide", label: "AI Training Guide", icon: LibraryBig },
   { key: "ai-library", label: "AI Library", icon: BookOpenCheck },
   { key: "super-tenants", label: "Tenants", icon: Building2 },
+  { key: "search-margin", label: "Search Margin", icon: TrendingUp },
   { key: "settings", label: "Settings", icon: Settings }
 ];
 
@@ -133,7 +135,7 @@ const navGroups: NavGroup[] = [
   { key: "network", label: "Comms & Network", items: ["whatsapp", "cipc", "searches", "agents"] },
   { key: "insights", label: "Insights", items: ["analytics", "staff"] },
   { key: "account", label: "Account", items: ["billing-portal", "training-guide", "ai-library"] },
-  { key: "platform", label: "Platform", items: ["super-tenants"] }
+  { key: "platform", label: "Platform", items: ["super-tenants", "search-margin"] }
 ];
 
 const viewAgentMap: Record<ViewKey, AiAgentKey> = {
@@ -169,6 +171,7 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   "training-guide": "research",
   "ai-library": "research",
   "super-tenants": "settings",
+  "search-margin": "settings",
   settings: "settings"
 };
 
@@ -693,7 +696,7 @@ export function App() {
         onClose={() => setCmdkOpen(false)}
         nav={nav}
         isVisible={(key) => {
-          if (key === "training-guide" || key === "super-tenants") return isPlatformSuperAdmin;
+          if (key === "training-guide" || key === "super-tenants" || key === "search-margin") return isPlatformSuperAdmin;
           if (key === "ai-library" || key === "today") return !isPlatformSuperAdmin;
           return true;
         }}
@@ -915,6 +918,7 @@ export function App() {
         {activeView === "portal" && <Portal matters={matters} setMatters={setMatters} portalMode={portalMode} setPortalMode={setPortalMode} log={log} />}
         {activeView === "training-guide" && isPlatformSuperAdmin && <AITrainingGuide setActiveView={setActiveView} />}
         {activeView === "super-tenants" && isPlatformSuperAdmin && <SuperTenants log={log} showToast={showToast} />}
+        {activeView === "search-margin" && isPlatformSuperAdmin && <SearchMargin showToast={showToast} />}
         {activeView === "ai-library" && hasTenantContext && (
           <TenantTraining
             ragSources={ragSources}
