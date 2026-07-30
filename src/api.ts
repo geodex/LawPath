@@ -844,6 +844,34 @@ export async function callVerifyNow(service: string, body: Record<string, unknow
   );
 }
 
+// ─── SEARCH REGISTER ──────────────────────────────────────────────────────────
+
+export type MatterSearch = {
+  id: string;
+  matterId: string | null;
+  matterNumber: string | null;
+  matterTitle: string | null;
+  userName: string | null;
+  provider: "verifynow" | "searchworks" | "lightstone";
+  service: string;
+  input: Record<string, unknown>;
+  inputRef: string | null;
+  result: Record<string, unknown> | null;
+  creditsSpent: number;
+  status: "success" | "error";
+  errorMessage: string | null;
+  createdAt: string;
+};
+
+/** Every stored third-party search (vehicle, consumer, company, bank), newest first. */
+export async function getSearches(params?: { matterId?: string; limit?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.matterId) qs.set("matterId", params.matterId);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<{ searches: MatterSearch[] }>(`/api/searches${suffix}`);
+}
+
 export async function getVerifyNowUsage() {
   return request<{
     totals: import("./types").VerifyNowUsageTotals;

@@ -6080,12 +6080,40 @@ const VERIFYNOW_SERVICES = new Set([
   "number-plate", "vin-decode"
 ]);
 
+// Fields we never persist into matter_searches.input (biometric image payloads).
+function searchInputForStorage(body) {
+  const out = {};
+  for (const [k, v] of Object.entries(body || {})) {
+    if (k.endsWith("_base64")) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+// Best human one-liner for what was searched, when the caller gave no input_ref.
+function deriveInputRef(body) {
+  for (const key of ["input_ref", "licence_number", "vin", "id_number", "identityNumber", "registration_number", "bankAccountNumber", "full_name", "name"]) {
+    const v = body?.[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
 app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  const service = req.params.service;
+  // Express 5 named wildcards deliver the param as an ARRAY of path segments
+  // (that is how "cipc/company" arrives as ["cipc","company"]).
+  const service = Array.isArray(req.params.service) ? req.params.service.join("/") : req.params.service;
   if (!VERIFYNOW_SERVICES.has(service)) return res.status(400).json({ error: `Unknown VerifyNow service: ${service}` });
+  // matter_id is ours, not VerifyNow's — strip it before forwarding.
+  const { matter_id: matterId, ...body } = req.body || {};
+  const inputRef = deriveInputRef(body);
   try {
-    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub, inputRef: req.body?.input_ref || null };
+    if (matterId) {
+      const m = await pool.query("select 1 from matters where id = $1 and tenant_id = $2", [matterId, req.user.tenantId]);
+      if (!m.rowCount) return res.status(404).json({ error: "Matter not found." });
+    }
+    const ctx = { tenantId: req.user.tenantId, userId: req.user.sub, inputRef };
     // Route to the matching wrapper method
     const methodMap = {
       "verify":                    verifynow.verifyId,
@@ -6100,8 +6128,68 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
       "number-plate":              verifynow.numberPlate,
       "vin-decode":                verifynow.vinDecode
     };
-    const result = await methodMap[service](req.body, ctx);
-    res.json(result);
+    let result;
+    try {
+      result = await methodMap[service](body, ctx);
+    } catch (vnErr) {
+      // The failed attempt still belongs on the register — an attorney needs to
+      // see that a search was tried (and what it cost, if anything).
+      await pool.query(
+        `insert into matter_searches (tenant_id, matter_id, user_id, provider, service, input, input_ref, status, error_message)
+         values ($1,$2,$3,'verifynow',$4,$5,$6,'error',$7)`,
+        [req.user.tenantId, matterId || null, req.user.sub, service, JSON.stringify(searchInputForStorage(body)), inputRef, String(vnErr.message || vnErr).slice(0, 500)]
+      ).catch(() => {});
+      throw vnErr;
+    }
+    const stored = await pool.query(
+      `insert into matter_searches (tenant_id, matter_id, user_id, provider, service, input, input_ref, result, credits_spent, status)
+       values ($1,$2,$3,'verifynow',$4,$5,$6,$7,$8,'success')
+       returning id`,
+      [req.user.tenantId, matterId || null, req.user.sub, service, JSON.stringify(searchInputForStorage(body)), inputRef, JSON.stringify(result ?? null), result?.metadata?.credits_spent ?? 0]
+    ).catch(() => ({ rows: [] }));
+    res.json({ ...result, search_id: stored.rows[0]?.id ?? null });
+  } catch (error) { next(error); }
+});
+
+function matterSearchFromRow(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id || null,
+    matterNumber: row.matter_number || null,
+    matterTitle: row.matter_title || null,
+    userName: row.user_name || null,
+    provider: row.provider,
+    service: row.service,
+    input: row.input || {},
+    inputRef: row.input_ref || null,
+    result: row.result ?? null,
+    creditsSpent: Number(row.credits_spent || 0),
+    status: row.status,
+    errorMessage: row.error_message || null,
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
+// Search register — every stored third-party search, newest first.
+app.get("/api/searches", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  const matterId = req.query.matterId || null;
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  try {
+    const params = [req.user.tenantId];
+    if (matterId) params.push(matterId);
+    params.push(limit);
+    const result = await pool.query(
+      `select s.*, m.matter_number, m.title as matter_title, u.full_name as user_name
+       from matter_searches s
+       left join matters m on m.id = s.matter_id
+       left join users u on u.id = s.user_id
+       where s.tenant_id = $1 ${matterId ? "and s.matter_id = $2" : ""}
+       order by s.created_at desc
+       limit $${params.length}`,
+      params
+    );
+    res.json({ searches: result.rows.map(matterSearchFromRow) });
   } catch (error) { next(error); }
 });
 

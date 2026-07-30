@@ -28,6 +28,7 @@ import {
   Send,
   ServerCog,
   Settings,
+  FileSearch,
   Lock,
   Shield,
   ShieldAlert,
@@ -61,6 +62,7 @@ import { ConveyancingPipeline } from "./ConveyancingPipeline";
 import { LitigationPipeline } from "./LitigationPipeline";
 import { WhatsAppComms } from "./WhatsAppComms";
 import { CipcSearch } from "./CipcSearch";
+import { Searches } from "./Searches";
 import { DocumentIntelligence } from "./DocumentIntelligence";
 import { AccountingSync } from "./AccountingSync";
 import { LegalResearchDB } from "./LegalResearchDB";
@@ -100,6 +102,7 @@ const nav: NavItem[] = [
   { key: "popia", label: "POPIA", icon: ShieldAlert },
   { key: "whatsapp", label: "WhatsApp", icon: Users },
   { key: "cipc", label: "CIPC Search", icon: Search },
+  { key: "searches", label: "Searches", icon: FileSearch },
   { key: "documents", label: "Doc Intelligence", icon: BadgeCheck },
   { key: "accounting", label: "Accounting", icon: CircleDollarSign },
   { key: "research-db", label: "SA Case Law", icon: LibraryBig },
@@ -127,7 +130,7 @@ const navGroups: NavGroup[] = [
   { key: "financial", label: "Financial", items: ["time", "billing", "trust", "accounting"] },
   { key: "practice", label: "Practice Areas", items: ["conveyancing", "litigation", "conflicts"] },
   { key: "ai", label: "AI Tools", items: ["research-db", "documents", "esignature"] },
-  { key: "network", label: "Comms & Network", items: ["whatsapp", "cipc", "agents"] },
+  { key: "network", label: "Comms & Network", items: ["whatsapp", "cipc", "searches", "agents"] },
   { key: "insights", label: "Insights", items: ["analytics", "staff"] },
   { key: "account", label: "Account", items: ["billing-portal", "training-guide", "ai-library"] },
   { key: "platform", label: "Platform", items: ["super-tenants"] }
@@ -148,6 +151,7 @@ const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   time: "billing",
   fica: "general",
   popia: "general",
+  searches: "general",
   conveyancing: "drafting",
   litigation: "research",
   whatsapp: "secretary",
@@ -789,6 +793,9 @@ export function App() {
         )}
         {activeView === "cipc" && (
           <CipcSearch log={log} showToast={showToast} />
+        )}
+        {activeView === "searches" && (
+          <Searches log={log} showToast={showToast} />
         )}
         {activeView === "documents" && (
           <DocumentIntelligence
