@@ -81,56 +81,72 @@ const CAMELCASE_SERVICES = new Set([
   "dots-person", "dots-company", "dots-property-erf"
 ]);
 
-// Per-service Rand-cent cost from SearchWorks April 2026 pricelist.
+// Per-service cost to the platform, in Rand cents, transcribed from the
+// SearchWorks DEFAULT PRICELIST EFFECTIVE 20 APRIL 2026 (the real document, not
+// the estimates that stood here before — every figure below changed, and
+// valuation-erf was out by 4.5x in the direction that loses money on each call).
 //
-// Volume breaks (DeedsOfficeSearch + DOTSInformation, billed monthly):
-//   Base       (1 - 500     calls/mo): R 22.80
-//   Tier 1     (501 - 1000  calls/mo): R 21.45
-//   Tier 2     (1001 - 1500 calls/mo): R 20.55
-//   Tier 3     (1501 - 2500 calls/mo): R 19.65
-//   Tier 4     (2501+       calls/mo): R 19.25
-// We log the base rate here; reconcile against the SearchWorks billing
-// reports endpoint (billingreports/branch + billingreports/company) for
-// the actual tier-discounted invoice.
+// PRICES ARE EXCLUSIVE OF VAT, which is what the charge formula expects: it
+// applies markup and then VAT to this base.
 //
-// Extrapolations (not on the pricelist, marked below):
-//   property-history-company / -trust: same as PersonPropertyHistory (R 16.50)
-//   deeds-cross-*: priced like TransferReport per line (R 16.65)
-//   valuation-erf: kept as placeholder pending confirmation
+// "Not found" is still charged at the standard rate — a search that returns
+// nothing costs the same as one that returns everything.
+//
+// Volume breaks apply monthly to Deeds Office Search and DOTS Information:
+//   Base      (1 - 500      calls/mo): R 25.60
+//   Break 1   (501 - 1000   calls/mo): R 24.10
+//   Break 2   (1001 - 1500  calls/mo): R 23.00
+//   Break 3   (1501 - 2500  calls/mo): R 22.00
+//   Break 4   (2501 and above       ): R 21.60
+// The base rate is what we record per call, because the tier is only known at
+// month end. Reconcile against the billing-report endpoints
+// (billingreports/branch + billingreports/company) for the invoiced figure —
+// any discount earned is additional platform margin.
 const CREDIT_COST = {
-  // diagnostic / auth — no cost
+  // Diagnostic / auth / billing reports — free, and must never bill a firm.
   "commtest":                  0,
   "validate-token":            0,
   "search-limit":              0,
   "billing-branch":            0,
   "billing-company":           0,
-  // Deeds Office single-office searches — DeedsOfficeSearch R 22.80
-  "deeds-person":              2280,
-  "deeds-company":             2280,
-  "deeds-trust":               2280,
-  "deeds-property-erf":        2280,
-  "deeds-property-farm":       2280,
-  "deeds-property-scheme":     2280,
-  "deeds-document":            2280,
-  // Cross-deeds searches — TransferReport(PerLine) R 16.65 [extrapolated]
-  "deeds-cross-person":        1665,
-  "deeds-cross-company":       1665,
-  "deeds-cross-trust":         1665,
-  // DOTS — DOTSInformation R 22.80
-  "dots-person":               2280,
-  "dots-company":              2280,
-  "dots-property-erf":         2280,
-  "dots-barcode":              2280,
-  // Document retrieval — DeedDocumentCopy R 110.00
-  "document-request":          11000,
-  // Property history — PersonPropertyHistory R 16.50 (company/trust extrapolated)
-  "property-history-person":   1650,
-  "property-history-company":  1650,
-  "property-history-trust":    1650,
-  // Property ownership — PropertyOwnershipHistory R 17.60
-  "property-ownership":        1760,
-  // Lightstone valuation re-sold by SearchWorks — placeholder
-  "valuation-erf":             4000
+
+  // Deeds Office Search — R 25.60
+  "deeds-person":              2560,
+  "deeds-company":             2560,
+  "deeds-trust":               2560,
+  "deeds-property-erf":        2560,
+  "deeds-property-farm":       2560,
+  "deeds-property-scheme":     2560,
+  "deeds-document":            2560,
+
+  // Cross-office searches are not a separate line on the pricelist. They run a
+  // Deeds Office Search against each office, so the per-office rate is the
+  // honest basis — and it is the conservative one (higher than the Transfer
+  // Report rate previously assumed). CONFIRM WITH SEARCHWORKS whether these
+  // bill once or once per office.
+  "deeds-cross-person":        2560,
+  "deeds-cross-company":       2560,
+  "deeds-cross-trust":         2560,
+
+  // DOTS Information — R 25.60  (DOTS Alerts, a subscription, is R 256.10)
+  "dots-person":               2560,
+  "dots-company":              2560,
+  "dots-property-erf":         2560,
+  "dots-barcode":              2560,
+
+  // Deed Document Copy — R 125.00
+  "document-request":          12500,
+
+  // Property history, each its own line on the pricelist
+  "property-history-person":   1900,   // Person Property History   R 19.00
+  "property-history-company":  1860,   // Company Property History  R 18.60
+  "property-history-trust":    2900,   // Trust Property History    R 29.00
+
+  // Property Ownership History — R 18.57
+  "property-ownership":        1857,
+
+  // LightStone Erf Valuation resold by SearchWorks — R 179.00
+  "valuation-erf":             17900
 };
 
 // ─── HTTPS helper ───────────────────────────────────────────────────────────
@@ -696,6 +712,19 @@ const SERVICE_HANDLERS = {
 
 const SERVICES = Object.keys(SERVICE_HANDLERS);
 
+/** What one call costs the platform, in ZAR cents, from the SearchWorks April
+ *  2026 pricelist. Unlike VerifyNow there is no credit unit here — SearchWorks
+ *  prices per call in rand — so this IS the base cost, not a credit count. */
+function serviceCost(service) {
+  return CREDIT_COST[service] ?? 0;
+}
+
+/** Auth, diagnostics and billing reports cost nothing and must never bill a
+ *  firm or block on an empty wallet. */
+function isFreeService(service) {
+  return serviceCost(service) === 0;
+}
+
 module.exports = {
   commtest, validateToken, getSearchLimit,
   billingByBranch, billingByCompany,
@@ -707,5 +736,7 @@ module.exports = {
   propertyHistoryPerson, propertyHistoryCompany, propertyHistoryTrust,
   propertyOwnership, valuationErf,
   SERVICE_HANDLERS, SERVICES,
-  invalidateSession, getSessionToken
+  invalidateSession, getSessionToken,
+  serviceCost, isFreeService,
+  CREDIT_COST
 };

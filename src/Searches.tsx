@@ -299,7 +299,11 @@ export function Searches({ log, showToast }: Props) {
   useEffect(() => {
     getMatters().then(res => setMatters(res.matters)).catch(() => {});
     getSearchServices()
-      .then(res => setPrices(Object.fromEntries(res.services.map(s => [s.service, { credits: s.credits, chargeCents: s.chargeCents }]))))
+      // This view offers VerifyNow services only; SearchWorks deeds searches are
+      // priced by the same endpoint but surfaced in Conveyancing.
+      .then(res => setPrices(Object.fromEntries(
+        res.services.filter(s => s.provider === "verifynow").map(s => [s.service, { credits: s.credits ?? 0, chargeCents: s.chargeCents }])
+      )))
       .catch(() => {});
     loadHistory("");
     refreshCredits();

@@ -6086,6 +6086,29 @@ const VERIFYNOW_SERVICES = new Set(verifynow.listServices());
 
 const randFromCents = (cents) => `R ${(Number(cents || 0) / 100).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
 
+/** Charge a completed search and warn if that emptied the wallet.
+ *  Shared by both provider proxies — money handling written once.
+ *
+ *  Never throws: by this point the provider has answered and billed us, so the
+ *  attorney keeps her result and the debt is recorded either way. A failure
+ *  here is logged loudly rather than turned into a failed request. */
+async function debitAndWarn({ tenantId, userId, searchId, chargeCents, description }) {
+  try {
+    const movement = await wallet.debitForSearch({
+      tenantId, searchId, amountCents: chargeCents, description, createdBy: userId
+    });
+    const w = await wallet.getWallet(tenantId);
+    if (wallet.justCrossedLowBalance({ ...w, lowBalanceNotifiedAt: null }, movement)) {
+      notifyLowSearchCredit(tenantId, movement.balanceCents, w.lowBalanceThresholdCents)
+        .catch(err => console.error("[wallet] low-balance notification failed:", err.message));
+    }
+    return movement?.balanceCents ?? null;
+  } catch (err) {
+    console.error(`[wallet] FAILED TO DEBIT tenant ${tenantId} for search ${searchId}: ${err.message}`);
+    return null;
+  }
+}
+
 /** Warn a firm once per depletion that its search credit is running out. */
 async function notifyLowSearchCredit(tenantId, balanceCents, thresholdCents) {
   const admin = await pool.query(
@@ -6114,22 +6137,43 @@ async function notifyLowSearchCredit(tenantId, balanceCents, thresholdCents) {
   await wallet.markLowBalanceNotified(tenantId);
 }
 
+/** base x (1 + markup) x (1 + vat), rounded half up, in exact integer
+ *  arithmetic. Floats lose money here: R179.00 at 30% + 15% is exactly
+ *  R267.605, but the float chain evaluates to 26760.499999999996 and rounds
+ *  DOWN a cent. Rates are numeric(5,4) in the database, so scaling both by
+ *  10,000 is lossless. */
+function applyRates(baseCents, markupRate, vatRate) {
+  const bp = (x) => BigInt(Math.round(Number(x) * 10000));
+  const scaled = BigInt(Math.round(baseCents)) * (10000n + bp(markupRate)) * (10000n + bp(vatRate));
+  return Number((scaled + 50000000n) / 100000000n);
+}
+
 /** What a search costs the platform, and what the firm is charged for it.
- *  Platform buys credits (volume packs beat the R2.99 pay-as-you-go rate) and
- *  resells with a markup; the firm recovers its charge as a disbursement. */
-async function priceSearch(service) {
-  const credits = verifynow.serviceCost(service).credits;
+ *  The platform buys from the provider and resells with a markup; the firm
+ *  recovers its charge as a disbursement.
+ *
+ *  The two providers price differently and the difference is real, not
+ *  cosmetic: VerifyNow sells CREDITS (base = credits x what a credit costs us,
+ *  which drops when we buy a volume pack), while SearchWorks prices each call
+ *  in rand directly. Both end at the same charge formula. */
+async function priceSearch(service, provider = "verifynow") {
   const cfg = await pool.query(
     "select vat_rate, markup_rate, verifynow_credit_cost_cents from platform_pricing_config where id = 1"
   ).then(r => r.rows[0]).catch(() => null);
 
-  const creditCostCents = Number(cfg?.verifynow_credit_cost_cents ?? 299);
   const markupRate = Number(cfg?.markup_rate ?? 0);
   const vatRate    = Number(cfg?.vat_rate    ?? 0);
 
-  const baseCostCents = Math.round(credits * creditCostCents);
-  const chargeCents   = Math.round(baseCostCents * (1 + markupRate) * (1 + vatRate));
-  return { credits, baseCostCents, chargeCents, markupRate, vatRate };
+  let credits = null;
+  let baseCostCents;
+  if (provider === "searchworks") {
+    baseCostCents = searchworks.serviceCost(service);
+  } else {
+    credits = verifynow.serviceCost(service).credits;
+    baseCostCents = Math.round(credits * Number(cfg?.verifynow_credit_cost_cents ?? 299));
+  }
+
+  return { credits, baseCostCents, chargeCents: applyRates(baseCostCents, markupRate, vatRate), markupRate, vatRate, provider };
 }
 
 // Fields we never persist into matter_searches.input (biometric image payloads).
@@ -6207,27 +6251,11 @@ app.post("/api/verifynow/*service", authMiddleware, async (req, res, next) => {
     ).catch(() => ({ rows: [] }));
     const searchId = stored.rows[0]?.id ?? null;
 
-    // Charge the wallet. The provider has already billed us, so a failure to
-    // debit must not fail the request — the attorney has her result and the
-    // debt is real either way; it is logged loudly instead.
-    let balanceCents = null;
-    try {
-      const movement = await wallet.debitForSearch({
-        tenantId: req.user.tenantId,
-        searchId,
-        amountCents: price.chargeCents,
-        description: `${service}${inputRef ? ` — ${inputRef}` : ""}`,
-        createdBy: req.user.sub
-      });
-      balanceCents = movement?.balanceCents ?? null;
-      const w = await wallet.getWallet(req.user.tenantId);
-      if (wallet.justCrossedLowBalance({ ...w, lowBalanceNotifiedAt: null }, movement)) {
-        notifyLowSearchCredit(req.user.tenantId, movement.balanceCents, w.lowBalanceThresholdCents)
-          .catch(err => console.error("[wallet] low-balance notification failed:", err.message));
-      }
-    } catch (err) {
-      console.error(`[wallet] FAILED TO DEBIT tenant ${req.user.tenantId} for search ${searchId}: ${err.message}`);
-    }
+    const balanceCents = await debitAndWarn({
+      tenantId: req.user.tenantId, userId: req.user.sub,
+      searchId, chargeCents: price.chargeCents,
+      description: `${service}${inputRef ? ` — ${inputRef}` : ""}`
+    });
 
     res.json({ ...result, search_id: searchId, balance_cents: balanceCents });
   } catch (error) { next(error); }
@@ -6315,12 +6343,18 @@ app.post("/api/admin/search-wallet/adjust", authMiddleware, async (req, res, nex
 app.get("/api/verifynow/services", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
-    const services = await Promise.all(
-      verifynow.listServices().map(async service => {
-        const p = await priceSearch(service);
-        return { service, credits: p.credits, chargeCents: p.chargeCents };
+    const services = await Promise.all([
+      ...verifynow.listServices().map(async service => {
+        const p = await priceSearch(service, "verifynow");
+        return { provider: "verifynow", service, credits: p.credits, chargeCents: p.chargeCents };
+      }),
+      // SearchWorks priced the same way, so a deeds search shows its price
+      // wherever it is offered. Free services (auth, diagnostics) are omitted.
+      ...searchworks.SERVICES.filter(s => !searchworks.isFreeService(s)).map(async service => {
+        const p = await priceSearch(service, "searchworks");
+        return { provider: "searchworks", service, credits: null, chargeCents: p.chargeCents };
       })
-    );
+    ]);
     res.json({ services });
   } catch (error) { next(error); }
 });
@@ -6929,10 +6963,74 @@ app.post("/api/searchworks/:service", authMiddleware, async (req, res, next) => 
   const service = req.params.service;
   const handler = searchworks.SERVICE_HANDLERS[service];
   if (!handler) return res.status(400).json({ error: `Unknown SearchWorks service: ${service}` });
+
+  // matter_id is ours, not SearchWorks' — strip it before forwarding.
+  const { matter_id: matterId, ...body } = req.body || {};
+  const inputRef = deriveInputRef(body);
+  // Auth, diagnostics and billing reports cost nothing: never bill for them and
+  // never let an empty wallet block a connectivity check.
+  const billable = Boolean(req.user.tenantId) && !searchworks.isFreeService(service);
+
   try {
+    if (matterId) {
+      const m = await pool.query("select 1 from matters where id = $1 and tenant_id = $2", [matterId, req.user.tenantId]);
+      if (!m.rowCount) return res.status(404).json({ error: "Matter not found." });
+    }
+
+    const price = billable ? await priceSearch(service, "searchworks") : null;
+    if (price) {
+      const funds = await wallet.checkAffordable(req.user.tenantId, price.chargeCents);
+      if (!funds.ok) {
+        return res.status(402).json({
+          error: `Not enough search credit. This search costs ${randFromCents(price.chargeCents)} and your balance is ${randFromCents(funds.balanceCents)}. Top up to continue.`,
+          code: "insufficient_search_credit",
+          balanceCents: funds.balanceCents,
+          requiredCents: price.chargeCents,
+          shortfallCents: funds.shortfallCents
+        });
+      }
+    }
+
     const ctx = { tenantId: req.user.tenantId || null, userId: req.user.sub };
-    const data = await handler(req.body || {}, ctx);
-    res.json(data);
+    let data;
+    try {
+      data = await handler(body, ctx);
+    } catch (swErr) {
+      if (req.user.tenantId) {
+        await pool.query(
+          `insert into matter_searches (tenant_id, matter_id, user_id, provider, service, input, input_ref, status, error_message)
+           values ($1,$2,$3,'searchworks',$4,$5,$6,'error',$7)`,
+          [req.user.tenantId, matterId || null, req.user.sub, service,
+           JSON.stringify(searchInputForStorage(body)), inputRef, String(swErr.message || swErr).slice(0, 500)]
+        ).catch(() => {});
+      }
+      throw swErr;
+    }
+
+    let balanceCents = null;
+    let searchId = null;
+    if (req.user.tenantId) {
+      const stored = await pool.query(
+        `insert into matter_searches
+           (tenant_id, matter_id, user_id, provider, service, input, input_ref, result, status,
+            credits, base_cost_cents, charge_cents, markup_rate, vat_rate)
+         values ($1,$2,$3,'searchworks',$4,$5,$6,$7,'success',$8,$9,$10,$11,$12)
+         returning id`,
+        [req.user.tenantId, matterId || null, req.user.sub, service,
+         JSON.stringify(searchInputForStorage(body)), inputRef, JSON.stringify(data ?? null),
+         null, price?.baseCostCents ?? 0, price?.chargeCents ?? 0, price?.markupRate ?? 0, price?.vatRate ?? 0]
+      ).catch(() => ({ rows: [] }));
+      searchId = stored.rows[0]?.id ?? null;
+
+      if (price) {
+        balanceCents = await debitAndWarn({
+          tenantId: req.user.tenantId, userId: req.user.sub,
+          searchId, chargeCents: price.chargeCents,
+          description: `${service}${inputRef ? ` — ${inputRef}` : ""}`
+        });
+      }
+    }
+    res.json({ ...data, search_id: searchId, balance_cents: balanceCents });
   } catch (err) {
     if (err.expose) return res.status(err.statusCode || 500).json({ error: err.message });
     next(err);

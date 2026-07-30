@@ -918,9 +918,9 @@ export async function setSearchWalletThreshold(lowBalanceThresholdCents: number)
 /** Price list, computed from the platform's current rates — never hardcoded in
  *  the UI, so a quoted price and a charged price cannot diverge. */
 export async function getSearchServices() {
-  return request<{ services: { service: string; credits: number; chargeCents: number }[] }>(
-    "/api/verifynow/services"
-  );
+  return request<{
+    services: { provider: "verifynow" | "searchworks"; service: string; credits: number | null; chargeCents: number }[];
+  }>("/api/verifynow/services");
 }
 
 /** Remaining VerifyNow credit balance. Free to call. */
