@@ -6021,17 +6021,17 @@ app.get("/api/admin/verifynow/usage", authMiddleware, async (req, res, next) => 
         group by service
         order by credits desc`),
       pool.query(`
-        select t.name as tenant_name, v.tenant_id,
+        select t.company_name as tenant_name, v.tenant_id,
                count(*)                        as calls,
                coalesce(sum(v.credits_spent), 0) as credits
         from verifynow_usage_log v
         left join tenants t on t.id = v.tenant_id
         where v.created_at >= now() - interval '30 days'
-        group by v.tenant_id, t.name
+        group by v.tenant_id, t.company_name
         order by credits desc
         limit 20`),
       pool.query(`
-        select v.*, t.name as tenant_name
+        select v.*, t.company_name as tenant_name
         from verifynow_usage_log v
         left join tenants t on t.id = v.tenant_id
         order by v.created_at desc
@@ -6054,7 +6054,7 @@ app.get("/api/admin/verifynow/usage/log", authMiddleware, async (req, res, next)
   const service = req.query.service || null;
   try {
     const result = await pool.query(
-      `select v.*, t.name as tenant_name
+      `select v.*, t.company_name as tenant_name
        from verifynow_usage_log v
        left join tenants t on t.id = v.tenant_id
        ${service ? "where v.service = $3" : ""}
