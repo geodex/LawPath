@@ -37,9 +37,14 @@ async function storeInboundMessage(tenantId, from, body, msgId) {
       [tenantId, phoneNumber, phoneNumber]
     ).catch(() => ({ rows: [] }));
     const contactId = contact.rows[0]?.id || null;
+    // Same attribution as the Cloud API webhook — shared so the two paths
+    // cannot disagree about whose message this is, and therefore who is billed.
+    const { resolveWhatsappClient } = require("./whatsapp-attribution");
+    const who = await resolveWhatsappClient(tenantId, phoneNumber);
     await pool.query(
-      "insert into whatsapp_messages (tenant_id, contact_id, direction, message_body, status, provider_msg_id) values ($1,$2,'inbound',$3,'read',$4) on conflict do nothing",
-      [tenantId, contactId, body, msgId]
+      `insert into whatsapp_messages (tenant_id, contact_id, direction, message_body, status, provider_msg_id, client_id, matter_id)
+       values ($1,$2,'inbound',$3,'read',$4,$5,$6) on conflict do nothing`,
+      [tenantId, contactId, body, msgId, who.clientId, who.matterId]
     ).catch(() => {});
   } catch (err) {
     console.error("[wa-session] Failed to store inbound message:", err.message);

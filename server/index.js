@@ -14,6 +14,7 @@ const { sendTransactionalEmail } = require("./mailer");
 const { configuredBucketName, safeObjectPart, uploadDataUrl, uploadText, downloadText } = require("./gcs");
 const verifynow  = require("./verifynow");
 const wallet     = require("./wallet");
+const { resolveWhatsappClient } = require("./whatsapp-attribution");
 const lightstone  = require("./lightstone");
 const searchworks = require("./searchworks");
 const { pollMatter: pollDotsMatter } = require("./dots-poller");
@@ -2146,19 +2147,42 @@ app.get("/api/time/suggest", authMiddleware, async (req, res, next) => {
           where s.tenant_id = $1 and s.user_id = $2
             and s.created_at::date = $3::date and s.status = 'success'
           order by s.created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
+      // Research SESSIONS, not individual API calls. "AI was used" 14 times says
+      // nothing an attorney can bill; one session from 14:02 to 14:36 on a named
+      // question is a unit of work. Duration is the span of the conversation's
+      // messages, which is the closest honest proxy for time at the desk.
       pool.query(
-        `select feature, model, created_at from ai_usage_log
-         where tenant_id = $1 and user_id = $2 and created_at::date = $3::date and status = 'ok'
-           and coalesce(feature,'') <> 'time-capture'
-         order by created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
+        `select c.id, c.title, c.agent_key,
+                min(m.created_at) as started_at,
+                max(m.created_at) as ended_at,
+                count(*) filter (where m.role = 'user')::int as questions
+           from ai_conversations c
+           join ai_messages m on m.conversation_id = c.id
+          where c.tenant_id = $1 and c.user_id = $2 and m.created_at::date = $3::date
+          group by c.id, c.title, c.agent_key
+          order by min(m.created_at)
+          limit 50`, [tid, uid, date]).catch(() => ({ rows: [] })),
       pool.query(
         `select file_name, document_type, parties, created_at from document_analyses
          where tenant_id = $1 and created_by = $2 and created_at::date = $3::date
          order by created_at limit 100`, [tid, uid, date]).catch(() => ({ rows: [] })),
+      // Both directions. Reading and answering a client's message is work, and
+      // it was previously invisible because inbound messages have no author.
+      // Inbound is attributed through the matter this fee earner opened, which
+      // is the defensible rule — it never puts another attorney's client in
+      // your day.
       pool.query(
-        `select matter_ref, message_body, sent_at from whatsapp_messages
-         where tenant_id = $1 and created_by = $2 and direction = 'outbound' and sent_at::date = $3::date
-         order by sent_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] }))
+        `select w.direction, w.message_body, w.sent_at, w.matter_ref,
+                m.matter_number, c.full_name as client_name
+           from whatsapp_messages w
+           left join matters m on m.id = w.matter_id
+           left join clients c on c.id = w.client_id
+          where w.tenant_id = $1 and w.sent_at::date = $3::date
+            and (
+              (w.direction = 'outbound' and w.created_by = $2)
+              or (w.direction = 'inbound' and m.created_by = $2)
+            )
+          order by w.sent_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] }))
     ]);
 
     const lines = [];
@@ -2172,9 +2196,17 @@ app.get("/api/time/suggest", authMiddleware, async (req, res, next) => {
       const on = s.matter_number ? ` on ${s.matter_number}${s.client_name ? ` (${s.client_name})` : ""}` : "";
       lines.push(`[${hhmm(s.created_at)}] search: ${label}${s.input_ref ? ` — ${s.input_ref}` : ""}${on}`);
     }
-    for (const x of aiUse.rows) lines.push(`[${hhmm(x.created_at)}] AI ${x.feature || "assist"} used`);
+    for (const s of aiUse.rows) {
+      const mins = Math.max(1, Math.round((new Date(s.ended_at) - new Date(s.started_at)) / 60000));
+      const kind = s.agent_key === "research" ? "legal research session" : `${s.agent_key || "assistant"} session`;
+      lines.push(`[${hhmm(s.started_at)}-${hhmm(s.ended_at)}] ${kind} (${mins} min, ${s.questions} question${s.questions === 1 ? "" : "s"}): ${String(s.title || "untitled").slice(0, 80)}`);
+    }
     for (const doc of docs.rows) lines.push(`[${hhmm(doc.created_at)}] document: ${doc.document_type || "analysis"} — ${doc.file_name}${Array.isArray(doc.parties) && doc.parties.length ? ` (parties: ${doc.parties.slice(0, 3).join(", ")})` : ""}`);
-    for (const w of wa.rows) lines.push(`[${hhmm(w.sent_at)}] WhatsApp to client${w.matter_ref ? ` — ${w.matter_ref}` : ""}: ${String(w.message_body || "").replace(/\s+/g, " ").slice(0, 90)}`);
+    for (const w of wa.rows) {
+      const who = w.client_name ? ` with ${w.client_name}` : "";
+      const on = w.matter_number || w.matter_ref;
+      lines.push(`[${hhmm(w.sent_at)}] WhatsApp ${w.direction === "inbound" ? "received from client" : "sent to client"}${who}${on ? ` on ${on}` : ""}: ${String(w.message_body || "").replace(/\s+/g, " ").slice(0, 90)}`);
+    }
 
     const signalCount = lines.length;
     if (signalCount === 0) {
@@ -2190,6 +2222,10 @@ app.get("/api/time/suggest", authMiddleware, async (req, res, next) => {
       "From one fee earner's logged activity for a single day, draft conservative billable time entries for the attorney to review.",
       "South African attorneys record time in 6-minute units — estimate durationMinutes as a multiple of 6, and err on the low side.",
       "Group related actions on the same matter into a single entry. Never invent work that the log does not evidence.",
+      // Sessions carry a real measured span; searches and messages do not, and
+      // the model would otherwise treat all signals as equally uncertain.
+      "A session line shows a START-END time and a measured duration in minutes: bill that measured time, rounded to a 6-minute unit, not a guess.",
+      "A WhatsApp line received from a client is billable work (reading and considering it), not merely a notification.",
       "Every entry is an ESTIMATE the attorney MUST confirm — it is never final.",
       `activityType must be exactly one of: ${TIME_ACTIVITY_TYPES.join(", ")}.`,
       'Respond with ONLY JSON, no prose: {"entries":[{"matterRef":"","clientName":"","activityType":"","description":"","durationMinutes":0,"confidence":"low|medium|high"}]}'
@@ -3971,11 +4007,16 @@ app.post("/api/webhooks/whatsapp", async (req, res) => {
           }
 
           if (tenantId) {
+            // Attribute on the way in. Reading and answering a client's message
+            // is billable work, and it can only be billed to the right file if
+            // we know whose message it is.
+            const who = await resolveWhatsappClient(tenantId, phoneNumber);
             await pool.query(
-              "insert into whatsapp_messages (tenant_id, contact_id, direction, message_body, status, provider_msg_id) values ($1,$2,'inbound',$3,'read',$4) on conflict do nothing",
-              [tenantId, contactId || null, messageBody, providerMsgId]
+              `insert into whatsapp_messages (tenant_id, contact_id, direction, message_body, status, provider_msg_id, client_id, matter_id)
+               values ($1,$2,'inbound',$3,'read',$4,$5,$6) on conflict do nothing`,
+              [tenantId, contactId || null, messageBody, providerMsgId, who.clientId, who.matterId]
             ).catch(err => console.error("[whatsapp inbound] DB error:", err.message));
-            console.info(`[whatsapp inbound] ${phoneNumber}: ${messageBody.slice(0, 60)}`);
+            console.info(`[whatsapp inbound] ${phoneNumber}${who.clientName ? ` (${who.clientName})` : " (unmatched)"}: ${messageBody.slice(0, 60)}`);
           }
         }
 
