@@ -138,6 +138,16 @@ const navGroups: NavGroup[] = [
   { key: "platform", label: "Platform", items: ["super-tenants", "search-margin"] }
 ];
 
+/** Who may see which view. ONE definition, because the sidebar and the command
+ *  palette each used to carry their own copy and they drifted: Search Margin —
+ *  a platform-only page showing what every firm is charged and what the
+ *  platform keeps — appeared in every firm's sidebar as a dead link. */
+function isViewVisible(key: ViewKey, isPlatformSuperAdmin: boolean): boolean {
+  if (key === "training-guide" || key === "super-tenants" || key === "search-margin") return isPlatformSuperAdmin;
+  if (key === "ai-library" || key === "today") return !isPlatformSuperAdmin;
+  return true;
+}
+
 const viewAgentMap: Record<ViewKey, AiAgentKey> = {
   today: "general",
   overview: "general",
@@ -374,6 +384,13 @@ export function App() {
   const openMatterFile = (uuid: string) => { setOpenMatterUuid(uuid); setActiveView("matter-file"); };
 
   const isPlatformSuperAdmin = authUser?.role === "platform_super_admin";
+
+  // A view this user may not see must never render as an empty page. The page
+  // bodies are individually gated, so without this a stale or leaked nav entry
+  // shows a blank screen with no explanation — which is exactly what happened.
+  useEffect(() => {
+    if (!isViewVisible(activeView, isPlatformSuperAdmin)) setActiveView("overview");
+  }, [activeView, isPlatformSuperAdmin]);
   const hasTenantContext = Boolean(authUser?.tenantId);
   const activeAgent = aiAgentOverride ?? viewAgentMap[activeView];
 
@@ -695,11 +712,7 @@ export function App() {
         open={cmdkOpen}
         onClose={() => setCmdkOpen(false)}
         nav={nav}
-        isVisible={(key) => {
-          if (key === "training-guide" || key === "super-tenants" || key === "search-margin") return isPlatformSuperAdmin;
-          if (key === "ai-library" || key === "today") return !isPlatformSuperAdmin;
-          return true;
-        }}
+        isVisible={(key) => isViewVisible(key, isPlatformSuperAdmin)}
         matters={matters}
         conveyancingMatters={conveyancingMatters}
         litigationMatters={litigationMatters}
@@ -1485,12 +1498,9 @@ function Sidebar({ activeView, setActiveView, isPlatformSuperAdmin }: { activeVi
     return map;
   }, []);
 
-  const isItemVisible = (key: ViewKey) => {
-    if (key === "training-guide") return isPlatformSuperAdmin;
-    if (key === "super-tenants") return isPlatformSuperAdmin;
-    if (key === "ai-library") return !isPlatformSuperAdmin;
-    return true;
-  };
+  // Shared with the command palette — see isViewVisible. "Today" is rendered
+  // above with its own guard, so the rule there is a no-op here.
+  const isItemVisible = (key: ViewKey) => isViewVisible(key, isPlatformSuperAdmin);
 
   // Auto-open the group containing the active view, persist user toggles.
   const STORAGE_KEY = "lp.sidebar.groups";
