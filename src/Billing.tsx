@@ -1,7 +1,8 @@
 import { ChevronDown, ChevronUp, Printer, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { createInvoice, downloadInvoicePdf, getInvoicePdfUrl, getInvoices, recordInvoicePayment, saveTenantProfile, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
-import type { InvoiceHeaderField, Invoice, InvoicePayment, TenantProfile, TimeEntry, ViewKey } from "./types";
+import { createInvoice, downloadInvoicePdf, getInvoicePdfUrl, getInvoices, getMatters, getRecoverableSearches, recordInvoicePayment, saveTenantProfile, sendInvoiceByEmail, syncInvoiceToAccounting, updateInvoice } from "./api";
+import type { RecoverableSearch } from "./api";
+import type { InvoiceHeaderField, Invoice, InvoicePayment, Matter, TenantProfile, TimeEntry, ViewKey } from "./types";
 
 interface Props {
   entries: TimeEntry[];
@@ -77,6 +78,11 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
   const [createDraft, setCreateDraft] = useState(EMPTY_DRAFT);
   const [creating, setCreating] = useState(false);
 
+  // Disbursements: searches already run on the matter and not yet recovered.
+  const [matters, setMatters] = useState<Matter[]>([]);
+  const [searches, setSearches] = useState<RecoverableSearch[]>([]);
+  const [createSearchIds, setCreateSearchIds] = useState<string[]>([]);
+
   const [payingId, setPayingId] = useState<string | null>(null);
   const [payForm, setPayForm] = useState(EMPTY_PAY);
   const [paySubmitting, setPaySubmitting] = useState(false);
@@ -107,7 +113,25 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
       if (res?.invoices) setInvoices(res.invoices);
       setLoading(false);
     })();
+    getMatters().then(r => setMatters(r.matters)).catch(() => setMatters([]));
   }, []);
+
+  // When a matter is chosen, pull what is outstanding on it and tick it all by
+  // default. Recovering a disbursement should be the path of least resistance —
+  // the money is lost by being forgotten, not by being declined.
+  const selectedMatter = matters.find(m => m.id === createDraft.matterRef) || null;
+  useEffect(() => {
+    if (!selectedMatter) { setSearches([]); setCreateSearchIds([]); return; }
+    let cancelled = false;
+    getRecoverableSearches(selectedMatter.uuid)
+      .then(r => {
+        if (cancelled) return;
+        setSearches(r.searches);
+        setCreateSearchIds(r.searches.map(s => s.id));
+      })
+      .catch(() => { if (!cancelled) { setSearches([]); setCreateSearchIds([]); } });
+    return () => { cancelled = true; };
+  }, [selectedMatter?.uuid]);
 
   useEffect(() => {
     function onAfterPrint() { setPrintingId(null); }
@@ -166,23 +190,40 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
 
   const filtered = tab === "All" ? invoices : invoices.filter(i => i.status === tab);
   const wipEntries = entries.filter(e => e.status === "WIP");
-  const selTotal = wipEntries.filter(e => createWipIds.includes(e.id)).reduce((s, e) => s + e.amountCents, 0);
-  const selVat = wipEntries.filter(e => createWipIds.includes(e.id)).reduce((s, e) => s + e.vatAmountCents, 0);
+  const selectedSearches = searches.filter(s => createSearchIds.includes(s.id));
+  const selTotal = wipEntries.filter(e => createWipIds.includes(e.id)).reduce((s, e) => s + e.amountCents, 0)
+                 + selectedSearches.reduce((s, x) => s + x.netCents, 0);
+  const selVat = wipEntries.filter(e => createWipIds.includes(e.id)).reduce((s, e) => s + e.vatAmountCents, 0)
+               + selectedSearches.reduce((s, x) => s + x.vatCents, 0);
 
   async function handleCreate() {
-    if (!createWipIds.length) { showToast("error", "No entries", "Select at least one WIP entry."); return; }
+    if (!createWipIds.length && !createSearchIds.length) {
+      showToast("error", "Nothing to bill", "Select at least one WIP entry or disbursement."); return;
+    }
     if (!createDraft.clientName.trim()) { showToast("error", "Client required", "Enter a client name."); return; }
     setCreating(true);
-    const res = await createInvoice({ entryIds: createWipIds, clientName: createDraft.clientName, clientEmail: createDraft.clientEmail || undefined, matterRef: createDraft.matterRef, dueAt: createDraft.dueAt || undefined, notes: createDraft.notes, terms: createDraft.terms });
+    const res = await createInvoice({
+      entryIds: createWipIds,
+      searchIds: createSearchIds,
+      clientName: createDraft.clientName,
+      clientEmail: createDraft.clientEmail || undefined,
+      matterRef: createDraft.matterRef,
+      dueAt: createDraft.dueAt || undefined,
+      notes: createDraft.notes,
+      terms: createDraft.terms
+    });
     setCreating(false);
     if (res?.invoice) {
       setInvoices(prev => [res.invoice, ...prev]);
       setEntries(prev => prev.map(e => createWipIds.includes(e.id) ? { ...e, status: "Billed" as const } : e));
       setShowCreate(false);
       setCreateWipIds([]);
+      setCreateSearchIds([]);
+      setSearches([]);
       setCreateDraft(EMPTY_DRAFT);
       didInitPending.current = false;
-      log(`Created invoice ${res.invoice.invoiceNumber}`);
+      const disb = res.invoice.lineItems.filter(li => li.isDisbursement).length;
+      log(`Created invoice ${res.invoice.invoiceNumber}${disb ? ` (${disb} disbursement${disb === 1 ? "" : "s"})` : ""}`);
       showToast("success", "Invoice created", res.invoice.invoiceNumber);
     } else {
       showToast("error", "Create failed", "Could not create invoice.");
@@ -645,11 +686,15 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
           setCreateWipIds={setCreateWipIds}
           createDraft={createDraft}
           setCreateDraft={setCreateDraft}
+          matters={matters}
+          searches={searches}
+          createSearchIds={createSearchIds}
+          setCreateSearchIds={setCreateSearchIds}
           selTotal={selTotal}
           selVat={selVat}
           creating={creating}
           onSubmit={handleCreate}
-          onClose={() => { setShowCreate(false); setCreateWipIds([]); setCreateDraft(EMPTY_DRAFT); didInitPending.current = false; }}
+          onClose={() => { setShowCreate(false); setCreateWipIds([]); setCreateSearchIds([]); setSearches([]); setCreateDraft(EMPTY_DRAFT); didInitPending.current = false; }}
           rands={rands}
           modalRef={createModalRef}
           onScrollSave={(top) => { createModalScrollPos.current = top; }}
@@ -800,12 +845,41 @@ function InvoiceDetail({ invoice, payingId, payForm, paySubmitting, syncingId, P
 
 // ─── CreateModal ───────────────────────────────────────────────────────────────
 
-function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, setCreateDraft, selTotal, selVat, creating, onSubmit, onClose, rands, modalRef, onScrollSave }: {
+const SEARCH_LABELS: Record<string, string> = {
+  "number-plate": "Vehicle registration search",
+  "vin-decode": "Vehicle VIN search",
+  "consumer-trace": "Consumer trace",
+  "consumer-trace-lite": "Consumer trace",
+  "address-lookup": "Address lookup",
+  "phone-lookup": "Telephone number trace",
+  "property-search": "Property search",
+  "aml-pep": "AML / PEP screening",
+  "verify": "Identity verification",
+  "alive-status": "Home Affairs status verification",
+  "marital-status": "Marital status verification",
+  "cipc/company": "CIPC company search",
+  "cipc/director": "CIPC director search",
+  "bank-account-verification": "Bank account verification",
+  "document-request": "Deeds document copy",
+  "property-ownership": "Property ownership history",
+  "valuation-erf": "Property valuation"
+};
+const searchLabel = (service: string) =>
+  SEARCH_LABELS[service] || (service.startsWith("deeds-") ? "Deeds office search"
+    : service.startsWith("dots-") ? "Deeds tracking (DOTS)"
+    : service.startsWith("property-history-") ? "Property history search"
+    : service);
+
+function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, setCreateDraft, matters, searches, createSearchIds, setCreateSearchIds, selTotal, selVat, creating, onSubmit, onClose, rands, modalRef, onScrollSave }: {
   wipEntries: TimeEntry[];
   createWipIds: string[];
   setCreateWipIds: React.Dispatch<React.SetStateAction<string[]>>;
   createDraft: typeof EMPTY_DRAFT;
   setCreateDraft: React.Dispatch<React.SetStateAction<typeof EMPTY_DRAFT>>;
+  matters: Matter[];
+  searches: RecoverableSearch[];
+  createSearchIds: string[];
+  setCreateSearchIds: React.Dispatch<React.SetStateAction<string[]>>;
   selTotal: number;
   selVat: number;
   creating: boolean;
@@ -817,6 +891,9 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
 }) {
   function toggleWip(id: string) {
     setCreateWipIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+  function toggleSearch(id: string) {
+    setCreateSearchIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
 
   return (
@@ -834,8 +911,31 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
           <label>Client email
             <input type="email" placeholder="client@example.com" value={createDraft.clientEmail} onChange={e => setCreateDraft(d => ({ ...d, clientEmail: e.target.value }))} />
           </label>
-          <label>Matter ref
-            <input type="text" value={createDraft.matterRef} onChange={e => setCreateDraft(d => ({ ...d, matterRef: e.target.value }))} />
+          {/* A real matter, not free text: it is what links the invoice to the
+              spine and what makes outstanding disbursements findable. */}
+          <label>Matter
+            <select
+              value={createDraft.matterRef}
+              onChange={e => {
+                const m = matters.find(x => x.id === e.target.value);
+                setCreateDraft(d => ({
+                  ...d,
+                  matterRef: e.target.value,
+                  clientName: d.clientName || m?.client || ""
+                }));
+              }}
+            >
+              <option value="">— no matter —</option>
+              {/* A WIP entry can carry a free-text matter reference that predates
+                  the matter spine. Show it rather than rendering an empty box
+                  while still sending it — the server resolves it as before. */}
+              {createDraft.matterRef && !matters.some(m => m.id === createDraft.matterRef) && (
+                <option value={createDraft.matterRef}>{createDraft.matterRef} (not a linked matter)</option>
+              )}
+              {matters.map(m => (
+                <option key={m.uuid} value={m.id}>{m.id} — {m.title}</option>
+              ))}
+            </select>
           </label>
           <label>Due date
             <input type="date" value={createDraft.dueAt} onChange={e => setCreateDraft(d => ({ ...d, dueAt: e.target.value }))} />
@@ -860,7 +960,34 @@ function CreateModal({ wipEntries, createWipIds, setCreateWipIds, createDraft, s
           </div>
         )}
 
-        {createWipIds.length > 0 && (
+        {searches.length > 0 && (
+          <>
+            <p style={{ margin: "0 0 0.25rem", fontWeight: 700, fontSize: "0.875rem" }}>
+              Disbursements to recover ({createSearchIds.length} of {searches.length})
+            </p>
+            <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--muted)" }}>
+              Searches already run and paid for on this matter. Ticked by default — untick anything you are not recovering.
+            </p>
+            <div style={{ display: "grid", gap: "0.4rem", maxHeight: 200, overflowY: "auto", padding: "0.5rem", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--line)", marginBottom: "1rem" }}>
+              {searches.map(s => (
+                <label key={s.id} style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "0.75rem", alignItems: "center", padding: "0.5rem 0.25rem", cursor: "pointer", fontSize: "0.88rem", fontWeight: 400 }}>
+                  <input type="checkbox" checked={createSearchIds.includes(s.id)} onChange={() => toggleSearch(s.id)} style={{ width: 16, height: 16 }} />
+                  <span>
+                    <strong style={{ display: "block", fontSize: "0.875rem" }}>
+                      {searchLabel(s.service)}{s.inputRef ? ` · ${s.inputRef}` : ""}
+                    </strong>
+                    <small style={{ color: "var(--muted)" }}>
+                      {new Date(s.createdAt).toLocaleDateString("en-ZA")} · {s.provider}
+                    </small>
+                  </span>
+                  <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "var(--green)" }}>{rands(s.chargeCents)}</span>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+
+        {(createWipIds.length > 0 || createSearchIds.length > 0) && (
           <div style={{ display: "flex", gap: "1.5rem", padding: "0.75rem 1rem", background: "var(--green-light)", borderRadius: 8, marginBottom: "1rem", fontSize: "0.9rem" }}>
             <span>Subtotal: <strong>{rands(selTotal)}</strong></span>
             <span>VAT (15%): <strong>{rands(selVat)}</strong></span>
