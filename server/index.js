@@ -5747,25 +5747,126 @@ app.get("/api/invoices", authMiddleware, async (req, res, next) => {
 });
 
 // POST /api/invoices — create invoice from WIP time entry IDs
+// Client-facing wording for a disbursement line. A client reading a bill should
+// see "Vehicle search (registration)", not our internal service key.
+const SEARCH_LABELS = {
+  "number-plate": "Vehicle registration search",
+  "vin-decode": "Vehicle VIN search",
+  "consumer-trace": "Consumer trace",
+  "consumer-trace-lite": "Consumer trace",
+  "address-lookup": "Address lookup",
+  "phone-lookup": "Telephone number trace",
+  "property-search": "Property search",
+  "aml-pep": "AML / PEP screening",
+  "verify": "Identity verification",
+  "alive-status": "Home Affairs status verification",
+  "marital-status": "Marital status verification",
+  "cipc/company": "CIPC company search",
+  "cipc/director": "CIPC director search",
+  "bank-account-verification": "Bank account verification",
+  "deeds-person": "Deeds office search",
+  "deeds-company": "Deeds office search",
+  "deeds-trust": "Deeds office search",
+  "deeds-property-erf": "Deeds office search",
+  "deeds-property-farm": "Deeds office search",
+  "deeds-property-scheme": "Deeds office search",
+  "deeds-document": "Deeds office search",
+  "deeds-cross-person": "Cross-office deeds search",
+  "deeds-cross-company": "Cross-office deeds search",
+  "deeds-cross-trust": "Cross-office deeds search",
+  "dots-person": "Deeds tracking (DOTS)",
+  "dots-company": "Deeds tracking (DOTS)",
+  "dots-property-erf": "Deeds tracking (DOTS)",
+  "dots-barcode": "Deeds tracking (DOTS)",
+  "document-request": "Deeds document copy",
+  "property-history-person": "Property history search",
+  "property-history-company": "Property history search",
+  "property-history-trust": "Property history search",
+  "property-ownership": "Property ownership history",
+  "valuation-erf": "Property valuation"
+};
+
+/** A search's net (pre-VAT) and VAT parts, reconstructed exactly from what was
+ *  snapshotted when it ran. charge = base x (1+markup) x (1+vat), so the net is
+ *  base x (1+markup) and the VAT is the remainder — no re-pricing, and the two
+ *  always add back to the charge the firm actually paid. */
+function searchDisbursementParts(row) {
+  const charge = Number(row.charge_cents || 0);
+  const base = Number(row.base_cost_cents || 0);
+  const markup = Number(row.markup_rate || 0);
+  const net = Math.round(base * (1 + markup));
+  return { netCents: net, vatCents: charge - net, chargeCents: charge };
+}
+
+/** Searches run on a matter that have not yet been recovered from the client. */
+app.get("/api/matters/:id/recoverable-searches", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query(
+      `select * from matter_searches
+        where tenant_id = $1 and matter_id = $2
+          and status = 'success' and invoice_id is null and coalesce(charge_cents, 0) > 0
+        order by created_at`,
+      [req.user.tenantId, req.params.id]
+    );
+    const searches = r.rows.map(row => {
+      const parts = searchDisbursementParts(row);
+      return {
+        id: row.id, provider: row.provider, service: row.service,
+        inputRef: row.input_ref || null,
+        createdAt: new Date(row.created_at).toISOString(),
+        ...parts
+      };
+    });
+    res.json({
+      searches,
+      totalCents: searches.reduce((s, x) => s + x.chargeCents, 0)
+    });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/invoices", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
-  const { entryIds = [], clientName, clientEmail, matterRef, dueAt, notes, terms, paymentRef } = req.body;
+  const { entryIds = [], searchIds = [], clientName, clientEmail, matterRef, dueAt, notes, terms, paymentRef } = req.body;
   if (!clientName) return res.status(400).json({ error: "Client name is required." });
-  if (!entryIds.length) return res.status(400).json({ error: "At least one time entry is required." });
+  if (!entryIds.length && !searchIds.length) return res.status(400).json({ error: "At least one time entry or search is required." });
 
   const client = await pool.connect();
   try {
     await client.query("begin");
 
     // Load the time entries and verify they belong to this tenant and are WIP
-    const entries = await client.query(
-      `select * from time_entries where id = any($1) and tenant_id = $2 and status = 'WIP'`,
-      [entryIds, req.user.tenantId]
-    );
-    if (!entries.rowCount) return res.status(400).json({ error: "No valid WIP entries found." });
+    const entries = entryIds.length
+      ? await client.query(
+          `select * from time_entries where id = any($1) and tenant_id = $2 and status = 'WIP'`,
+          [entryIds, req.user.tenantId]
+        )
+      : { rows: [], rowCount: 0 };
 
-    const subtotalCents = entries.rows.reduce((s, e) => s + Number(e.amount_cents), 0);
-    const vatCents = entries.rows.reduce((s, e) => s + Number(e.vat_amount_cents), 0);
+    // Searches to recover as disbursements. Locked FOR UPDATE and filtered on
+    // invoice_id is null so two invoices raced against the same matter cannot
+    // both bill the same search to the client.
+    const searches = searchIds.length
+      ? await client.query(
+          `select * from matter_searches
+            where id = any($1) and tenant_id = $2
+              and status = 'success' and invoice_id is null and coalesce(charge_cents, 0) > 0
+            order by created_at
+            for update`,
+          [searchIds, req.user.tenantId]
+        )
+      : { rows: [], rowCount: 0 };
+
+    if (!entries.rowCount && !searches.rowCount) {
+      await client.query("rollback");
+      return res.status(400).json({ error: "No valid WIP entries or unbilled searches found." });
+    }
+
+    const searchParts = searches.rows.map(searchDisbursementParts);
+    const subtotalCents = entries.rows.reduce((s, e) => s + Number(e.amount_cents), 0)
+                        + searchParts.reduce((s, p) => s + p.netCents, 0);
+    const vatCents = entries.rows.reduce((s, e) => s + Number(e.vat_amount_cents), 0)
+                   + searchParts.reduce((s, p) => s + p.vatCents, 0);
     const totalCents = subtotalCents + vatCents;
     const invoiceNumber = await generateInvoiceNumber(req.user.tenantId);
     const today = new Date().toISOString().slice(0, 10);
@@ -5806,12 +5907,45 @@ app.post("/api/invoices", authMiddleware, async (req, res, next) => {
       lineItemRows.push(liResult.rows[0]);
     }
 
+    // Searches become disbursement lines, each traceable to its search record
+    // so a line on a bill of costs can be proved on a taxation.
+    for (let i = 0; i < searches.rows.length; i++) {
+      const s = searches.rows[i];
+      const p = searchParts[i];
+      const label = SEARCH_LABELS[s.service] || s.service;
+      const liResult = await client.query(
+        `insert into invoice_line_items
+          (tenant_id, invoice_id, time_entry_id, description, activity_type, fee_earner_name,
+           entry_date, duration_minutes, rate_cents, amount_cents, vat_cents, is_disbursement, sort_order, search_id)
+         values ($1,$2,null,$3,'Disbursement','',$4,0,$5,$5,$6,true,$7,$8)
+         returning *`,
+        [
+          req.user.tenantId, invoiceId,
+          `${label}${s.input_ref ? ` — ${s.input_ref}` : ""}`,
+          new Date(s.created_at).toISOString().slice(0, 10),
+          p.netCents, p.vatCents,
+          entries.rows.length + i, s.id
+        ]
+      );
+      lineItemRows.push(liResult.rows[0]);
+    }
+
     // Mark time entries as Billed and link to invoice
-    await client.query(
-      `update time_entries set status = 'Billed', invoice_id = $1, updated_at = now()
-       where id = any($2) and tenant_id = $3`,
-      [invoiceId, entryIds, req.user.tenantId]
-    );
+    if (entryIds.length) {
+      await client.query(
+        `update time_entries set status = 'Billed', invoice_id = $1, updated_at = now()
+         where id = any($2) and tenant_id = $3`,
+        [invoiceId, entryIds, req.user.tenantId]
+      );
+    }
+    // Link the searches so they can never be recovered twice.
+    if (searches.rowCount) {
+      await client.query(
+        `update matter_searches set invoice_id = $1, invoiced_at = now()
+         where id = any($2) and tenant_id = $3`,
+        [invoiceId, searches.rows.map(s => s.id), req.user.tenantId]
+      );
+    }
 
     await client.query("commit");
     res.status(201).json({ invoice: invoiceFromRow(invResult.rows[0], lineItemRows, []) });

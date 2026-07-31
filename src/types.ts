@@ -268,6 +268,9 @@ export type TenantsOverviewTotals = {
 export type PlatformPricingConfig = {
   vatRate: number;     // 0.15 = 15%
   markupRate: number;  // 0.30 = 30%
+  /** What ONE VerifyNow credit costs the platform. 299 = R2.99 pay-as-you-go;
+   *  lower it after buying a volume pack so margin reporting stays true. */
+  verifyNowCreditCostCents?: number;
   updatedAt?: string | null;
 };
 

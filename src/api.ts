@@ -543,8 +543,28 @@ export async function getInvoices(params?: { status?: string; limit?: number; of
   return request<{ invoices: Invoice[]; total: number }>(`/api/invoices?${qs}`);
 }
 
+export type RecoverableSearch = {
+  id: string;
+  provider: string;
+  service: string;
+  inputRef: string | null;
+  createdAt: string;
+  netCents: number;
+  vatCents: number;
+  chargeCents: number;
+};
+
+/** Searches run on a matter that have not yet been recovered from the client. */
+export async function getRecoverableSearches(matterId: string) {
+  return request<{ searches: RecoverableSearch[]; totalCents: number }>(
+    `/api/matters/${matterId}/recoverable-searches`
+  );
+}
+
 export async function createInvoice(data: {
   entryIds: string[];
+  /** Searches to recover as disbursement lines. */
+  searchIds?: string[];
   clientName: string;
   clientEmail?: string;
   matterRef?: string;
@@ -995,7 +1015,7 @@ export async function getPricingConfig() {
   return request<import("./types").PlatformPricingConfig>("/api/platform/pricing-config");
 }
 
-export async function savePricingConfig(config: { vatRate: number; markupRate: number }) {
+export async function savePricingConfig(config: { vatRate: number; markupRate: number; verifyNowCreditCostCents?: number }) {
   return request<import("./types").PlatformPricingConfig>("/api/platform/pricing-config", {
     method: "PUT",
     body: JSON.stringify(config)
