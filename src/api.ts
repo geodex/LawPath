@@ -543,6 +543,54 @@ export async function getInvoices(params?: { status?: string; limit?: number; of
   return request<{ invoices: Invoice[]; total: number }>(`/api/invoices?${qs}`);
 }
 
+// ─── MATTER DOCUMENT REPOSITORY ───────────────────────────────────────────────
+
+export type MatterDocument = {
+  id: string;
+  matterId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  description: string;
+  source: "upload" | "approved_draft" | "analysis" | "correspondence";
+  analysisId: string | null;
+  approvalId: string | null;
+  uploadedByName: string | null;
+  /** False if the bytes are missing — the row exists but the file does not. */
+  stored: boolean;
+  createdAt: string;
+};
+
+export async function getMatterDocuments(matterId: string) {
+  return request<{ documents: MatterDocument[] }>(`/api/matters/${matterId}/documents`);
+}
+
+export async function uploadMatterDocument(matterId: string, file: {
+  fileName: string; contentType: string; dataBase64: string; description?: string;
+}) {
+  return request<{ document: MatterDocument }>(`/api/matters/${matterId}/documents`, {
+    method: "POST", body: JSON.stringify(file)
+  });
+}
+
+export async function deleteMatterDocument(docId: string) {
+  return request<{ ok: boolean }>(`/api/matter-documents/${docId}`, { method: "DELETE" });
+}
+
+/** Download URL for a stored document. Auth travels in the header, so this is
+ *  fetched and turned into a blob rather than used as a bare href. */
+export async function downloadMatterDocument(docId: string): Promise<Blob> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const res = await fetch(`${API_BASE_URL}/api/matter-documents/${docId}/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  });
+  if (!res.ok) {
+    const msg = await res.json().catch(() => ({}));
+    throw new Error(msg.error || `Download failed (${res.status})`);
+  }
+  return res.blob();
+}
+
 export type RecoverableSearch = {
   id: string;
   provider: string;

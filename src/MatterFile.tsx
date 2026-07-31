@@ -1,7 +1,7 @@
 import { ArrowLeft, Banknote, CalendarClock, CheckCircle2, FileText, FolderOpen, Loader2, MessageSquare, Plus, Scale, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { completeDiaryEntry, computeCourtDeadline, createDiaryEntry, diariseFromRule, getCourtRules, getMatterFile, setObligationStatus } from "./api";
-import type { CourtCalc, CourtRule, MatterDiaryEntry, MatterFile as MatterFileData, MatterObligation } from "./api";
+import { completeDiaryEntry, computeCourtDeadline, createDiaryEntry, deleteMatterDocument, diariseFromRule, downloadMatterDocument, getCourtRules, getMatterDocuments, getMatterFile, setObligationStatus, uploadMatterDocument } from "./api";
+import type { CourtCalc, CourtRule, MatterDiaryEntry, MatterDocument, MatterFile as MatterFileData, MatterObligation } from "./api";
 
 const money = (cents: number) =>
   new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 2 }).format(cents / 100);
@@ -93,7 +93,7 @@ export function MatterFile({ matterUuid, onBack }: { matterUuid: string; onBack:
         {tab === "overview" && <OverviewTab data={data} />}
         {tab === "parties" && <PartiesTab data={data} />}
         {tab === "money" && <MoneyTab data={data} />}
-        {tab === "documents" && <DocumentsTab data={data} />}
+        {tab === "documents" && <DocumentsTab data={data} matterUuid={matterUuid} />}
         {tab === "correspondence" && <CorrespondenceTab data={data} />}
         {tab === "diary" && <DiaryTab data={data} matterUuid={matterUuid} onChanged={reload} />}
       </div>
@@ -234,19 +234,130 @@ function MoneyTab({ data }: { data: MatterFileData }) {
   );
 }
 
-function DocumentsTab({ data }: { data: MatterFileData }) {
-  const { documents: docs } = data;
-  if (!docs.length) return <Empty>No documents filed to this matter yet. Documents are linked from Document Intelligence.</Empty>;
+const SOURCE_LABELS: Record<MatterDocument["source"], string> = {
+  upload: "Uploaded",
+  approved_draft: "Approved draft",
+  analysis: "From analysis",
+  correspondence: "Correspondence"
+};
+
+const fileSize = (bytes: number) =>
+  bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB`
+  : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB`
+  : `${bytes} B`;
+
+function DocumentsTab({ data, matterUuid }: { data: MatterFileData; matterUuid: string }) {
+  const { documents: analyses } = data;
+  const [files, setFiles] = useState<MatterDocument[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+
+  const loadFiles = useCallback(() => {
+    getMatterDocuments(matterUuid).then(r => setFiles(r.documents)).catch(() => setFiles([]));
+  }, [matterUuid]);
+  useEffect(() => { loadFiles(); }, [loadFiles]);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true); setNote("");
+    try {
+      // FileReader gives a data URL; the API wants the base64 payload alone.
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error("Could not read the file."));
+        r.readAsDataURL(file);
+      });
+      const base64 = dataUrl.split(",")[1] || "";
+      await uploadMatterDocument(matterUuid, {
+        fileName: file.name,
+        contentType: file.type || "application/octet-stream",
+        dataBase64: base64
+      });
+      setNote(`${file.name} filed.`);
+      loadFiles();
+    } catch (err: unknown) {
+      setNote(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setBusy(false);
+      e.target.value = "";   // let the same file be chosen again after a failure
+    }
+  }
+
+  async function handleDownload(doc: MatterDocument) {
+    try {
+      const blob = await downloadMatterDocument(doc.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = doc.fileName;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setNote(err instanceof Error ? err.message : "Download failed.");
+    }
+  }
+
+  async function handleRemove(doc: MatterDocument) {
+    setBusy(true);
+    try { await deleteMatterDocument(doc.id); loadFiles(); }
+    catch (err: unknown) { setNote(err instanceof Error ? err.message : "Could not remove."); }
+    finally { setBusy(false); }
+  }
+
   return (
     <>
-      {docs.map(d => (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <label className="ghost small" style={{ cursor: busy ? "default" : "pointer", display: "inline-flex", alignItems: "center", gap: 6, margin: 0 }}>
+          <Plus size={14} /> {busy ? "Working…" : "Add document"}
+          {/* Sized away from the global `input { width: 100% }` rule, and hidden
+              because the label is the control the attorney actually clicks. */}
+          <input type="file" onChange={handleUpload} disabled={busy}
+                 style={{ display: "none", width: "auto", padding: 0, margin: 0 }} />
+        </label>
+        {note && <small style={{ color: "var(--muted)" }}>{note}</small>}
+      </div>
+
+      {files.length === 0 ? (
+        <Empty>No documents on this file yet. Add one above, or approve a drafted document and it files itself here.</Empty>
+      ) : files.map(d => (
         <div key={d.id} className="deadline-row">
-          <div><strong style={{ fontSize: "0.86rem" }}>{d.fileName}</strong>
-            <small style={{ display: "block", color: "var(--muted)" }}>{d.documentType || "Document"}{d.parties?.length ? ` · ${d.parties.slice(0, 3).join(", ")}` : ""}</small>
+          <div>
+            <strong style={{ fontSize: "0.86rem" }}>{d.fileName}</strong>
+            <small style={{ display: "block", color: "var(--muted)" }}>
+              {SOURCE_LABELS[d.source]} · {fileSize(d.sizeBytes)}
+              {d.uploadedByName ? ` · ${d.uploadedByName}` : ""}
+              {" · "}{new Date(d.createdAt).toLocaleDateString("en-ZA")}
+              {d.description ? ` · ${d.description}` : ""}
+            </small>
           </div>
-          <span className="pill">{d.analysisStatus}</span>
+          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            <button className="ghost small" onClick={() => handleDownload(d)} disabled={!d.stored}>
+              {d.stored ? "Download" : "Missing"}
+            </button>
+            <button className="ghost small" onClick={() => handleRemove(d)} disabled={busy}>Remove</button>
+          </div>
         </div>
       ))}
+
+      {analyses.length > 0 && (
+        <>
+          <h4 style={{ margin: "20px 0 8px", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--muted)" }}>
+            Analysed documents
+          </h4>
+          <p style={{ margin: "0 0 10px", fontSize: "0.8rem", color: "var(--muted)" }}>
+            What Document Intelligence read. The original file is only here if it was also uploaded above.
+          </p>
+          {analyses.map(d => (
+            <div key={d.id} className="deadline-row">
+              <div><strong style={{ fontSize: "0.86rem" }}>{d.fileName}</strong>
+                <small style={{ display: "block", color: "var(--muted)" }}>{d.documentType || "Document"}{d.parties?.length ? ` · ${d.parties.slice(0, 3).join(", ")}` : ""}</small>
+              </div>
+              <span className="pill">{d.analysisStatus}</span>
+            </div>
+          ))}
+        </>
+      )}
     </>
   );
 }

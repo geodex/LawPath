@@ -2998,7 +2998,51 @@ app.post("/api/approvals/:id/decide", authMiddleware, async (req, res, next) => 
       }
     }
 
-    res.json({ approval: approvalFromRow(await withApprovalNames(r.rows[0])), ...(applied ? { applied } : {}) });
+    // An approved drafted document belongs ON the file, not only in the queue.
+    // Filed as a PDF on the firm's letterhead because that is the artefact an
+    // attorney sends and a court reads — not the raw text. Best-effort for the
+    // same reason as above: a storage failure must not undo the decision.
+    let filedDocument = null;
+    if (decision === "approved" && r.rows[0].kind === "document" && r.rows[0].matter_id && r.rows[0].payload?.body) {
+      filedDocument = await (async () => {
+        if (!configuredBucketName()) return { error: "document storage is not configured" };
+        const already = await pool.query(
+          "select id from matter_documents where approval_id = $1 and deleted_at is null limit 1",
+          [r.rows[0].id]
+        ).catch(() => ({ rows: [] }));
+        if (already.rowCount) return { skipped: "already filed" };
+
+        const tp = await pool.query("select * from tenant_profiles where tenant_id = $1 limit 1", [req.user.tenantId])
+          .then(x => tenantProfileFromRow(x.rows[0]) || {}).catch(() => ({}));
+        const title = r.rows[0].title || "Approved document";
+        // Required locally: the module-level binding is declared far below this
+        // handler, so relying on it here depends on load order rather than saying so.
+        const { generateContractPdf } = require("./pdf");
+        const pdf = await generateContractPdf({
+          title,
+          body: r.rows[0].payload.body,
+          tenantProfile: tp,
+          documentType: r.rows[0].payload?.documentType || "Opinion",
+          matterRef: r.rows[0].payload?.matterRef || "",
+          // Approved by an attorney, so the unreviewed-draft warning is wrong here.
+          includeReviewWarning: false
+        });
+        const row = await fileDocumentToMatter({
+          tenantId: req.user.tenantId, matterId: r.rows[0].matter_id,
+          fileName: `${safeObjectPart(title).slice(0, 80) || "document"}.pdf`,
+          contentType: "application/pdf", buffer: pdf,
+          description: `Approved ${new Date().toISOString().slice(0, 10)}`,
+          source: "approved_draft", approvalId: r.rows[0].id, userId: req.user.sub
+        });
+        return { documentId: row.id, fileName: row.file_name };
+      })().catch(err => ({ error: err.message }));
+    }
+
+    res.json({
+      approval: approvalFromRow(await withApprovalNames(r.rows[0])),
+      ...(applied ? { applied } : {}),
+      ...(filedDocument ? { filedDocument } : {})
+    });
   } catch (error) { next(error); }
 });
 
@@ -5758,6 +5802,143 @@ app.get("/api/invoices", authMiddleware, async (req, res, next) => {
 });
 
 // POST /api/invoices — create invoice from WIP time entry IDs
+// ─── MATTER DOCUMENT REPOSITORY ──────────────────────────────────────────────
+// The actual documents on a file, as opposed to document_analyses which stores
+// what an AI read about one. Bytes live in GCS; this owns the metadata.
+
+const MATTER_DOC_MAX_BYTES = 40 * 1024 * 1024;   // 40MB; body limit is 55mb
+
+function matterDocumentFromRow(row) {
+  return {
+    id: row.id,
+    matterId: row.matter_id,
+    fileName: row.file_name,
+    contentType: row.content_type,
+    sizeBytes: Number(row.size_bytes || 0),
+    description: row.description || "",
+    source: row.source,
+    analysisId: row.analysis_id || null,
+    approvalId: row.approval_id || null,
+    uploadedByName: row.uploaded_by_name || null,
+    stored: Boolean(row.gcs_uri),
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+
+/** Put a document on a matter file. Used by the upload endpoint and by the
+ *  approval queue when an attorney approves a drafted document. */
+async function fileDocumentToMatter({
+  tenantId, matterId, fileName, contentType, buffer,
+  description = null, source = "upload", analysisId = null, approvalId = null, userId = null
+}) {
+  const { uploadBuffer } = require("./gcs");
+  const safeName = safeObjectPart(fileName || "document");
+  const objectName = `matters/${matterId}/${Date.now()}-${safeName}`;
+  const up = await uploadBuffer({
+    buffer,
+    contentType: contentType || "application/octet-stream",
+    objectName,
+    metadata: { tenantId, matterId, source }
+  });
+  const r = await pool.query(
+    `insert into matter_documents
+       (tenant_id, matter_id, file_name, content_type, size_bytes, gcs_uri, description, source, analysis_id, approval_id, uploaded_by)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
+    [tenantId, matterId, fileName || "document", contentType || "application/octet-stream",
+     buffer.length, up.gcsUri, description, source, analysisId, approvalId, userId]
+  );
+  return r.rows[0];
+}
+
+app.get("/api/matters/:id/documents", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query(
+      `select d.*, u.full_name as uploaded_by_name
+         from matter_documents d
+         left join users u on u.id = d.uploaded_by
+        where d.tenant_id = $1 and d.matter_id = $2 and d.deleted_at is null
+        order by d.created_at desc`,
+      [req.user.tenantId, req.params.id]
+    );
+    res.json({ documents: r.rows.map(matterDocumentFromRow) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/matters/:id/documents", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  if (!configuredBucketName()) {
+    return res.status(503).json({ error: "Document storage is not configured. Set GCS_BUCKET_NAME and credentials." });
+  }
+  const { fileName, contentType, dataBase64, dataUrl, description } = req.body || {};
+  if (!fileName) return res.status(400).json({ error: "fileName is required." });
+
+  // Accept either a raw base64 payload or a data: URL from a browser file read.
+  let base64 = dataBase64;
+  let type = contentType;
+  if (!base64 && typeof dataUrl === "string") {
+    const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!m) return res.status(400).json({ error: "dataUrl must be a base64 data URL." });
+    type = type || m[1];
+    base64 = m[2];
+  }
+  if (!base64) return res.status(400).json({ error: "dataBase64 or dataUrl is required." });
+
+  let buffer;
+  try { buffer = Buffer.from(base64, "base64"); } catch { return res.status(400).json({ error: "Payload is not valid base64." }); }
+  if (!buffer.length) return res.status(400).json({ error: "The file is empty." });
+  if (buffer.length > MATTER_DOC_MAX_BYTES) {
+    return res.status(413).json({ error: `File is too large. The limit is ${Math.round(MATTER_DOC_MAX_BYTES / 1024 / 1024)}MB.` });
+  }
+
+  try {
+    const matter = await pool.query("select id from matters where id = $1 and tenant_id = $2", [req.params.id, req.user.tenantId]);
+    if (!matter.rowCount) return res.status(404).json({ error: "Matter not found." });
+
+    const row = await fileDocumentToMatter({
+      tenantId: req.user.tenantId, matterId: req.params.id,
+      fileName, contentType: type, buffer, description: description || null,
+      source: "upload", userId: req.user.sub
+    });
+    res.status(201).json({ document: matterDocumentFromRow(row) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/matter-documents/:docId/download", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    const r = await pool.query(
+      "select * from matter_documents where id = $1 and tenant_id = $2 and deleted_at is null",
+      [req.params.docId, req.user.tenantId]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Document not found." });
+    const doc = r.rows[0];
+    if (!doc.gcs_uri) return res.status(410).json({ error: "This document has no stored file." });
+
+    const { downloadBuffer } = require("./gcs");
+    const buffer = await downloadBuffer(doc.gcs_uri);
+    res.setHeader("Content-Type", doc.content_type || "application/octet-stream");
+    // Quotes escaped so a filename containing one cannot break the header.
+    res.setHeader("Content-Disposition", `attachment; filename="${String(doc.file_name).replace(/"/g, "'")}"`);
+    res.send(buffer);
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/matter-documents/:docId", authMiddleware, async (req, res, next) => {
+  if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
+  try {
+    // Soft delete only: that a document was once on a file is itself a fact the
+    // file should keep. The bytes stay in GCS for the same reason.
+    const r = await pool.query(
+      `update matter_documents set deleted_at = now(), deleted_by = $3
+        where id = $1 and tenant_id = $2 and deleted_at is null returning id`,
+      [req.params.docId, req.user.tenantId, req.user.sub]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Document not found." });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 // Client-facing wording for a disbursement line. A client reading a bill should
 // see "Vehicle search (registration)", not our internal service key.
 const SEARCH_LABELS = {

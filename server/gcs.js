@@ -147,11 +147,30 @@ async function downloadText(gcsUri) {
   return contents.toString("utf8");
 }
 
+/** Raw bytes. downloadText decodes as UTF-8, which corrupts a PDF or an image —
+ *  matter documents are binary, so they need this. */
+async function downloadBuffer(gcsUri) {
+  const match = String(gcsUri || "").match(/^gs:\/\/([^/]+)\/(.+)$/);
+  if (!match) throw new Error(`Invalid GCS URI: ${gcsUri}`);
+  const [, bucketName, objectName] = match;
+  const [contents] = await createStorageClient().bucket(bucketName).file(objectName).download();
+  return contents;
+}
+
+async function deleteObject(gcsUri) {
+  const match = String(gcsUri || "").match(/^gs:\/\/([^/]+)\/(.+)$/);
+  if (!match) throw new Error(`Invalid GCS URI: ${gcsUri}`);
+  const [, bucketName, objectName] = match;
+  await createStorageClient().bucket(bucketName).file(objectName).delete({ ignoreNotFound: true });
+}
+
 module.exports = {
   configuredBucketName,
   safeObjectPart,
   uploadBuffer,
   uploadDataUrl,
   uploadText,
-  downloadText
+  downloadText,
+  downloadBuffer,
+  deleteObject
 };
