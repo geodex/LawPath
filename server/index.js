@@ -2135,10 +2135,17 @@ app.get("/api/time/suggest", authMiddleware, async (req, res, next) => {
         `select action, entity_type, details, created_at from activity_log
          where tenant_id = $1 and actor_user_id = $2 and created_at::date = $3::date
          order by created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
+      // The search REGISTER, not searchworks_usage_log: the register covers both
+      // providers (so vehicle and consumer traces count as work, not just deeds),
+      // carries the matter, and is the same record the client is billed from.
+      // Reading both would double-count every deeds search.
       pool.query(
-        `select service, input_ref, created_at from searchworks_usage_log
-         where tenant_id = $1 and user_id = $2 and created_at::date = $3::date and status = 'success'
-         order by created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
+        `select s.provider, s.service, s.input_ref, s.created_at, m.matter_number, m.client_name
+           from matter_searches s
+           left join matters m on m.id = s.matter_id
+          where s.tenant_id = $1 and s.user_id = $2
+            and s.created_at::date = $3::date and s.status = 'success'
+          order by s.created_at limit 200`, [tid, uid, date]).catch(() => ({ rows: [] })),
       pool.query(
         `select feature, model, created_at from ai_usage_log
          where tenant_id = $1 and user_id = $2 and created_at::date = $3::date and status = 'ok'
@@ -2160,14 +2167,18 @@ app.get("/api/time/suggest", authMiddleware, async (req, res, next) => {
       const ref = d.matterRef || d.matter_ref || d.clientName || d.client_name || "";
       lines.push(`[${hhmm(a.created_at)}] action: ${a.action}${a.entity_type ? ` (${a.entity_type})` : ""}${ref ? ` — ${ref}` : ""}`);
     }
-    for (const s of sw.rows) lines.push(`[${hhmm(s.created_at)}] deeds/DOTS search: ${s.service}${s.input_ref ? ` — ${s.input_ref}` : ""}`);
+    for (const s of sw.rows) {
+      const label = SEARCH_LABELS[s.service] || s.service;
+      const on = s.matter_number ? ` on ${s.matter_number}${s.client_name ? ` (${s.client_name})` : ""}` : "";
+      lines.push(`[${hhmm(s.created_at)}] search: ${label}${s.input_ref ? ` — ${s.input_ref}` : ""}${on}`);
+    }
     for (const x of aiUse.rows) lines.push(`[${hhmm(x.created_at)}] AI ${x.feature || "assist"} used`);
     for (const doc of docs.rows) lines.push(`[${hhmm(doc.created_at)}] document: ${doc.document_type || "analysis"} — ${doc.file_name}${Array.isArray(doc.parties) && doc.parties.length ? ` (parties: ${doc.parties.slice(0, 3).join(", ")})` : ""}`);
     for (const w of wa.rows) lines.push(`[${hhmm(w.sent_at)}] WhatsApp to client${w.matter_ref ? ` — ${w.matter_ref}` : ""}: ${String(w.message_body || "").replace(/\s+/g, " ").slice(0, 90)}`);
 
     const signalCount = lines.length;
     if (signalCount === 0) {
-      return res.json({ date, entries: [], signalCount: 0, message: `No recorded activity found for ${date}. Time capture reads your logged searches, documents, AI usage and client messages.` });
+      return res.json({ date, entries: [], signalCount: 0, message: `No recorded activity found for ${date}. Time capture reads your logged searches, documents, research and client messages.` });
     }
 
     const ai = await getAiForFeature("ai-chat");
