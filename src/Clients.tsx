@@ -311,8 +311,8 @@ export function Clients({ showToast, log }: {
   // ── List view ────────────────────────────────────────────────────────────────
   return (
     <div className="clients-view">
-      <div className="topbar">
-        <h1>Clients</h1>
+      {/* Actions only - the shell topbar already renders the page title. */}
+      <div className="page-actions">
         <div className="top-actions">
           <button className="primary" onClick={() => { setShowCreate(true); setCreateStep(0); setCreateDraft({ ...EMPTY_CLIENT }); }}>+ New Client</button>
         </div>

@@ -725,7 +725,9 @@ export function App() {
       <main className="main">
         <header className="topbar">
           <div>
-            <p className="eyebrow">South African legal workspace</p>
+            {/* The "South African legal workspace" eyebrow was removed: the
+                sidebar already carries the brand, so it repeated it on every
+                screen and pushed the real heading down. */}
             <h1>{pageTitle}</h1>
           </div>
           <div className="top-actions">

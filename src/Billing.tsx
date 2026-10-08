@@ -344,9 +344,8 @@ export function Billing({ entries, setEntries, pendingWipIds, onClearPendingWip,
 
   return (
     <div className="billing-view">
-      {/* PAGE HEADER */}
-      <div className="topbar">
-        <h1>Billing</h1>
+      {/* Actions only - the shell topbar already renders the page title. */}
+      <div className="page-actions">
         <div className="top-actions">
           <button className="ghost small" title="Customise print header" onClick={openHeaderSettings}>
             <Settings2 size={15} /> Header fields

@@ -267,99 +267,251 @@
 :root {
   color-scheme: dark;
 
-  /* Core palette — Dark Prestige */
-  --ink:        #f1f5f9;
-  /* slate-400, not slate-500. Measured on the rendered app: #64748b was every
-     WCAG AA failure the dark theme had — 3.80:1 on --surface, 3.97 on --panel,
-     4.16 on --paper (need 4.5) — labels, captions and secondary body text.
-     A practising attorney's verbatim review: "too dark, I had to peer closer
-     to my screen." #94a3b8 measures 7.06–7.72:1 on the same surfaces, the same
-     legibility class as the light theme's muted (6.6–7.6), and stays in the
-     slate ramp the palette already uses (--ink is slate-100). */
-  --muted:      #94a3b8;
-  --line:       rgba(255, 255, 255, 0.10);
-  --paper:      #0a0a0a;
-  --panel:      #111111;
-  --green:      #d97706;
-  --green-dark: #fbbf24;
-  --gold:       #f59e0b;
-  --blue:       #3b82f6;
-  --rose:       #f43f5e;
+  /* ═══════════════════════════════════════════════════════════════════════
+     DESIGN TOKENS
 
-  /* Extended palette */
-  --surface:     #161616;
-  --green-light: rgba(217, 119, 6, 0.12);
-  --gold-bg:     rgba(245, 158, 11, 0.12);
-  --blue-bg:     rgba(59, 130, 246, 0.10);
-  --rose-bg:     rgba(244, 63, 94, 0.10);
+     Two rules hold this system together. Break either and the theming bugs
+     come back:
 
-  /* Overlay tints — subtle hairline borders/hovers on top of --panel/--surface.
-     White-based in dark theme, flipped to black-based in light theme so the
-     same "slightly lighter/darker than the surface it sits on" effect holds. */
+     1. COMPONENTS REFERENCE SEMANTIC TOKENS, NEVER RAW COLOUR. Use
+        --text-primary, --bg-panel, --accent, --danger. A literal hex in a
+        component cannot flip with the theme, which is exactly how the metric
+        cards ended up rendering black-on-white in light mode.
+
+     2. THE BRAND COLOUR SITS OUTSIDE THE STATUS SET. In a compliance product
+        amber, emerald and rose already MEAN something: warning, compliant,
+        overdue. When the brand is also amber, a primary button and a trust
+        shortfall look identical, and the eye can no longer tell decoration
+        from meaning. The accent is therefore a deep legal blue, reserved for
+        primary action and brand. Status colour then always means status.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /* ── Neutral ramp (cool slate) ──────────────────────────────────────────
+     One ramp, light to dark. Themes map surfaces onto it rather than
+     inventing new greys per component. */
+  --n-0:   #ffffff;
+  --n-25:  #fbfcfd;
+  --n-50:  #f6f8fa;
+  --n-100: #eceff3;
+  --n-200: #dde2e9;
+  --n-300: #c3cbd6;
+  --n-400: #94a0b0;
+  --n-500: #6b7889;
+  --n-600: #505c6b;
+  --n-700: #3a4451;
+  --n-800: #262d37;
+  --n-900: #171c23;
+  --n-950: #0f1319;
+  --n-1000:#0a0d11;
+
+  /* ── Brand: deep legal blue ─────────────────────────────────────────────
+     Establishment and trust without competing with status colour. Swap
+     --accent-500/600 to re-brand the entire app from these two lines. */
+  --brand-50:  #eef3fb;
+  --brand-100: #d7e3f6;
+  --brand-200: #adc6ec;
+  --brand-300: #7ba3df;
+  --brand-400: #4e7fcd;
+  --brand-500: #2f62b4;
+  --brand-600: #234d92;
+  --brand-700: #1c3d75;
+  --brand-800: #17325f;
+  --brand-900: #132a4f;
+
+  /* ── Status (meaning only, never decoration) ────────────────────────── */
+  --ok-400:   #34d399;
+  --ok-500:   #10b981;
+  --ok-600:   #059669;
+  --ok-700:   #047857;
+
+  --warn-400: #fbbf24;
+  --warn-500: #f59e0b;
+  --warn-600: #d97706;
+  --warn-700: #b45309;
+
+  --bad-400:  #fb7185;
+  --bad-500:  #f43f5e;
+  --bad-600:  #e11d48;
+  --bad-700:  #be123c;
+
+  /* ═══ SEMANTIC TOKENS — what components actually use ═══════════════════ */
+
+  /* Surfaces, back to front */
+  --bg-page:      var(--n-1000);
+  --bg-panel:     var(--n-950);
+  --bg-raised:    var(--n-900);
+  --bg-sunken:    #070a0d;
+  --bg-hover:     rgba(255, 255, 255, 0.04);
+  --bg-active:    rgba(255, 255, 255, 0.07);
+
+  /* Text, strongest to weakest */
+  --text-primary:   #eef2f7;
+  --text-secondary: #aab6c4;   /* 7.4:1 on --bg-panel */
+  --text-tertiary:  #7d8a9a;   /* 4.6:1 - captions only, never body */
+  --text-inverse:   var(--n-1000);
+  --text-on-accent: #ffffff;
+
+  /* Borders */
+  --border:        rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-accent: var(--brand-400);
+
+  /* Accent */
+  --accent:        var(--brand-400);
+  --accent-hover:  var(--brand-300);
+  --accent-text:   var(--brand-300);   /* accent as TEXT needs more lift */
+  --accent-soft:   rgba(78, 127, 205, 0.16);
+  --accent-border: rgba(78, 127, 205, 0.38);
+
+  /* Status, resolved for this theme */
+  --success:        var(--ok-400);
+  --success-soft:   rgba(52, 211, 153, 0.14);
+  --warning:        var(--warn-400);
+  --warning-soft:   rgba(251, 191, 36, 0.14);
+  --danger:         var(--bad-400);
+  --danger-soft:    rgba(251, 113, 133, 0.14);
+  --info:           var(--brand-300);
+  --info-soft:      rgba(123, 163, 223, 0.14);
+
+  /* ── Type scale ─────────────────────────────────────────────────────────
+     Rounded px, not rem math. The old scale had 11 sizes per screen with
+     values like 13.12px; this is the whole vocabulary. */
+  --text-2xs: 11px;
+  --text-xs:  12px;
+  --text-sm:  13px;
+  --text-base:14px;   /* body - dense data UI reads better at 14 than 16 */
+  --text-md:  16px;
+  --text-lg:  18px;
+  --text-xl:  21px;
+  --text-2xl: 26px;
+  --text-3xl: 32px;
+  --text-4xl: 40px;
+
+  /* Four weights. 650 and 800 were in use; both are gone. */
+  --fw-normal:   400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  --leading-tight:  1.25;
+  --leading-snug:   1.4;
+  --leading-normal: 1.55;
+
+  /* ── Spacing (4px base) ─────────────────────────────────────────────── */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* ── Radius: three steps and a pill ─────────────────────────────────── */
+  --radius-xs:  4px;
+  --radius-sm:  6px;
+  --radius:     8px;
+  --radius-lg:  12px;
+  --radius-xl:  16px;
+  --radius-full:999px;
+
+  /* ── Elevation ──────────────────────────────────────────────────────── */
+  --shadow-sm:  0 1px 2px rgba(0,0,0,0.40);
+  --shadow:     0 2px 6px rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.30);
+  --shadow-lg:  0 8px 24px rgba(0,0,0,0.50), 0 2px 6px rgba(0,0,0,0.30);
+  --shadow-xl:  0 16px 48px rgba(0,0,0,0.60), 0 4px 12px rgba(0,0,0,0.40);
+
+  /* ── Typography families ────────────────────────────────────────────── */
+  --font-sans:  'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-serif: 'Cormorant Garamond', 'Georgia', 'Times New Roman', serif;
+  --font-mono:  'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+  /* ═══ LEGACY ALIASES ═══════════════════════════════════════════════════
+     ~6,500 lines of existing CSS reference these names, and --green has held
+     an orange value for some time. Aliasing re-skins the entire app from the
+     semantic tokens above instead of a 139-site find-and-replace. New code
+     should use the semantic tokens; these exist so nothing breaks today. */
+  --ink:        var(--text-primary);
+  --muted:      var(--text-secondary);
+  --line:       var(--border);
+  --paper:      var(--bg-page);
+  --panel:      var(--bg-panel);
+  --surface:    var(--bg-raised);
+  --green:      var(--accent);
+  --green-dark: var(--accent-hover);
+  --green-light:var(--accent-soft);
+  --gold:       var(--warning);
+  --gold-bg:    var(--warning-soft);
+  --blue:       var(--info);
+  --blue-bg:    var(--info-soft);
+  --rose:       var(--danger);
+  --rose-bg:    var(--danger-soft);
+
   --tint-05: rgba(255, 255, 255, 0.05);
   --tint-07: rgba(255, 255, 255, 0.07);
   --tint-08: rgba(255, 255, 255, 0.08);
   --tint-18: rgba(255, 255, 255, 0.18);
   --tint-20: rgba(255, 255, 255, 0.20);
   --tint-30: rgba(255, 255, 255, 0.30);
-
-  /* Typography */
-  --font-sans:  'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-serif: 'Cormorant Garamond', 'Georgia', 'Times New Roman', serif;
-  --font-mono:  'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
-
-  /* Shadow system — dark-on-dark */
-  --shadow-sm:  0 1px 3px rgba(0,0,0,0.30), 0 1px 6px rgba(0,0,0,0.20);
-  --shadow:     0 2px 8px rgba(0,0,0,0.35), 0 4px 20px rgba(0,0,0,0.25);
-  --shadow-lg:  0 4px 16px rgba(0,0,0,0.40), 0 8px 32px rgba(0,0,0,0.30);
-  --shadow-xl:  0 8px 32px rgba(0,0,0,0.50), 0 20px 60px rgba(0,0,0,0.40);
-
-  /* Radius system */
-  --radius-xs:  4px;
-  --radius-sm:  6px;
-  --radius:     8px;
-  --radius-lg:  10px;
-  --radius-xl:  14px;
 }
 
-/* ─── Light Theme ─────────────────────────────────────────────────────────
-   Applied app-wide via [data-theme="light"] on <html> (toggled from the
-   topbar). The public marketing pages, auth screens, and the photo-backed
-   dashboard hero keep their fixed dark styling by design and are unaffected
-   — only the variable-driven app surfaces (sidebar, panels, forms, cards)
-   flip. Same structure as the existing @media print remap below. ────────── */
+/* ─── Light theme ─────────────────────────────────────────────────────────
+   Applied via [data-theme="light"] on <html>. ONLY semantic tokens are
+   redefined here - every component inherits the flip automatically, which is
+   the point of the layer. If something fails to theme, it is hardcoding a
+   colour and that is the bug to fix.
+
+   Light is the better default for this product: the practising attorney who
+   tested it said "too dark, I had to peer closer to my screen". ─────────── */
 
 [data-theme="light"] {
   color-scheme: light;
 
-  --ink:        #111111;
-  --muted:      #475569;
-  --line:       rgba(0, 0, 0, 0.12);
-  --paper:      #f7f7f5;
-  --panel:      #ffffff;
-  --green:      #b45309;
-  --green-dark: #1a6b3c;
-  --gold:       #92400e;
-  --blue:       #1d4ed8;
-  --rose:       #be123c;
+  --bg-page:   var(--n-50);
+  --bg-panel:  var(--n-0);
+  --bg-raised: var(--n-100);
+  --bg-sunken: var(--n-100);
+  --bg-hover:  rgba(15, 19, 25, 0.04);
+  --bg-active: rgba(15, 19, 25, 0.07);
 
-  --surface:     #eef0ef;
-  --green-light: rgba(180, 83, 9, 0.10);
-  --gold-bg:     rgba(146, 64, 14, 0.10);
-  --blue-bg:     rgba(29, 78, 216, 0.08);
-  --rose-bg:     rgba(190, 18, 60, 0.08);
+  --text-primary:   var(--n-900);
+  --text-secondary: var(--n-600);   /* 7.6:1 on white */
+  --text-tertiary:  var(--n-500);   /* 5.1:1 */
+  --text-inverse:   var(--n-0);
+  --text-on-accent: #ffffff;
 
-  --tint-05: rgba(0, 0, 0, 0.05);
-  --tint-07: rgba(0, 0, 0, 0.07);
-  --tint-08: rgba(0, 0, 0, 0.08);
-  --tint-18: rgba(0, 0, 0, 0.18);
-  --tint-20: rgba(0, 0, 0, 0.20);
-  --tint-30: rgba(0, 0, 0, 0.30);
+  --border:        rgba(15, 19, 25, 0.11);
+  --border-strong: rgba(15, 19, 25, 0.20);
+  --border-accent: var(--brand-500);
 
-  --shadow-sm:  0 1px 3px rgba(17,17,17,0.06), 0 1px 6px rgba(17,17,17,0.04);
-  --shadow:     0 2px 8px rgba(17,17,17,0.07), 0 4px 20px rgba(17,17,17,0.05);
-  --shadow-lg:  0 4px 16px rgba(17,17,17,0.09), 0 8px 32px rgba(17,17,17,0.07);
-  --shadow-xl:  0 8px 32px rgba(17,17,17,0.12), 0 20px 60px rgba(17,17,17,0.10);
+  --accent:        var(--brand-600);
+  --accent-hover:  var(--brand-700);
+  --accent-text:   var(--brand-700);
+  --accent-soft:   rgba(35, 77, 146, 0.09);
+  --accent-border: rgba(35, 77, 146, 0.28);
+
+  --success:      var(--ok-700);
+  --success-soft: rgba(4, 120, 87, 0.10);
+  --warning:      var(--warn-700);
+  --warning-soft: rgba(180, 83, 9, 0.10);
+  --danger:       var(--bad-700);
+  --danger-soft:  rgba(190, 18, 60, 0.09);
+  --info:         var(--brand-600);
+  --info-soft:    rgba(35, 77, 146, 0.08);
+
+  --shadow-sm:  0 1px 2px rgba(15,19,25,0.06);
+  --shadow:     0 1px 3px rgba(15,19,25,0.08), 0 1px 2px rgba(15,19,25,0.04);
+  --shadow-lg:  0 8px 24px rgba(15,19,25,0.10), 0 2px 6px rgba(15,19,25,0.05);
+  --shadow-xl:  0 16px 48px rgba(15,19,25,0.14), 0 4px 12px rgba(15,19,25,0.06);
+
+  --tint-05: rgba(15, 19, 25, 0.05);
+  --tint-07: rgba(15, 19, 25, 0.07);
+  --tint-08: rgba(15, 19, 25, 0.08);
+  --tint-18: rgba(15, 19, 25, 0.18);
+  --tint-20: rgba(15, 19, 25, 0.20);
+  --tint-30: rgba(15, 19, 25, 0.30);
 }
 
 /* ─── Base Reset ─────────────────────────────────────────────────────────── */
@@ -455,7 +607,7 @@ button:disabled {
   width: 40px;
   height: 40px;
   border-radius: 2px;
-  background: linear-gradient(135deg, #d97706, #92400e);
+  background: var(--accent);
   color: #fff;
   font-family: 'Cormorant Garamond', Georgia, serif;
   font-weight: 700;
@@ -496,7 +648,7 @@ button:disabled {
   gap: 8px;
   height: 46px;
   padding: 0 24px;
-  background: #d97706;
+  background: var(--accent);
   color: #fff;
   font-weight: 600;
   font-size: 0.88rem;
@@ -508,7 +660,7 @@ button:disabled {
 }
 
 .public-page button.primary:hover:not(:disabled) {
-  background: #b45309;
+  background: var(--accent);
   box-shadow: 0 0 24px rgba(217,119,6,0.28);
 }
 
@@ -587,7 +739,7 @@ button:disabled {
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: #f59e0b;
+  color: var(--accent-text);
 }
 
 .public-eyebrow::before {
@@ -595,7 +747,7 @@ button:disabled {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #f59e0b;
+  background: var(--accent);
   animation: dp-pulse 2s infinite;
 }
 
@@ -617,7 +769,7 @@ button:disabled {
 
 .public-copy h1 em {
   font-style: normal;
-  background: linear-gradient(135deg, #fde68a, #d97706);
+  background: var(--accent);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -683,7 +835,7 @@ button:disabled {
   left: 0;
   right: 0;
   height: 3px;
-  background: linear-gradient(to right, #d97706, #fbbf24);
+  background: var(--accent);
   z-index: 2;
 }
 
@@ -702,7 +854,7 @@ button:disabled {
   border-radius: 4px;
   background: #1a1a1a;
   border: 1px solid rgba(255,255,255,0.1);
-  color: #f59e0b;
+  color: var(--accent-text);
   display: grid;
   place-items: center;
   font-size: 0.9rem;
@@ -756,7 +908,7 @@ button:disabled {
 
 .auth-tabs button.active {
   background: #222222;
-  color: #f59e0b;
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -771,7 +923,7 @@ button:disabled {
   min-height: 36px;
   border: 0;
   background: transparent;
-  color: #d97706;
+  color: var(--accent-text);
   font-weight: 500;
   font-size: 0.83rem;
   text-decoration: underline;
@@ -779,7 +931,7 @@ button:disabled {
   transition: color 0.15s;
 }
 
-.link-button:hover { color: #f59e0b; }
+.link-button:hover { color: var(--accent-text); }
 
 .public-page .form {
   display: flex;
@@ -852,7 +1004,7 @@ button:disabled {
 .sales-grid-divider {
   width: 64px;
   height: 1px;
-  background: #d97706;
+  background: var(--accent);
   margin: 0 auto 18px;
 }
 
@@ -880,7 +1032,7 @@ button:disabled {
 }
 
 .sales-card svg {
-  color: #f59e0b;
+  color: var(--accent-text);
   margin-bottom: 20px;
 }
 
@@ -923,7 +1075,7 @@ button:disabled {
   width: 30px;
   height: 30px;
   border-radius: 2px;
-  background: linear-gradient(135deg, #d97706, #92400e);
+  background: var(--accent);
   color: #fff;
   display: grid;
   place-items: center;
@@ -1017,7 +1169,7 @@ button:disabled {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  background: linear-gradient(145deg, #d97706 0%, #b45309 100%);
+  background: var(--accent);
   color: #fff;
   font-weight: 900;
   border-radius: 12px;
@@ -1083,15 +1235,13 @@ button:disabled {
 }
 
 .nav button.active {
-  background: linear-gradient(135deg, rgba(217,119,6,0.22) 0%, rgba(217,119,6,0.10) 100%);
-  color: var(--green-dark);
-  border-color: rgba(217,119,6,0.32);
-  border-left-color: var(--gold);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: transparent;
+  border-left-color: var(--accent);
   border-left-width: 3px;
   padding-left: 11px;
-  font-weight: 650;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.18), inset 0 1px 0 var(--tint-05);
-  letter-spacing: 0.005em;
+  font-weight: var(--fw-semibold);
 }
 
 .nav button:hover:not(.active) {
@@ -1131,7 +1281,7 @@ button:disabled {
 }
 
 .nav-group.has-active .nav-group-header {
-  color: var(--gold);
+  color: var(--text-primary);
 }
 
 .nav-chev {
@@ -1175,8 +1325,23 @@ button:disabled {
 
 .sidebar-card strong {
   margin: 7px 0;
-  color: var(--gold);
-  font-size: 0.9rem;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* A view's own action row.
+
+   Views must NOT repeat the page title: the shell topbar already renders it,
+   and the duplicate cost ~100px of the most valuable vertical space on every
+   screen that had one. Actions align right against the shell heading. */
+.page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-5);
 }
 
 /* ─── Main Area ──────────────────────────────────────────────────────────── */
@@ -1261,17 +1426,17 @@ h3 {
   gap: 8px;
   padding: 0 14px;
   border-radius: var(--radius-lg);
-  background: var(--gold-bg);
-  color: var(--gold);
-  font-weight: 700;
-  font-size: 0.875rem;
-  border: 1px solid rgba(245,158,11,0.22);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-weight: var(--fw-medium);
+  font-size: var(--text-sm);
+  border: 1px solid var(--border);
 }
 
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
 
 .primary {
-  background: linear-gradient(160deg, #d97706 0%, #b45309 100%);
+  background: var(--accent);
   color: #ffffff;
   padding: 0 20px;
   min-height: 42px;
@@ -1285,7 +1450,7 @@ h3 {
 }
 
 .primary:hover {
-  background: linear-gradient(160deg, #f59e0b 0%, #d97706 100%);
+  background: var(--accent);
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0,0,0,0.25), 0 8px 28px rgba(217,119,6,0.35), inset 0 1px 0 rgba(255,255,255,0.12);
 }
@@ -1332,7 +1497,7 @@ h3 {
    beat the ghost-style .small rules above. Without this, "primary small"
    buttons render as invisible ghost buttons against panel backgrounds. */
 .primary.small {
-  background: linear-gradient(160deg, #d97706 0%, #b45309 100%);
+  background: var(--accent);
   color: #ffffff;
   border: 1px solid rgba(0,0,0,0.15);
   font-weight: 700;
@@ -1340,7 +1505,7 @@ h3 {
 }
 
 .primary.small:hover {
-  background: linear-gradient(160deg, #f59e0b 0%, #d97706 100%);
+  background: var(--accent);
   border-color: rgba(0,0,0,0.15);
 }
 
@@ -1451,7 +1616,7 @@ h3 {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  background: linear-gradient(160deg, #d97706 0%, #b45309 100%);
+  background: var(--accent);
   color: #ffffff;
   box-shadow: var(--shadow-lg);
   font-weight: 700;
@@ -1836,49 +2001,37 @@ h3 {
   transform: translateY(-3px);
 }
 
-/* Top accent line on all metric cards */
+/* Metric cards are UNIFORM.
+
+   The previous design alternated dark and light cards by nth-child, with the
+   dark one pinned to dark-theme hex values - so in LIGHT mode cards 1 and 3
+   stayed black and the row rendered as a checkerboard. Alternating also said
+   nothing true: a card position in the row is not a property of the number
+   in it. Emphasis now comes from the value, and from an opt-in status
+   modifier where a number genuinely needs attention. */
 .metric::before,
 .capability::before {
   content: "";
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 3px;
+  height: 2px;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--border);
 }
 
-/* Featured (amber) metric cards — 1st and 3rd */
-/* Always-dark accent card — fixed bg means its text must NOT use the
-   theme-flipping --ink/--muted/--gold vars, or it goes dark-on-dark in
-   light mode. Colors below are pinned to the dark-theme palette on purpose. */
-.metrics .metric:nth-child(odd) {
-  background: linear-gradient(145deg, #111111 0%, #1a1a1a 100%);
-  border-color: rgba(217,119,6,0.25);
-  color: #f1f5f9;
+.metrics .metric {
+  background: var(--bg-panel);
 }
 
-.metrics .metric:nth-child(odd)::before {
-  background: linear-gradient(90deg, #d97706 0%, rgba(217,119,6,0.12) 100%);
-  opacity: 1;
-}
-
-.metrics .metric:nth-child(odd) span,
-.metrics .metric:nth-child(odd) small {
-  color: #94a3b8;
-}
-
-.metrics .metric:nth-child(odd) strong {
-  color: #f59e0b;
-}
-
-/* Light metric cards — 2nd and 4th */
-.metrics .metric:nth-child(even) {
-  background: var(--panel);
-}
-
-.metrics .metric:nth-child(even)::before {
-  background: linear-gradient(90deg, var(--green) 0%, transparent 100%);
-  opacity: 0.55;
-}
+/* Opt-in emphasis. Status colour is the only colour allowed to carry meaning,
+   so a metric only takes one when it IS a warning, not to add visual variety. */
+.metrics .metric.metric-accent::before  { background: var(--accent); }
+.metrics .metric.metric-warning::before { background: var(--warning); }
+.metrics .metric.metric-warning strong  { color: var(--warning); }
+.metrics .metric.metric-danger::before  { background: var(--danger); }
+.metrics .metric.metric-danger strong   { color: var(--danger); }
+.metrics .metric.metric-ok::before      { background: var(--success); }
+.metrics .metric.metric-ok strong       { color: var(--success); }
 
 .metric span,
 .metric small {
@@ -1962,18 +2115,29 @@ h3 {
   letter-spacing: -0.015em;
 }
 
+/* Pills default to NEUTRAL.
+
+   The base pill used to be amber, so every count, label and tag in the app
+   rendered as though it were a warning - which is most of why the UI read as
+   noisy, and why real warnings did not stand out. Meaning is opt-in below. */
 .pill,
 .risk {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 11px;
-  border-radius: 999px;
-  background: var(--gold-bg);
-  color: var(--gold);
-  font-size: 0.78rem;
-  font-weight: 700;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-medium);
 }
+
+.pill-accent  { background: var(--accent-soft);  color: var(--accent-text); border-color: var(--accent-border); }
+.pill-ok      { background: var(--success-soft); color: var(--success);     border-color: transparent; }
+.pill-warning { background: var(--warning-soft); color: var(--warning);     border-color: transparent; }
+.pill-danger  { background: var(--danger-soft);  color: var(--danger);      border-color: transparent; }
 
 .risk-low {
   background: var(--green-light);
@@ -5633,7 +5797,7 @@ select {
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: linear-gradient(145deg, #d97706, #b45309);
+  background: var(--accent);
   color: #ffffff;
   display: inline-flex;
   align-items: center;
