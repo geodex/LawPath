@@ -28,6 +28,7 @@ import {
   Send,
   ServerCog,
   Settings,
+  Menu,
   FileSearch,
   Lock,
   Shield,
@@ -278,6 +279,9 @@ export function App() {
   const [authMessage, setAuthMessage] = useState("Start with the demo workspace or register a firm account.");
   const [authBusy, setAuthBusy] = useState(false);
   const [activeView, setActiveView] = useState<ViewKey>("overview");
+  // Mobile nav drawer. Desktop ignores this entirely - the sidebar is static
+  // above 1050px and the toggle is display:none.
+  const [navOpen, setNavOpen] = useState(false);
   const [portalMode, setPortalMode] = useState<"lawyer" | "client">("lawyer");
   const [matters, setMatters] = useState<Matter[]>([]);
   const [contracts, setContracts] = useState<ContractDraft[]>([]);
@@ -707,7 +711,7 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${navOpen ? " nav-open" : ""}`}>
       <CommandPalette
         open={cmdkOpen}
         onClose={() => setCmdkOpen(false)}
@@ -721,10 +725,30 @@ export function App() {
         ficaClients={ficaClients}
         setActiveView={setActiveView}
       />
-      <Sidebar activeView={activeView} setActiveView={setActiveView} isPlatformSuperAdmin={isPlatformSuperAdmin} />
+      {/* Scrim sits under the drawer and above the page; tapping it closes. */}
+      {navOpen && (
+        <button
+          className="nav-scrim"
+          aria-label="Close navigation"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+      <Sidebar
+        activeView={activeView}
+        setActiveView={(v) => { setActiveView(v); setNavOpen(false); }}
+        isPlatformSuperAdmin={isPlatformSuperAdmin}
+      />
       <main className="main">
         <header className="topbar">
-          <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            <button
+              className="nav-toggle"
+              onClick={() => setNavOpen((v) => !v)}
+              aria-label="Open navigation"
+              aria-expanded={navOpen}
+            >
+              <Menu size={20} />
+            </button>
             {/* The "South African legal workspace" eyebrow was removed: the
                 sidebar already carries the brand, so it repeated it on every
                 screen and pushed the real heading down. */}

@@ -1433,6 +1433,24 @@ h3 {
   border: 1px solid var(--border);
 }
 
+/* Mobile nav toggle - revealed by the 1050px breakpoint only. */
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0;
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.nav-toggle:hover {
+  background: var(--bg-active);
+}
+
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
 
 .primary {
@@ -4895,37 +4913,60 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* The sidebar becomes an off-canvas DRAWER.
+
+     It used to go position:static with the nav as a 4-column grid. With ten
+     collapsible groups that produced a scattered two-column jumble, and it
+     pushed the actual page content ~2,500px down the document - the app was
+     effectively unusable on a phone. */
   .app-shell {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
-    position: static;
-    height: auto;
-    padding: 14px;
-    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(86vw, 300px);
+    height: 100dvh;
+    z-index: 60;
+    padding: 18px 14px;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: none;
   }
 
+  .app-shell.nav-open .sidebar {
+    transform: none;
+    box-shadow: var(--shadow-xl);
+  }
+
+  /* Vertical list, same as desktop - the grid was the bug. */
   .nav {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 
   .nav button {
-    justify-content: center;
-    padding: 10px 8px;
-    font-size: 0.8rem;
-    border-left: none;
-    border-bottom: 2px solid transparent;
+    justify-content: flex-start;
   }
 
-  .nav button.active {
-    border-left-color: transparent;
-    border-bottom-color: var(--gold);
+  .nav-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+    border: 0;
   }
 
-  .sidebar-card {
-    display: none;
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  .main {
+    min-width: 0;
   }
 
   .metrics {
@@ -4999,18 +5040,29 @@ select {
     flex-direction: column;
   }
 
-  .top-actions,
+  /* Actions stay a compact wrapping row. Forcing width:100% turned six
+     buttons into six full-width rows that filled the entire first screen
+     before any content appeared. */
+  .top-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--sp-2);
+  }
+
   .top-actions button {
-    width: 100%;
+    width: auto;
   }
 
+  /* The firm name is context, not an action, and the drawer already carries
+     the brand. It is the first thing to go when space is scarce. */
   .tenant-chip {
-    width: 100%;
-    justify-content: center;
+    display: none;
   }
 
+  /* The drawer nav is a vertical list at every width. */
   .nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .nav button {
@@ -6071,6 +6123,27 @@ select {
 .inv-void     { background: var(--line);      color: var(--muted); text-decoration: line-through; }
 
 /* ─── Print Styles ───────────────────────────────────────────────────────── */
+
+/* ─── Mobile density ──────────────────────────────────────────────────────
+   Last in the cascade on purpose: metric cards were stacking one per row at
+   phone width, so four of them pushed the actual list ~640px down. Two
+   columns halves that and the numbers stay perfectly readable. ─────────── */
+@media (max-width: 680px) {
+  .metrics,
+  .capability-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
+  }
+
+  .metric {
+    padding: var(--sp-4);
+  }
+
+  .metric strong {
+    margin: var(--sp-2) 0 var(--sp-1);
+  }
+}
 
 @media print {
 
