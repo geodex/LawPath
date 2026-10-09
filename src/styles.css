@@ -307,16 +307,16 @@
   /* ── Brand: deep legal blue ─────────────────────────────────────────────
      Establishment and trust without competing with status colour. Swap
      --accent-500/600 to re-brand the entire app from these two lines. */
-  --brand-50:  #eef3fb;
-  --brand-100: #d7e3f6;
-  --brand-200: #adc6ec;
-  --brand-300: #7ba3df;
-  --brand-400: #4e7fcd;
-  --brand-500: #2f62b4;
-  --brand-600: #234d92;
-  --brand-700: #1c3d75;
-  --brand-800: #17325f;
-  --brand-900: #132a4f;
+  --brand-50:  #eef1fb;
+  --brand-100: #dae1f7;
+  --brand-200: #b6c4ef;
+  --brand-300: #8ba1e4;
+  --brand-400: #6480d6;
+  --brand-500: #4560c4;
+  --brand-600: #2f47a8;
+  --brand-700: #26398a;
+  --brand-800: #202f70;
+  --brand-900: #1b2859;
 
   /* ── Status (meaning only, never decoration) ────────────────────────── */
   --ok-400:   #34d399;
@@ -357,11 +357,11 @@
   --border-accent: var(--brand-400);
 
   /* Accent */
-  --accent:        var(--brand-400);
-  --accent-hover:  var(--brand-300);
+  --accent:        var(--brand-500);
+  --accent-hover:  var(--brand-400);
   --accent-text:   var(--brand-300);   /* accent as TEXT needs more lift */
-  --accent-soft:   rgba(78, 127, 205, 0.16);
-  --accent-border: rgba(78, 127, 205, 0.38);
+  --accent-soft:   rgba(100, 128, 214, 0.16);
+  --accent-border: rgba(100, 128, 214, 0.38);
 
   /* Status, resolved for this theme */
   --success:        var(--ok-400);
@@ -371,7 +371,7 @@
   --danger:         var(--bad-400);
   --danger-soft:    rgba(251, 113, 133, 0.14);
   --info:           var(--brand-300);
-  --info-soft:      rgba(123, 163, 223, 0.14);
+  --info-soft:      rgba(139, 161, 228, 0.14);
 
   /* ── Type scale ─────────────────────────────────────────────────────────
      Rounded px, not rem math. The old scale had 11 sizes per screen with
@@ -489,8 +489,8 @@
   --accent:        var(--brand-600);
   --accent-hover:  var(--brand-700);
   --accent-text:   var(--brand-700);
-  --accent-soft:   rgba(35, 77, 146, 0.09);
-  --accent-border: rgba(35, 77, 146, 0.28);
+  --accent-soft:   rgba(47, 71, 168, 0.09);
+  --accent-border: rgba(47, 71, 168, 0.28);
 
   --success:      var(--ok-700);
   --success-soft: rgba(4, 120, 87, 0.10);
@@ -499,7 +499,7 @@
   --danger:       var(--bad-700);
   --danger-soft:  rgba(190, 18, 60, 0.09);
   --info:         var(--brand-600);
-  --info-soft:    rgba(35, 77, 146, 0.08);
+  --info-soft:    rgba(47, 71, 168, 0.08);
 
   --shadow-sm:  0 1px 2px rgba(15,19,25,0.06);
   --shadow:     0 1px 3px rgba(15,19,25,0.08), 0 1px 2px rgba(15,19,25,0.04);
@@ -5635,20 +5635,28 @@ select {
   border-radius: var(--radius);
 }
 
+/* Segmented control. Inactive options were accent-coloured and bold, so every
+   filter looked selected; the accent now marks only the one that IS. */
 .popia-tab {
   border: 0;
   border-radius: var(--radius-sm);
   padding: 8px 16px;
   background: transparent;
-  font-weight: 700;
-  color: var(--green-dark);
+  font-weight: var(--fw-medium);
+  color: var(--text-secondary);
   min-height: 38px;
   cursor: pointer;
-  transition: background 0.12s, box-shadow 0.12s;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+
+.popia-tab:hover {
+  color: var(--text-primary);
 }
 
 .popia-tab.active {
-  background: var(--panel);
+  background: var(--bg-panel);
+  color: var(--accent-text);
+  font-weight: var(--fw-semibold);
   box-shadow: var(--shadow-sm);
 }
 
