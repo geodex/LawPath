@@ -3566,13 +3566,15 @@ app.get("/api/activity", authMiddleware, async (req, res, next) => {
   if (!req.user.tenantId) return res.status(403).json({ error: "Tenant context required." });
   try {
     const result = await pool.query(
-      `select action, entity_type, created_at from activity_log
+      `select id, action, entity_type, created_at from activity_log
        where tenant_id = $1 order by created_at desc limit 20`,
       [req.user.tenantId]
     );
-    const activity = result.rows.map(r =>
-      r.entity_type ? `${r.action} on ${r.entity_type}` : String(r.action || "")
-    );
+    const activity = result.rows.map(r => ({
+      id: r.id,
+      label: r.entity_type ? `${r.action} on ${r.entity_type}` : String(r.action || ""),
+      createdAt: r.created_at
+    }));
     res.json({ activity });
   } catch (error) { next(error); }
 });

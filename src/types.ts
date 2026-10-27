@@ -928,6 +928,15 @@ export type MatterTypeStat = {
   totalFeeCents: number;
 };
 
+// One entry in the practice activity feed. The label repeats across rows by
+// design ("approved on approval_request" happens often), so lists key off `id`
+// — the activity_log row id.
+export type ActivityEntry = {
+  id: string;
+  label: string;
+  createdAt: string;
+};
+
 export type AnalyticsSnapshot = {
   id: string;
   periodMonth: string;

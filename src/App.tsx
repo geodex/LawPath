@@ -54,7 +54,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { clearToken, createFicaClient, createPopiaBreachIncident, createPopiaDsrRequest, createPopiaProcessingRecord, createTimeEntry, createTrustTransaction, downloadDocumentPdf, draftFromConversation, forgotPassword, getAiConversation, listAiConversations, type AiConversationSummary, getAccountingData, getActivity, getAgentNetwork, getAnalytics, getAppointments, getBootstrapSettings, getContracts, getConveyancingMatters, getCurrentUser, getDocumentAnalyses, getFicaClients, getInvoices, getLegalCorpus, getLitigationMatters, getMatters, getPopiaRecords, getSignatureRequests, getTasks, getTimeEntries, getTrustLedger, getTrustReconciliations, getVerifyNowUsage, getWhatsAppData, login, queueRagSource, registerTenant, saveAssistantTraining, savePlatformApiSettings, savePlatformSmtpSettings, saveTenantEmailIdentity, saveTenantProfile, sendAiChat, sendTestEmail, updateFicaClient, updatePopiaDsrStatus, updateTimeEntryStatus } from "./api";
 // Seed data from ./data is intentionally not imported here. Each tenant
 // starts with empty workspaces and populates real data via the API.
-import type { AccountingConnection, AccountingExportRecord, AgentReferral, AiAgentKey, AiChatMessage, AiFeature, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
+import type { AccountingConnection, AccountingExportRecord, ActivityEntry, AgentReferral, AiAgentKey, AiChatMessage, AiFeature, AnalyticsSnapshot, ApiProviderSettings, Appointment, AssistantTrainingSettings, AuthUser, ContractDraft, ConveyancingMatter, DocumentAnalysis, EstateAgent, FicaClient, Invoice, LegalCorpusDocument, LegalCorpusSource, LitigationMatter, Matter, NavItem, PopiaBreachIncident, PopiaDsrRequest, PopiaProcessingRecord, RagSource, ResearchItem, ResearchQuery, SignatureRequest, SmtpSettings, TenantEmailSettings, TenantProfile, TimeEntry, TrustReconciliation, TrustTransaction, ViewKey, WhatsAppContact, WhatsAppMessage, WhatsAppTemplate, WorkTask } from "./types";
 import { FicaKyc } from "./FicaKyc";
 import { PopiaCompliance } from "./PopiaCompliance";
 import { TimeRecording } from "./TimeRecording";
@@ -199,6 +199,13 @@ const aiAgentLabels: Record<AiAgentKey, string> = {
 const money = (value: number) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(value);
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+
+// Client-side activity entries need ids that can never repeat, however often the
+// same message is logged. A counter guarantees that; server entries carry their
+// own activity_log uuid, which this prefix cannot collide with.
+let activitySeq = 0;
+const localActivity = (label: string): ActivityEntry =>
+  ({ id: `local-${++activitySeq}`, label, createdAt: new Date().toISOString() });
 const maxKnowledgeUploadBytes = 8 * 1024 * 1024;
 type Toast = { id: string; type: "success" | "error" | "info"; title: string; message: string };
 
@@ -380,7 +387,7 @@ export function App() {
   const [aiContextSummary, setAiContextSummary] = useState("Tenant context will appear after the first AI response.");
   // A reopened conversation keeps its own agent, whatever view the user is on.
   const [aiAgentOverride, setAiAgentOverride] = useState<AiAgentKey | null>(null);
-  const [activity, setActivity] = useState<string[]>([]);
+  const [activity, setActivity] = useState<ActivityEntry[]>([]);
 
   const pageTitle = nav.find((item) => item.key === activeView)?.label ?? "Overview";
   // Matter File: the spine's payoff — one page per matter.
@@ -475,7 +482,7 @@ export function App() {
     const co   = ok<{ contracts: ContractDraft[] }>(16);                                              if (co)   setContracts(co.contracts);
     const tk   = ok<{ tasks: WorkTask[] }>(17);                                                       if (tk)   setTasks(tk.tasks);
     const ap   = ok<{ appointments: Appointment[] }>(18);                                             if (ap)   setAppointments(ap.appointments);
-    const av   = ok<{ activity: string[] }>(19);                                                      if (av)   setActivity(av.activity);
+    const av   = ok<{ activity: ActivityEntry[] }>(19);                                               if (av)   setActivity(av.activity);
   }
 
   async function loadWorkspaceSettings(user: AuthUser) {
@@ -507,7 +514,7 @@ export function App() {
   }
 
   function log(message: string) {
-    setActivity((items) => [message, ...items].slice(0, 8));
+    setActivity((items) => [localActivity(message), ...items].slice(0, 8));
   }
 
   function showToast(type: Toast["type"], title: string, message: string) {
@@ -1647,7 +1654,7 @@ function Overview({
   tasks: WorkTask[];
   invoices: Invoice[];
   research: ResearchItem[];
-  activity: string[];
+  activity: ActivityEntry[];
   setActiveView: (view: ViewKey) => void;
   onOpenMatter: (uuid: string) => void;
 }) {
@@ -1681,7 +1688,7 @@ function Overview({
           <div className="matter-list">{matters.map((matter) => <MatterCard key={matter.id} matter={matter} onOpen={onOpenMatter} />)}</div>
         </Panel>
         <Panel title="Practice activity" badge="Live workspace">
-          <div className="timeline">{activity.map((item) => <div key={item}><span /><p>{item}</p></div>)}</div>
+          <div className="timeline">{activity.map((item) => <div key={item.id}><span /><p>{item.label}</p></div>)}</div>
         </Panel>
       </section>
 
